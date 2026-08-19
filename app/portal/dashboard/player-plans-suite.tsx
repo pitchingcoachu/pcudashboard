@@ -225,7 +225,6 @@ const DOMAIN_EXECUTION_FALLBACKS: Record<Domain, string[]> = {
     'Stuff+',
     'Ctrl+',
     'QP+',
-    'Pitching+',
     'RV/100',
     'P',
     'BF',

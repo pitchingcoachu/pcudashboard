@@ -962,6 +962,7 @@ export async function GET(request: Request) {
   const withVideo = inputUrl.searchParams.get('with_video')?.trim() ?? '';
   const breakLines = inputUrl.searchParams.get('break_lines')?.trim() ?? '';
   const stuffLevel = inputUrl.searchParams.get('stuff_level')?.trim() ?? '';
+  const stuff2Level = inputUrl.searchParams.get('stuff2_level')?.trim() ?? '';
   const stuffBase = inputUrl.searchParams.get('stuff_base')?.trim() ?? '';
   const hand = inputUrl.searchParams.get('hand')?.trim() ?? '';
   const batterSide = inputUrl.searchParams.get('batter_side')?.trim() ?? '';
@@ -1178,6 +1179,7 @@ export async function GET(request: Request) {
   if (withVideo) url.searchParams.set('with_video', withVideo);
   if (breakLines) url.searchParams.set('break_lines', breakLines);
   if (stuffLevel) url.searchParams.set('stuff_level', stuffLevel);
+  if (stuff2Level) url.searchParams.set('stuff2_level', stuff2Level);
   if (stuffBase) url.searchParams.set('stuff_base', stuffBase);
   if (hand) url.searchParams.set('hand', hand);
   if (batterSide) url.searchParams.set('batter_side', batterSide);
@@ -1482,6 +1484,7 @@ export async function GET(request: Request) {
       'with_video',
       'break_lines',
       'stuff_level',
+      'stuff2_level',
       'stuff_base',
       'hand',
       'batter_side',

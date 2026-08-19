@@ -38,6 +38,7 @@ export async function GET(request: Request) {
       dashboard: access.dashboard,
       programming: access.programming,
       clientManagement: access.clientManagement,
+      gameTracker: access.gameTracker,
     });
   } catch (error) {
     return NextResponse.json(
@@ -59,6 +60,7 @@ export async function POST(request: Request) {
       dashboard?: boolean;
       programming?: boolean;
       clientManagement?: boolean;
+      gameTracker?: boolean;
     };
     const schoolCode = normalizeSchoolCode(body.schoolCode ?? '');
     if (!schoolCode) return NextResponse.json({ error: 'schoolCode is required.' }, { status: 400 });
@@ -66,12 +68,14 @@ export async function POST(request: Request) {
     const dashboard = body.dashboard !== false;
     const programming = body.programming === true;
     const clientManagement = body.clientManagement !== false;
+    const gameTracker = body.gameTracker !== false;
 
     await setSchoolProductAccess({
       schoolCode,
       dashboard,
       programming,
       clientManagement,
+      gameTracker,
       updatedByUserId: session.userId ?? null,
     });
 
@@ -81,6 +85,7 @@ export async function POST(request: Request) {
       dashboard,
       programming,
       clientManagement,
+      gameTracker,
     });
   } catch (error) {
     return NextResponse.json(

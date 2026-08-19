@@ -23,13 +23,14 @@ import type { BubbleCategoryDef } from '../../../../lib/bubble-categories';
 
 type PlayerChoice = { id: number; name: string };
 type CalendarLinkTarget = 'none' | 'throwing' | 'bullpens' | 'velocity' | 'drills' | 'hitting' | 'hitting-drills';
-type WorkoutChoice = { id: number; name: string; exerciseCount: number; category: string; calendarLinkTarget: CalendarLinkTarget };
+type WorkoutChoice = { id: number; name: string; exerciseCount: number; category: string; calendarLinkTarget: CalendarLinkTarget; isShared: boolean };
 type ViewMode = 'day' | 'week' | 'month' | 'cycle' | 'plan' | 'throwing' | 'bullpens' | 'velocity' | 'drills' | 'hitting' | 'hitting-drills';
 type ThrowingBuilderMode = 'month' | 'weeks';
 type ThrowingCalendarView = 'day' | 'week' | 'month';
 type BuilderMode = 'schedule' | 'template';
 type PaletteMode = 'workouts' | 'templates';
 type WorkoutPaletteView = 'all' | 'categories';
+type WorkoutLibraryFolder = 'all' | 'mine' | 'pcu';
 type ThrowingDayEntry = { intensity: string; distance: string; throwsText: string; drills: string; bullpen: string };
 type ThrowingTemplate = {
   id: string;
@@ -391,6 +392,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const [builderMode, setBuilderMode] = useState<BuilderMode>('schedule');
   const [paletteMode, setPaletteMode] = useState<PaletteMode>('workouts');
   const [workoutPaletteView, setWorkoutPaletteView] = useState<WorkoutPaletteView>('categories');
+  const [workoutLibraryFolder, setWorkoutLibraryFolder] = useState<WorkoutLibraryFolder>('all');
   const [selectedWorkoutCategory, setSelectedWorkoutCategory] = useState<string | null>(null);
   const [anchorDate, setAnchorDate] = useState<string>(toIsoDate(new Date()));
   const [workoutQuery, setWorkoutQuery] = useState('');
@@ -1427,11 +1429,16 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           String(entry.drills ?? '').trim() ||
           String(entry.bullpen ?? '').trim())
     );
+  const libraryFilteredWorkouts = useMemo(() => {
+    if (workoutLibraryFolder === 'pcu') return workouts.filter((workout) => workout.isShared);
+    if (workoutLibraryFolder === 'mine') return workouts.filter((workout) => !workout.isShared);
+    return workouts;
+  }, [workoutLibraryFolder, workouts]);
   const filteredWorkouts = useMemo(() => {
     const q = workoutQuery.trim().toLowerCase();
-    if (!q) return workouts;
-    return workouts.filter((workout) => workout.name.toLowerCase().includes(q));
-  }, [workoutQuery, workouts]);
+    if (!q) return libraryFilteredWorkouts;
+    return libraryFilteredWorkouts.filter((workout) => workout.name.toLowerCase().includes(q));
+  }, [workoutQuery, libraryFilteredWorkouts]);
   const workoutCategories = useMemo(() => {
     const byCategory = new Map<string, WorkoutChoice[]>();
     for (const workout of filteredWorkouts) {
@@ -5007,6 +5014,40 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
               All Workouts
             </button>
           </div>
+          {paletteMode === 'workouts' ? (
+            <div className="portal-schedule-view-switch" role="group" aria-label="Workout library" style={{ marginBottom: 8, flexWrap: 'wrap', rowGap: 6 }}>
+              <button
+                type="button"
+                className={`btn ${workoutLibraryFolder === 'all' ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => {
+                  setWorkoutLibraryFolder('all');
+                  setSelectedWorkoutCategory(null);
+                }}
+              >
+                All Libraries
+              </button>
+              <button
+                type="button"
+                className={`btn ${workoutLibraryFolder === 'mine' ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => {
+                  setWorkoutLibraryFolder('mine');
+                  setSelectedWorkoutCategory(null);
+                }}
+              >
+                My School&apos;s Library
+              </button>
+              <button
+                type="button"
+                className={`btn ${workoutLibraryFolder === 'pcu' ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => {
+                  setWorkoutLibraryFolder('pcu');
+                  setSelectedWorkoutCategory(null);
+                }}
+              >
+                PCU Library
+              </button>
+            </div>
+          ) : null}
           <div className="portal-search-wrap">
             <input
               type="search"
@@ -5049,6 +5090,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                       }}
                     >
                       <strong>{workout.name}</strong>
+                      {workout.isShared ? <span className="portal-tag" style={{ marginLeft: 6 }}>PCU Library</span> : null}
                     </article>
                   ))
                 : null}
@@ -5065,6 +5107,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                         }}
                       >
                         <strong>{workout.name}</strong>
+                        {workout.isShared ? <span className="portal-tag" style={{ marginLeft: 6 }}>PCU Library</span> : null}
                       </article>
                     ))
                   : workoutCategories.map((group) => (

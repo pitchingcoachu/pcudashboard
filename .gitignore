@@ -12,3 +12,7 @@ __pycache__/
 .vercel
 .motion-capture-uploads/
 /Axioforce/
+# Raw training-data parquet caches for Stuff+ 2.0 -- large (100s of MB),
+# regenerable from source data, not read by the running app (only the
+# trained model JSON in dashboard_api/app/stuff2_models/ is).
+dashboard_api/stuff2_training/data/

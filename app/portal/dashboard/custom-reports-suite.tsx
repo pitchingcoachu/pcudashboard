@@ -41,6 +41,7 @@ type FilterToken =
   | 'Level'
   | 'Session Type'
   | 'Pitch Types'
+  | 'Ball Type'
   | 'Batter Hand'
   | 'Pitcher Hand'
   | 'Pitch Results'
@@ -63,6 +64,7 @@ type PitchingFiltersPayload = {
   level_options?: string[];
   session_types: string[];
   pitch_types: string[];
+  ball_types?: string[];
   batter_sides: string[];
   hands: string[];
   pitch_results: string[];
@@ -264,6 +266,7 @@ type CellConfig = {
   dateEnd?: string;
   sessionType: string;
   pitchTypes: string[];
+  ballTypes: string[];
   batterSide: string;
   pitcherHand: string;
   pitchResults: string[];
@@ -378,6 +381,7 @@ const FILTER_TOKENS: FilterToken[] = [
   'Level',
   'Session Type',
   'Pitch Types',
+  'Ball Type',
   'Batter Hand',
   'Pitcher Hand',
   'Pitch Results',
@@ -1151,6 +1155,7 @@ function emptyCell(): CellConfig {
     filterSelect: ['Dates', 'Session Type', 'Pitch Types'],
     sessionType: 'All',
     pitchTypes: ['All'],
+    ballTypes: ['Baseball'],
     batterSide: 'All',
     pitcherHand: 'All',
     pitchResults: ['All'],
@@ -1177,6 +1182,7 @@ function normalizeCellConfig(input: Partial<CellConfig> | undefined): CellConfig
     ...(input ?? {}),
     filterSelect: (input?.filterSelect?.length ? input.filterSelect : base.filterSelect) as FilterToken[],
     pitchTypes: input?.pitchTypes?.length ? input.pitchTypes : base.pitchTypes,
+    ballTypes: input?.ballTypes?.length ? input.ballTypes : base.ballTypes,
     pitchResults: input?.pitchResults?.length ? input.pitchResults : base.pitchResults,
     countFilter: input?.countFilter?.length ? input.countFilter : base.countFilter,
     afterCountFilter: input?.afterCountFilter?.length ? input.afterCountFilter : base.afterCountFilter,
@@ -2331,6 +2337,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const [sessionTypeOptions, setSessionTypeOptions] = useState<string[]>(['All']);
   const [levelOptions, setLevelOptions] = useState<string[]>(['All', 'MLB', 'AAA']);
   const [pitchTypeOptions, setPitchTypeOptions] = useState<string[]>(['All']);
+  const [ballTypeOptions, setBallTypeOptions] = useState<string[]>(['All', 'Baseball']);
   const [batterSideOptions, setBatterSideOptions] = useState<string[]>(['All']);
   const [pitcherHandOptions, setPitcherHandOptions] = useState<string[]>(['All']);
   const [pitchResultOptions, setPitchResultOptions] = useState<string[]>(['All']);
@@ -3069,6 +3076,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           setSessionTypeOptions(['All', ...Array.from(new Set((typed.session_types ?? []).filter(Boolean)))]);
           setLevelOptions(['All', ...Array.from(new Set((typed.level_options ?? ['MLB', 'AAA']).filter(Boolean)))]);
           setPitchTypeOptions(['All', ...Array.from(new Set((typed.pitch_types ?? []).filter(Boolean)))]);
+          setBallTypeOptions(['All', ...Array.from(new Set((typed.ball_types ?? ['Baseball']).filter(Boolean)))]);
           setBatterSideOptions(['All', ...Array.from(new Set((typed.batter_sides ?? []).filter(Boolean)))]);
           setPitcherHandOptions(['All', ...Array.from(new Set((typed.hands ?? []).filter(Boolean)))]);
           setPitchResultOptions(['All', ...Array.from(new Set((typed.pitch_results ?? []).filter(Boolean)))]);
@@ -3460,6 +3468,18 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             const pitchTypes = selectedValues(config.pitchTypes);
             if (pitchTypes.length) params.set('pitch_types', pitchTypes.join(','));
           }
+          // Ball Type only applies to school-specific dashboards -- PRO and
+          // LEAGUE ignore it server-side regardless (matches
+          // pitching-suite.tsx's own !isPro && !isLeague gate). "Baseball"
+          // is a real, meaningful filter value here (not a default/"All"
+          // placeholder) -- see normalizeBallTypesParam in the overview
+          // route, so it's always sent when this filter is active.
+          if (!isProSchool && !isLeagueSchool && cellFilters.includes('Ball Type')) {
+            const ballTypes = selectedValues(config.ballTypes?.length ? config.ballTypes : ['Baseball']).filter(
+              (value) => value.toLowerCase() !== 'all'
+            );
+            if (ballTypes.length) params.set('ball_types', ballTypes.join(';'));
+          }
           const effectiveBatterSide = mergeSingleGlobalFilter(
             useGlobalBatterSide ? globalBatterSide : 'All',
             !useGlobalBatterSide && cellFilters.includes('Batter Hand') ? config.batterSide : ''
@@ -3594,7 +3614,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                 'FPS(FB)%', 'FPS(OS)%',
                 'Swing%', 'Whiff%', 'SwStrk%', 'GB%', 'Barrel%', 'K%', 'BB%', 'K-BB%', 'CSW%', 'Called-S%', 'Take%', 'Chase%',
                 'EV', 'xWOBA', 'xISO', 'RV/100', 'PV/100',
-                'Stuff+', 'QP+', 'Ctrl+', 'Pitching+',
+                'Stuff+', 'QP+', 'Ctrl+',
                 'ERA', 'FIP', 'xFIP', 'SIERA', 'WHIP',
               ]);
               const usesSupportedCustomColumnsOnly = matchedCustomTable
@@ -5669,6 +5689,21 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                     setCellConfigs((current) => ({
                                       ...current,
                                       [cellId]: { ...(current[cellId] ?? emptyCell()), pitchTypes: next },
+                                    }))
+                                  }
+                                />
+                              </>
+                            ) : null}
+                            {(config.filterSelect ?? []).includes('Ball Type') && !isProSchool && !isLeagueSchool ? (
+                              <>
+                                <label>Ball Type</label>
+                                <SearchableMultiSelect
+                                  options={ballTypeOptions.map((entry) => ({ value: entry, label: entry }))}
+                                  values={config.ballTypes?.length ? config.ballTypes : ['Baseball']}
+                                  onChange={(next) =>
+                                    setCellConfigs((current) => ({
+                                      ...current,
+                                      [cellId]: { ...(current[cellId] ?? emptyCell()), ballTypes: next },
                                     }))
                                   }
                                 />

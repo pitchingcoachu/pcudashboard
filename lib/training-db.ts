@@ -129,6 +129,7 @@ export type WorkoutChoiceRow = {
   category: string;
   exerciseCount: number;
   calendarLinkTarget: CalendarLinkTarget;
+  isShared: boolean;
 };
 
 export type PlayerProfileRow = {
@@ -1892,6 +1893,7 @@ export async function listWorkoutChoicesByOrganization(organizationId: number): 
       category: string;
       calendar_link_target: string | null;
       exercise_count: string;
+      organization_id: number;
     }>(
       `
         SELECT
@@ -1899,6 +1901,7 @@ export async function listWorkoutChoicesByOrganization(organizationId: number): 
           w.name,
           w.category,
           w.calendar_link_target,
+          w.organization_id,
           COUNT(we.id)::text AS exercise_count
         FROM workout_library w
         LEFT JOIN workout_exercises we ON we.workout_id = w.id
@@ -1911,7 +1914,7 @@ export async function listWorkoutChoicesByOrganization(organizationId: number): 
                 AND LOWER(TRIM(own.name)) = LOWER(TRIM(w.name))
             )
           )
-        GROUP BY w.id, w.name, w.category, w.calendar_link_target
+        GROUP BY w.id, w.name, w.category, w.calendar_link_target, w.organization_id
         ORDER BY w.name ASC
       `,
       [organizationId, PCU_TEMPLATE_ORGANIZATION_ID]
@@ -1922,6 +1925,7 @@ export async function listWorkoutChoicesByOrganization(organizationId: number): 
       category: row.category,
       calendarLinkTarget: normalizeCalendarLinkTarget(row.calendar_link_target),
       exerciseCount: Number(row.exercise_count ?? '0') || 0,
+      isShared: organizationId !== PCU_TEMPLATE_ORGANIZATION_ID && row.organization_id === PCU_TEMPLATE_ORGANIZATION_ID,
     }));
   });
 }
@@ -6439,10 +6443,10 @@ export async function addPlanWorkoutAssignment(input: {
     `
       SELECT id
       FROM workout_library
-      WHERE id = $1 AND organization_id = $2
+      WHERE id = $1 AND organization_id = ANY(ARRAY[$2, $3]::int[])
       LIMIT 1
     `,
-    [input.workoutId, input.organizationId]
+    [input.workoutId, input.organizationId, PCU_TEMPLATE_ORGANIZATION_ID]
   );
   if ((workout.rowCount ?? 0) !== 1) return { ok: false, error: 'Workout was not found.' };
 
@@ -6788,10 +6792,10 @@ export async function addCycleWorkoutAssignment(input: {
     `
       SELECT id
       FROM workout_library
-      WHERE id = $1 AND organization_id = $2
+      WHERE id = $1 AND organization_id = ANY(ARRAY[$2, $3]::int[])
       LIMIT 1
     `,
-    [input.workoutId, input.organizationId]
+    [input.workoutId, input.organizationId, PCU_TEMPLATE_ORGANIZATION_ID]
   );
   if ((workout.rowCount ?? 0) !== 1) return { ok: false, error: 'Workout was not found.' };
 
@@ -7936,8 +7940,15 @@ export async function updatePlayerProfile(input: {
       : Number(input.profileWeightLbs);
   const profilePhotoProvided = input.profilePhotoDataUrl !== undefined;
   const profilePhotoDataUrl = (input.profilePhotoDataUrl ?? '').trim() || null;
-  if (profilePhotoDataUrl && profilePhotoDataUrl.length > 2_000_000) {
-    return { ok: false, error: 'Profile photo is too large. Please upload a smaller image.' };
+  if (profilePhotoDataUrl) {
+    // Compare decoded byte size, not the base64 string length (~33% larger than
+    // the underlying bytes) -- otherwise images under the intended size cap can
+    // get falsely rejected once base64-encoded.
+    const base64Payload = profilePhotoDataUrl.slice(profilePhotoDataUrl.indexOf(',') + 1);
+    const decodedByteLength = Math.floor((base64Payload.length * 3) / 4);
+    if (decodedByteLength > 5_000_000) {
+      return { ok: false, error: 'Profile photo is too large. Please upload a smaller image.' };
+    }
   }
 
   const assignedCoachProvided = input.assignedCoachUserId !== undefined;

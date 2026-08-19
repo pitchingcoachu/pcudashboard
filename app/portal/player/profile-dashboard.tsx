@@ -927,8 +927,8 @@ export default function ProfileDashboard({
       event.target.value = '';
       return;
     }
-    if (file.size > 2_000_000) {
-      setPhotoMessage('Image is too large. Please keep it under 2MB.');
+    if (file.size > 20_000_000) {
+      setPhotoMessage('Image is too large. Please keep it under 20MB.');
       event.target.value = '';
       return;
     }

@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
 from .db import get_conn
+from . import stuff2
 from .schemas import (
     HittingAbReportResponse,
     PitchingAbReportResponse,
@@ -36,6 +37,8 @@ from .schemas import (
     ManualVelocityCreateResponse,
     ManualVelocityDeleteResponse,
     ManualVelocityEntry,
+    Stuff2GridRequest,
+    Stuff2GridResponse,
 )
 
 app = FastAPI(title="PCU Dashboard API", version="0.1.0")
@@ -103,48 +106,46 @@ PITCH_RESULT_CHOICES = [
     "HomeRun",
 ]
 
-PITCH_WEIGHTS_FB: Dict[str, Dict[str, float]] = {
-    "Fastball": {"w_vel": 0.6, "w_ivb": 0.3, "w_hb": 0.1, "w_ext": 0.05, "w_raw_vel": 0.0},
-    "Sinker": {"w_vel": 0.5, "w_ivb": 0.3, "w_hb": 0.2, "w_ext": 0.05, "w_raw_vel": 0.0},
-    "Cutter": {"w_vel": 0.44, "w_ivb": 0.2, "w_hb": 0.3, "w_ext": 0.05, "w_raw_vel": 0.1},
-    "Slider": {"w_vel": 0.34, "w_ivb": 0.4, "w_hb": 0.2, "w_ext": 0.05, "w_raw_vel": 0.1},
-    "Sweeper": {"w_vel": 0.23, "w_ivb": 0.1, "w_hb": 0.6, "w_ext": 0.04, "w_raw_vel": 0.1},
-    "Curveball": {"w_vel": 0.43, "w_ivb": 0.5, "w_hb": 0.0, "w_ext": 0.04, "w_raw_vel": 0.1},
-    "ChangeUp": {"w_vel": 0.2, "w_ivb": 0.6, "w_hb": 0.2, "w_ext": 0.03, "w_raw_vel": 0.0},
-    "Splitter": {"w_vel": 0.1, "w_ivb": 0.85, "w_hb": 0.05, "w_ext": 0.03, "w_raw_vel": 0.0},
+# Ctrl+ = (0.6*InZone% + 0.4*Comp%) * CTRL_MULTIPLIER_BY_LEVEL[level]. Each
+# multiplier is 100 / (0.6*avg_InZone% + 0.4*avg_Comp%) for that level, so a
+# pitcher at that level's real average InZone%/Comp% scores exactly 100 --
+# the "100 = average" convention every other Plus-stat here follows. The
+# previous flat 1.35 multiplier was borrowed from a nearby QP+ formula and
+# was never derived from real data -- it left Ctrl+ structurally stuck
+# below 100 for realistic pitchers instead of centering on it. Comp% (not
+# Strike%) is the correct second input per product spec -- Comp% uses a
+# wider "competitive pitch" zone (comp_n) than actual ball/strike calls,
+# denominated over loc_n like the displayed Comp% column itself. Averages
+# computed directly from pitch_events_daily_rollup_league /
+# pro_pitch_events_daily_rollup (InZone%/Comp%, both weighted by loc_n) on
+# 2026-08-17; not live-refreshed.
+CTRL_MULTIPLIER_BY_LEVEL = {
+    "D1": 1.71752,
+    "D2": 1.80518,
+    "D3": 1.84616,
+    "JUCO": 1.87417,
+    "NAIA": 1.88305,
+    "AAA": 1.67130,
+    "MLB": 1.62899,
 }
-PITCH_WEIGHTS_SI: Dict[str, Dict[str, float]] = {
-    "Fastball": {"w_vel": 0.6, "w_ivb": 0.3, "w_hb": 0.1, "w_ext": 0.05, "w_raw_vel": 0.0},
-    "Sinker": {"w_vel": 0.5, "w_ivb": 0.3, "w_hb": 0.2, "w_ext": 0.05, "w_raw_vel": 0.0},
-    "Cutter": {"w_vel": 0.44, "w_ivb": 0.2, "w_hb": 0.3, "w_ext": 0.05, "w_raw_vel": 0.1},
-    "Slider": {"w_vel": 0.34, "w_ivb": 0.4, "w_hb": 0.2, "w_ext": 0.05, "w_raw_vel": 0.1},
-    "Sweeper": {"w_vel": 0.23, "w_ivb": 0.1, "w_hb": 0.6, "w_ext": 0.04, "w_raw_vel": 0.1},
-    "Curveball": {"w_vel": 0.43, "w_ivb": 0.5, "w_hb": 0.0, "w_ext": 0.04, "w_raw_vel": 0.1},
-    "ChangeUp": {"w_vel": 0.2, "w_ivb": 0.7, "w_hb": 0.1, "w_ext": 0.03, "w_raw_vel": 0.0},
-    "Splitter": {"w_vel": 0.1, "w_ivb": 0.85, "w_hb": 0.05, "w_ext": 0.03, "w_raw_vel": 0.0},
-}
-EXT_TARGETS: Dict[str, Dict[str, float]] = {
-    "Fastball": {"poor": 5.8, "avg": 6.0, "great": 6.2},
-    "Sinker": {"poor": 5.8, "avg": 6.0, "great": 6.2},
-    "Cutter": {"poor": 5.6, "avg": 5.8, "great": 6.0},
-    "Slider": {"poor": 5.4, "avg": 5.6, "great": 5.8},
-    "Sweeper": {"poor": 5.4, "avg": 5.6, "great": 5.8},
-    "Curveball": {"poor": 5.3, "avg": 5.5, "great": 5.7},
-    "ChangeUp": {"poor": 5.7, "avg": 5.9, "great": 6.1},
-    "Splitter": {"poor": 5.7, "avg": 5.9, "great": 6.1},
-}
-BREAKING_VEL_TARGETS: Dict[str, Dict[str, float]] = {
-    "Cutter": {"poor": 82.0, "avg": 85.0, "great": 88.0},
-    "Slider": {"poor": 80.0, "avg": 82.0, "great": 84.0},
-    "Sweeper": {"poor": 75.0, "avg": 77.0, "great": 80.0},
-    "Curveball": {"poor": 75.0, "avg": 77.0, "great": 80.0},
-}
-OFF_OFF = {"Cutter": 5.0, "Slider": 8.0, "Sweeper": 12.0, "Curveball": 14.0, "ChangeUp": 8.0, "Splitter": 7.0}
-SEP_FB_IVB = {"Cutter": -7.0, "Slider": -15.0, "Sweeper": -16.0, "Curveball": -27.0, "ChangeUp": -12.0, "Splitter": -13.0}
-SEP_FB_HB = {"Cutter": 10.0, "Slider": 12.0, "Sweeper": 22.0, "Curveball": 18.0, "ChangeUp": -7.0, "Splitter": -4.0}
-SEP_SI_IVB = {"Cutter": 2.0, "Slider": -6.0, "Sweeper": -7.0, "Curveball": -18.0, "ChangeUp": -4.0, "Splitter": -5.0}
-SEP_SI_HB = {"Cutter": 18.0, "Slider": 20.0, "Sweeper": 30.0, "Curveball": 25.0, "ChangeUp": 1.0, "Splitter": 2.0}
-VELO_AVG_BY_LEVEL = {"Pro": 94.0, "College": 89.0, "High School": 82.0}
+_CTRL_MULTIPLIER_DEFAULT = 1.71752  # D1 -- used when level_bucket is missing/unrecognized
+
+
+def _ctrl_multiplier_for_rows(rows_for_split: List[Dict[str, Any]]) -> float:
+    """Picks the dominant level_bucket by pitch count within this split row
+    (a row is usually single-level -- one pitcher or one team -- but a "Level:
+    All" request pools every level into one rollup query, so this can't just
+    trust a single request-wide filter) and returns its Ctrl+ multiplier."""
+    pitch_totals: Dict[str, int] = {}
+    for r in rows_for_split:
+        level = str(r.get("level_bucket") or "").strip().upper()
+        if not level:
+            continue
+        pitch_totals[level] = pitch_totals.get(level, 0) + int(r.get("pitches") or 0)
+    if not pitch_totals:
+        return _CTRL_MULTIPLIER_DEFAULT
+    dominant_level = max(pitch_totals.items(), key=lambda kv: kv[1])[0]
+    return CTRL_MULTIPLIER_BY_LEVEL.get(dominant_level, _CTRL_MULTIPLIER_DEFAULT)
 
 _OVERVIEW_CACHE_TTL_SECONDS = max(0, int(os.getenv("DASHBOARD_OVERVIEW_CACHE_TTL_SECONDS", "45")))
 _OVERVIEW_CACHE_MAX_ENTRIES = max(16, int(os.getenv("DASHBOARD_OVERVIEW_CACHE_MAX_ENTRIES", "64")))
@@ -1232,279 +1233,6 @@ def _is_num(value: Any) -> bool:
         return False
 
 
-def _mean(values: List[Optional[float]]) -> Optional[float]:
-    nums = [float(v) for v in values if _is_num(v)]  # type: ignore[arg-type]
-    if not nums:
-        return None
-    return sum(nums) / len(nums)
-
-
-def _std_ivb(pitch_type: str, rel_height: Optional[float]) -> Optional[float]:
-    if pitch_type not in {"Fastball", "Sinker"} or not _is_num(rel_height):
-        return None
-    rh = float(rel_height)
-    if pitch_type == "Fastball":
-        if rh >= 6.2:
-            return 17.0
-        if rh >= 5.8:
-            return 15.5
-        if rh >= 5.4:
-            return 15.0
-        if rh >= 5.0:
-            return 12.5
-        if rh >= 4.5:
-            return 11.0
-        return 10.0
-    if rh >= 6.2:
-        return 10.0
-    if rh >= 5.8:
-        return 7.0
-    if rh >= 5.4:
-        return 6.0
-    if rh >= 5.0:
-        return 4.0
-    if rh >= 4.5:
-        return 3.0
-    return 3.0
-
-
-def _std_hb_right(pitch_type: str, rel_height: Optional[float]) -> Optional[float]:
-    if pitch_type not in {"Fastball", "Sinker"} or not _is_num(rel_height):
-        return None
-    rh = float(rel_height)
-    if pitch_type == "Fastball":
-        if rh >= 6.2:
-            return 9.0
-        if rh >= 5.8:
-            return 10.0
-        if rh >= 5.4:
-            return 11.0
-        if rh >= 5.0:
-            return 12.0
-        if rh >= 4.5:
-            return 13.0
-        return 11.0
-    if rh >= 6.2:
-        return 15.0
-    if rh >= 5.8:
-        return 15.5
-    if rh >= 5.4:
-        return 16.7
-    if rh >= 5.0:
-        return 17.0
-    if rh >= 4.5:
-        return 17.0
-    return 17.5
-
-
-def _compute_stuff_by_pitch_type(
-    rows: List[Dict[str, object]],
-    base_type: str,
-    level: str,
-    annotate_key: Optional[str] = None,
-) -> tuple[Optional[float], Dict[str, float]]:
-    weight_tbl = PITCH_WEIGHTS_FB if base_type == "Fastball" else PITCH_WEIGHTS_SI
-    seps_ivb = SEP_FB_IVB if base_type == "Fastball" else SEP_SI_IVB
-    seps_hb = SEP_FB_HB if base_type == "Fastball" else SEP_SI_HB
-    vel_avg = VELO_AVG_BY_LEVEL.get(level, VELO_AVG_BY_LEVEL["College"])
-
-    base_vel = _mean(
-        [row.get("rel_speed") for row in rows if row.get("pitch_type") == base_type]  # type: ignore[list-item]
-    )
-    base_ivb_val = _mean(
-        [row.get("ivb") for row in rows if row.get("pitch_type") == base_type]  # type: ignore[list-item]
-    )
-    base_hb_val = _mean(
-        [row.get("hb_adj") for row in rows if row.get("pitch_type") == base_type]  # type: ignore[list-item]
-    )
-    # Row-scoped queries (e.g., single pitch-type percentile baselines) may not
-    # include any base-pitch rows. Use level/height-derived anchors so Stuff+
-    # remains computable instead of returning null for entire pitch groups.
-    base_ivb_fallback = _mean(
-        [
-            _std_ivb(base_type, row.get("rel_height") if _is_num(row.get("rel_height")) else None)
-            for row in rows
-        ]
-    )
-    base_hb_right_fallback = _mean(
-        [
-            _std_hb_right(base_type, row.get("rel_height") if _is_num(row.get("rel_height")) else None)
-            for row in rows
-        ]
-    )
-    base_hb_fallback = (-abs(float(base_hb_right_fallback))) if _is_num(base_hb_right_fallback) else None
-
-    alpha = 4.0
-    beta = 2.0
-    values_by_type: Dict[str, List[float]] = {}
-
-    for row in rows:
-        pitch_type = str(row.get("pitch_type") or "")
-        rel_speed = row.get("rel_speed")
-        ivb = row.get("ivb")
-        hb_adj = row.get("hb_adj")
-        rel_height = row.get("rel_height")
-        ext_value = row.get("ext_value")
-        is_lefty = bool(row.get("is_lefty"))
-
-        if pitch_type not in weight_tbl:
-            continue
-        if not (_is_num(rel_speed) and _is_num(ivb) and _is_num(hb_adj)):
-            continue
-        rel_speed = float(rel_speed)  # type: ignore[arg-type]
-        ivb = float(ivb)  # type: ignore[arg-type]
-        hb_adj = float(hb_adj)  # type: ignore[arg-type]
-
-        std_ivb = _std_ivb(pitch_type, rel_height if _is_num(rel_height) else None)  # type: ignore[arg-type]
-        std_hb_r = _std_hb_right(pitch_type, rel_height if _is_num(rel_height) else None)  # type: ignore[arg-type]
-        std_hb = (-std_hb_r if is_lefty else std_hb_r) if std_hb_r is not None else None
-
-        if pitch_type in {"Fastball", "Sinker"}:
-            r_vel = rel_speed / max(vel_avg, 1e-6)
-        else:
-            off = OFF_OFF.get(pitch_type)
-            if not _is_num(base_vel) or off is None:
-                continue
-            denom = float(base_vel) - off
-            if abs(denom) < 1e-6:
-                continue
-            r_vel = rel_speed / denom
-
-        r_vel = (r_vel**alpha) if r_vel < 1 else (r_vel**beta)
-        if pitch_type in {"ChangeUp", "Splitter"}:
-            r_vel = 1.0 / max(r_vel, 1e-6)
-
-        if pitch_type == "Fastball":
-            if not _is_num(std_ivb):
-                continue
-            r_ivb = ivb / float(std_ivb)
-        elif pitch_type == "Sinker":
-            if not _is_num(std_ivb):
-                continue
-            r_ivb = (float(std_ivb) / ivb) if ivb > 0 else 1.0
-        elif base_type == "Sinker" and pitch_type in {"Cutter", "Sweeper"}:
-            base_ivb_anchor = base_ivb_val if _is_num(base_ivb_val) else base_ivb_fallback
-            if not _is_num(base_ivb_anchor):
-                continue
-            endpoint = float(base_ivb_anchor) + seps_ivb[pitch_type]
-            if abs(endpoint) < 1e-6:
-                continue
-            r_ivb = abs(ivb - endpoint) / endpoint
-        elif base_type == "Fastball" and pitch_type == "Sweeper":
-            base_ivb_anchor = base_ivb_val if _is_num(base_ivb_val) else base_ivb_fallback
-            if not _is_num(base_ivb_anchor):
-                continue
-            endpoint = float(base_ivb_anchor) + seps_ivb[pitch_type]
-            if abs(endpoint) < 1e-6:
-                continue
-            r_ivb = abs(ivb - endpoint) / abs(endpoint)
-        else:
-            base_ivb_anchor = base_ivb_val if _is_num(base_ivb_val) else base_ivb_fallback
-            if not _is_num(base_ivb_anchor):
-                continue
-            sep = abs(seps_ivb.get(pitch_type, 0.0))
-            if sep < 1e-6:
-                continue
-            r_ivb = (float(base_ivb_anchor) - ivb) / sep
-
-        if pitch_type == "Fastball":
-            if not _is_num(std_hb):
-                continue
-            hb_mag = abs(hb_adj)
-            std_mag = abs(float(std_hb))
-            if std_mag < 1e-6:
-                continue
-            r_hb = max(hb_mag / std_mag, std_mag / max(hb_mag, 1e-6))
-            if abs(hb_mag - std_mag) < 2:
-                r_hb = 1.0
-        elif pitch_type == "Sinker":
-            if not _is_num(std_hb):
-                continue
-            denom = abs(float(std_hb))
-            if denom < 1e-6:
-                continue
-            r_hb = abs(hb_adj / float(std_hb))
-        elif pitch_type == "Curveball":
-            base_hb_anchor = base_hb_val if _is_num(base_hb_val) else base_hb_fallback
-            if not _is_num(base_hb_anchor):
-                continue
-            sep = abs(seps_hb.get("Curveball", 0.0))
-            if sep < 1e-6:
-                continue
-            r_hb = abs(hb_adj - float(base_hb_anchor)) / sep
-        elif base_type == "Sinker" and pitch_type in {"Sweeper", "Cutter"}:
-            base_hb_anchor = base_hb_val if _is_num(base_hb_val) else base_hb_fallback
-            if not _is_num(base_hb_anchor):
-                continue
-            endpoint = float(base_hb_anchor) + seps_hb[pitch_type]
-            if abs(endpoint) < 1e-6:
-                continue
-            r_hb = abs(hb_adj) / abs(endpoint)
-        elif base_type == "Sinker" and pitch_type in {"ChangeUp", "Splitter"}:
-            base_hb_anchor = base_hb_val if _is_num(base_hb_val) else base_hb_fallback
-            if not _is_num(base_hb_anchor):
-                continue
-            sep = seps_hb.get(pitch_type, 0.0)
-            if abs(sep) < 1e-6:
-                continue
-            r_hb = (float(base_hb_anchor) - hb_adj) / sep
-        else:
-            base_hb_anchor = base_hb_val if _is_num(base_hb_val) else base_hb_fallback
-            if not _is_num(base_hb_anchor):
-                continue
-            sep = seps_hb.get(pitch_type, 0.0)
-            if abs(sep) < 1e-6:
-                continue
-            r_hb = (hb_adj - float(base_hb_anchor)) / sep
-
-        r_ivb = min(r_ivb, 2.0)
-        r_hb = min(r_hb, 2.0)
-
-        weights = weight_tbl[pitch_type]
-        w_ext = weights["w_ext"]
-        w_raw_vel = weights["w_raw_vel"]
-        base_scale = max(1.0 - (w_ext + w_raw_vel), 0.01)
-
-        ext_target = EXT_TARGETS.get(pitch_type)
-        if _is_num(ext_value) and ext_target is not None:
-            ext_range = ext_target["great"] - ext_target["poor"]
-            ext_range = ext_range if ext_range > 0 else 1.0
-            ext_norm = (float(ext_value) - ext_target["avg"]) / ext_range  # type: ignore[arg-type]
-            r_ext = min(max(1.0 + 0.25 * ext_norm, 0.8), 1.2)
-        else:
-            r_ext = 1.0
-
-        bvt = BREAKING_VEL_TARGETS.get(pitch_type)
-        if bvt is not None:
-            vel_range = bvt["great"] - bvt["poor"]
-            vel_range = vel_range if vel_range > 0 else 1.0
-            vel_norm = (rel_speed - bvt["avg"]) / vel_range
-            r_raw_vel = min(max(1.0 + 0.25 * vel_norm, 0.8), 1.2)
-        else:
-            r_raw_vel = 1.0
-
-        raw = (
-            (weights["w_vel"] * base_scale) * r_vel
-            + (weights["w_ivb"] * base_scale) * r_ivb
-            + (weights["w_hb"] * base_scale) * r_hb
-            + w_ext * r_ext
-            + w_raw_vel * r_raw_vel
-        )
-        stuff = round(raw * 100.0, 1)
-        if annotate_key:
-            try:
-                row[annotate_key] = stuff
-            except Exception:
-                pass
-        values_by_type.setdefault(pitch_type, []).append(stuff)
-
-    avg_by_type: Dict[str, float] = {
-        pitch_type: round(sum(vals) / len(vals), 1) for pitch_type, vals in values_by_type.items() if vals
-    }
-    all_vals = [value for vals in values_by_type.values() for value in vals]
-    avg_stuff = round(sum(all_vals) / len(all_vals), 1) if all_vals else None
-    return avg_stuff, avg_by_type
-
 
 def _validate_school_code(value: str) -> str:
     school_code = (value or "").strip().upper()
@@ -2465,8 +2193,8 @@ COMP_LEFT = -1.5
 COMP_RIGHT = 1.5
 COMP_BOTTOM = ((ZONE_BOTTOM + ZONE_TOP) / 2.0) - 1.5
 COMP_TOP = ((ZONE_BOTTOM + ZONE_TOP) / 2.0) + 1.5
-COMP_PCT_BOTTOM = 2.65 - 1.7
-COMP_PCT_TOP = 2.65 + 1.3
+COMP_PCT_BOTTOM = 1.17  # matches comp_n's plate_height lower bound in the SQL rollup queries
+COMP_PCT_TOP = 3.93  # matches comp_n's plate_height upper bound in the SQL rollup queries
 
 
 def _count_state(balls: Any, strikes: Any) -> str:
@@ -3525,7 +3253,6 @@ ALL_TABLE_COLUMNS: List[str] = [
     "Stuff+",
     "Ctrl+",
     "QP+",
-    "Pitching+",
     "RV/100",
     "PV/100",
     "IP",
@@ -3868,8 +3595,9 @@ def _build_dynamic_table(
     rows: List[Dict[str, Any]],
     mode: str,
     split_by: str,
-    avg_stuff_by_pitch_type: Dict[str, float],
     custom_columns: Optional[List[str]] = None,
+    stuff2_level: Optional[str] = None,
+    ctrl_level: Optional[str] = None,
 ) -> tuple[List[str], List[Dict[str, Any]], List[str]]:
     mode_key = (mode or "Stuff").strip()
     split_col_map: Dict[str, str] = {
@@ -4164,6 +3892,46 @@ def _build_dynamic_table(
         if s == 2:
             usage_count_2k_total += 1
     pro_fip_const, pro_lg_hr_fb = _derive_pro_fip_context(rows)
+
+    def _stuff2_rows_from_raw(raw_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for r in raw_rows:
+            pt = r.get("pitch_type")
+            if pt not in stuff2.PITCH_TYPES:
+                continue
+            is_lefty = r.get("is_lefty")
+            if is_lefty is None:
+                is_lefty = str(r.get("pitcherthrows") or "").strip().upper().startswith("L")
+            out.append({
+                "pitch_type": pt,
+                "rel_speed": r.get("rel_speed"),
+                "ivb": r.get("ivb"),
+                "hb_adj": (r.get("hb") if bool(is_lefty) else (-float(r["hb"]) if _is_num(r.get("hb")) else None)),
+                "is_lefty": bool(is_lefty),
+                "spin_rate": r.get("spin_rate"),
+                "ext_value": r.get("ext_value"),
+                "rel_height": r.get("rel_height"),
+                "rel_side": r.get("rel_side"),
+                "batterside": r.get("batterside"),
+            })
+        return out
+
+    # Stuff+ 2.0: for the "Pitch Types" split, computed ONCE globally across
+    # ALL rows passed to this table -- each split group there is a single
+    # pitch type and needs the full arsenal to find its own fastball/sinker
+    # base. For per-pitcher splits ("Pitcher"/"Pitcher Team"), pooling
+    # globally here would blend one pitcher's usage weights against a
+    # stuff2 value averaged across every OTHER pitcher in the table too --
+    # instead, each pitcher's own map is computed just-in-time inside
+    # _row_for_group from that pitcher's own grp.
+    stuff2_split_is_per_pitcher = str(split_by or "").strip() in {"Pitcher", "Pitcher Team"}
+    try:
+        stuff2_global_by_type = (
+            {} if stuff2_split_is_per_pitcher
+            else stuff2.compute_stuff2_by_pitch_type(_stuff2_rows_from_raw(rows), stuff2_level or "D1")
+        )
+    except Exception:
+        stuff2_global_by_type = {}
 
     def _row_for_group(key: str, grp: List[Dict[str, Any]]) -> Dict[str, Any]:
         n = len(grp)
@@ -4808,31 +4576,39 @@ def _build_dynamic_table(
         qp_points = [q for q in (_compute_qp_point(r) for r in grp) if q is not None]
         qp_count = sum(1 for q in qp_points if (q * 200.0) >= 100.0)
         qp_mean = (sum(qp_points) / len(qp_points)) if qp_points else None
-        ctrl_scores: List[float] = []
-        for r in grp:
-            ps = r.get("plate_side")
-            ph = r.get("plate_height")
-            if not (_is_num(ps) and _is_num(ph)):
-                continue
-            psv = float(ps)
-            phv = float(ph)
-            if (ZONE_LEFT <= psv <= ZONE_RIGHT) and (ZONE_BOTTOM <= phv <= ZONE_TOP):
-                ctrl_scores.append(1.47)
-            elif (-1.5 <= psv <= 1.5) and (COMP_PCT_BOTTOM <= phv <= COMP_PCT_TOP):
-                ctrl_scores.append(0.73)
-            else:
-                ctrl_scores.append(0.0)
-        ctrl_plus = round((sum(ctrl_scores) / len(ctrl_scores)) * 100.0, 1) if ctrl_scores else None
+        # Ctrl+ = (0.6*InZone% + 0.4*Comp%) * CTRL_MULTIPLIER_BY_LEVEL[level],
+        # matching the rollup fast-paths' formula exactly (see
+        # CTRL_MULTIPLIER_BY_LEVEL's docstring) rather than the old flat
+        # 1.47/0.73/0 per-pitch scoring this raw path used to use, which had
+        # no level normalization and was structurally different from the
+        # fast-path's Ctrl+ for the same request. in_zone_n/qp_n/loc_n reuse
+        # the same zone-classification already computed above for the
+        # InZone%/Comp% columns on this same row.
+        ctrl_plus_raw = (
+            ((0.6 * (100.0 * in_zone_n / loc_n)) + (0.4 * (100.0 * qp_n / loc_n)))
+            * CTRL_MULTIPLIER_BY_LEVEL.get(str(ctrl_level or "").strip().upper(), _CTRL_MULTIPLIER_DEFAULT)
+            if loc_n > 0
+            else None
+        )
+        ctrl_plus = round(ctrl_plus_raw, 1) if _is_num(ctrl_plus_raw) else None
 
-        stuff_vals: List[float] = []
-        for r in grp:
-            if _is_num(r.get("stuff_plus")):
-                stuff_vals.append(float(r.get("stuff_plus")))
-                continue
-            pt = str(r.get("pitch_type") or "")
-            mapped = avg_stuff_by_pitch_type.get(pt)
-            if _is_num(mapped):
-                stuff_vals.append(float(mapped))
+        # Stuff+ (the XGBoost model, formerly "Stuff+ 2.0" -- the OLD
+        # hand-crafted formula this used to blend/replace was deleted): for
+        # the "Pitch Types" split, looked up from the global, table-wide
+        # map computed once above (stuff2_global_by_type). For per-pitcher
+        # splits, stuff2_global_by_type is empty (see above) -- instead
+        # compute a map scoped to just THIS pitcher's own grp, so a
+        # pitcher's Stuff+ reflects only their own arsenal.
+        stuff2_lookup = (
+            stuff2.compute_stuff2_by_pitch_type(_stuff2_rows_from_raw(grp), stuff2_level or "D1")
+            if stuff2_split_is_per_pitcher
+            else stuff2_global_by_type
+        )
+        stuff2_vals: List[float] = [
+            stuff2_lookup[str(r.get("pitch_type") or "")]
+            for r in grp
+            if str(r.get("pitch_type") or "") in stuff2_lookup
+        ]
         fps_opp = sum(1 for r in grp if _is_competitive_row(r) and r.get("balls_num") == 0 and r.get("strikes_num") == 0)
         fps_yes = sum(
             1
@@ -5182,10 +4958,9 @@ def _build_dynamic_table(
                 if any(_is_num(r.get("bat_speed")) for r in grp)
                 else None
             ),
-            "Stuff+": round(sum(float(v) for v in stuff_vals) / len(stuff_vals), 1) if stuff_vals else None,
+            "Stuff+": round(sum(float(v) for v in stuff2_vals) / len(stuff2_vals), 1) if stuff2_vals else None,
             "Ctrl+": ctrl_plus,
             "QP+": round((qp_mean * 200.0), 1) if _is_num(qp_mean) else None,
-            "Pitching+": None,
             "RV/100": round(rv100, 1) if _is_num(rv100) else None,
             "PV/100": round(pv100, 1) if _is_num(pv100) else None,
             "IP": ip_display if outs_for_ip else None,
@@ -5253,11 +5028,6 @@ def _build_dynamic_table(
             "BABIP": babip,
             **_sep_stat_columns_for_raw_group(grp),
         }
-        if _is_num(row_out.get("Stuff+")) and row_out.get("QP+"):
-            try:
-                row_out["Pitching+"] = round((float(row_out["Stuff+"]) + float(row_out["QP+"])) / 2.0, 1)
-            except Exception:
-                row_out["Pitching+"] = None
         return row_out
 
     ordered_items: List[tuple[str, List[Dict[str, Any]]]]
@@ -5373,7 +5143,10 @@ def _build_dynamic_table(
     return columns, out_rows, ALL_TABLE_COLUMNS
 
 
-def _pitch_action_payload(row: Dict[str, Any], avg_stuff_by_pitch_type: Dict[str, float]) -> Dict[str, Any]:
+def _pitch_action_payload(
+    row: Dict[str, Any],
+    avg_stuff2_by_pitch_type: Optional[Dict[str, float]] = None,
+) -> Dict[str, Any]:
     qp = _compute_qp_point(row)
     school_code = str(row.get("school_code") or "").strip().upper()
     if school_code == "PRO":
@@ -5494,7 +5267,7 @@ def _pitch_action_payload(row: Dict[str, Any], avg_stuff_by_pitch_type: Dict[str
             if _is_num(row.get("iso_value"))
             else None
         ),
-        "stuff_plus": avg_stuff_by_pitch_type.get(str(row.get("pitch_type") or "")),
+        "stuff_plus": (avg_stuff2_by_pitch_type or {}).get(str(row.get("pitch_type") or "")),
         "qp_plus": (round(float(qp) * 200.0, 1) if _is_num(qp) else None),
         "video_clip_1": str(row.get("video_clip_1") or ""),
         "video_clip_2": str(row.get("video_clip_2") or ""),
@@ -5503,7 +5276,7 @@ def _pitch_action_payload(row: Dict[str, Any], avg_stuff_by_pitch_type: Dict[str
 
 
 def _build_chart_points(
-    rows: List[Dict[str, Any]], avg_stuff_by_pitch_type: Dict[str, float], max_points: int = 3500
+    rows: List[Dict[str, Any]], avg_stuff2_by_pitch_type: Dict[str, float], max_points: int = 3500
 ) -> List[Dict[str, Any]]:
     if not rows:
         return []
@@ -5511,13 +5284,13 @@ def _build_chart_points(
     sampled = rows[::step]
     points: List[Dict[str, Any]] = []
     for row in sampled[:max_points]:
-        points.append(_pitch_action_payload(row, avg_stuff_by_pitch_type))
+        points.append(_pitch_action_payload(row, avg_stuff2_by_pitch_type))
     return points
 
 
 def _build_trend_rows(
     rows: List[Dict[str, Any]],
-    avg_stuff_by_pitch_type: Dict[str, float],
+    avg_stuff2_by_pitch_type: Dict[str, float],
     use_osu_date_session_rules: bool = False,
 ) -> List[Dict[str, Any]]:
     if not rows:
@@ -5688,7 +5461,7 @@ def _build_trend_rows(
             agg["extension_sum"] += float(row.get("ext_value"))
             agg["extension_n"] += 1
 
-        stuff = avg_stuff_by_pitch_type.get(str(row.get("pitch_type") or ""))
+        stuff = avg_stuff2_by_pitch_type.get(str(row.get("pitch_type") or ""))
         if _is_num(stuff):
             agg["stuff_sum"] += float(stuff)
             agg["stuff_n"] += 1
@@ -5974,7 +5747,7 @@ def _build_trend_rows(
 def _build_row_pitch_map(
     rows: List[Dict[str, Any]],
     split_by: str,
-    avg_stuff_by_pitch_type: Dict[str, float],
+    avg_stuff2_by_pitch_type: Dict[str, float],
     max_per_row: int = 220,
 ) -> Dict[str, List[Dict[str, Any]]]:
     grouped: Dict[str, List[Dict[str, Any]]] = {}
@@ -5983,7 +5756,7 @@ def _build_row_pitch_map(
         bucket = grouped.setdefault(key, [])
         if len(bucket) >= max_per_row:
             continue
-        bucket.append(_pitch_action_payload(row, avg_stuff_by_pitch_type))
+        bucket.append(_pitch_action_payload(row, avg_stuff2_by_pitch_type))
     return grouped
 
 
@@ -10053,6 +9826,65 @@ def _start_endpoint_cache_warmer_background() -> None:
         return
 
 
+def _stuff2_by_type_from_rollup_rows(rows: List[Dict[str, Any]], level: str) -> Dict[str, float]:
+    """Aggregates a set of rollup rows (pre-aggregated per (split_value,
+    pitch_type) sums/counts) into one Stuff+ 2.0 value per pitch type
+    present, via compute_stuff2_from_rollup_averages.
+
+    Callers must scope `rows` to whatever population a single Stuff+ 2.0
+    value should represent: the WHOLE request's rows when the split is
+    "Pitch Types" (each split group there is one pitch type and needs the
+    full arsenal to find its own fastball/sinker base), or ONE PITCHER's
+    rows when the split is "Pitcher"/"Pitcher Team" (each split group
+    there already represents a whole arsenal, and needs its OWN bases --
+    pooling across pitchers here would blend one pitcher's usage weights
+    against a stuff2 value averaged across every OTHER pitcher too)."""
+    try:
+        acc: Dict[str, Dict[str, float]] = {}
+        for row in rows:
+            pt = str(row.get("pitch_type") or "")
+            if not pt or pt == "Undefined":
+                continue
+            a = acc.setdefault(
+                pt,
+                {"velo_sum": 0.0, "velo_n": 0.0, "ivb_sum": 0.0, "ivb_n": 0.0,
+                 "hb_adj_sum": 0.0, "hb_n": 0.0, "spin_sum": 0.0, "spin_n": 0.0,
+                 "rh_sum": 0.0, "rh_n": 0.0, "rs_sum": 0.0, "rs_n": 0.0,
+                 "ext_sum": 0.0, "ext_n": 0.0, "left_n": 0.0, "right_n": 0.0},
+            )
+            a["velo_sum"] += float(row.get("velo_sum") or 0.0)
+            a["velo_n"] += float(int(row.get("velo_n") or 0))
+            a["ivb_sum"] += float(row.get("ivb_sum") or 0.0)
+            a["ivb_n"] += float(int(row.get("ivb_n") or 0))
+            a["hb_adj_sum"] += float(row.get("hb_adj_sum") or 0.0)
+            a["hb_n"] += float(int(row.get("hb_n") or 0))
+            a["spin_sum"] += float(row.get("spin_sum") or 0.0)
+            a["spin_n"] += float(int(row.get("spin_n") or 0))
+            a["rh_sum"] += float(row.get("rel_height_sum") or 0.0)
+            a["rh_n"] += float(int(row.get("rel_height_n") or 0))
+            a["rs_sum"] += float(row.get("rel_side_sum") or 0.0)
+            a["rs_n"] += float(int(row.get("rel_side_n") or 0))
+            a["ext_sum"] += float(row.get("ext_sum") or 0.0)
+            a["ext_n"] += float(int(row.get("ext_n") or 0))
+            a["left_n"] += float(int(row.get("left_n") or 0))
+            a["right_n"] += float(int(row.get("right_n") or 0))
+        averages: Dict[str, Dict[str, Optional[float]]] = {}
+        for pt, a in acc.items():
+            averages[pt] = {
+                "rel_speed": (a["velo_sum"] / a["velo_n"]) if a["velo_n"] > 0 else None,
+                "ivb": (a["ivb_sum"] / a["ivb_n"]) if a["ivb_n"] > 0 else None,
+                "hb_adj": (a["hb_adj_sum"] / a["hb_n"]) if a["hb_n"] > 0 else None,
+                "spin_rate": (a["spin_sum"] / a["spin_n"]) if a["spin_n"] > 0 else None,
+                "rel_height": (a["rh_sum"] / a["rh_n"]) if a["rh_n"] > 0 else None,
+                "rel_side": (a["rs_sum"] / a["rs_n"]) if a["rs_n"] > 0 else None,
+                "ext_value": (a["ext_sum"] / a["ext_n"]) if a["ext_n"] > 0 else None,
+                "is_lefty": a["left_n"] >= a["right_n"] and a["left_n"] > 0,
+            }
+        return stuff2.compute_stuff2_from_rollup_averages(averages, level)
+    except Exception:
+        return {}
+
+
 def _try_pitching_overview_daily_rollup(
     *,
     school_code: str,
@@ -10096,6 +9928,7 @@ def _try_pitching_overview_daily_rollup(
     chart_points_limit: Optional[int],
     include_row_pitches: bool,
     include_trend_rows: bool,
+    stuff2_level: Optional[str] = None,
 ) -> Optional[PitchingOverviewResponse]:
     if school_code == "PRO":
         return None
@@ -10161,7 +9994,6 @@ def _try_pitching_overview_daily_rollup(
         "Stuff+",
         "Ctrl+",
         "QP+",
-        "Pitching+",
         "RV/100",
         "PV/100",
         "IP",
@@ -10635,6 +10467,7 @@ def _try_pitching_overview_daily_rollup(
                 SELECT
                   {split_rollup_col} AS split_value,
                   pitch_type,
+                  MIN(level_bucket)::text AS level_bucket,
                   SUM(pitches)::int AS pitches,
                   SUM(velo_sum)::double precision AS velo_sum,
                   SUM(velo_n)::int AS velo_n,
@@ -10754,6 +10587,56 @@ def _try_pitching_overview_daily_rollup(
             _kick_school_rollup_refresh_background(school_code)
             return _empty_rollup_response()
         return None
+
+    # Stuff+/Stuff+ 2.0 both need each pitcher's own Fastball/Sinker shape
+    # to grade off-speed pitches. A pitch_types filter that excludes both
+    # Fastball and Sinker (e.g. "Slider" only) means grouped_rows above --
+    # already filtered in SQL -- contains no Fastball/Sinker rows anywhere,
+    # so neither metric can find a base and every pitcher's grade comes
+    # back blank. Fetch an UNFILTERED-by-pitch-type companion query (same
+    # scope otherwise) just for Fastball/Sinker base shapes when this
+    # situation applies; grouped_rows itself stays pitch_types-filtered for
+    # everything else displayed in the table.
+    base_shape_rows: List[Dict[str, Any]] = []
+    if selected_pitch_types and not (set(selected_pitch_types) & {"Fastball", "Sinker"}):
+        try:
+            base_where_parts = [p for p in where_parts if "pitch_type = ANY" not in p]
+            base_where_parts.append("pitch_type = ANY(%(base_shape_pitch_types)s::text[])")
+            base_params = dict(params)
+            base_params["base_shape_pitch_types"] = ["Fastball", "Sinker"]
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT
+                      {split_rollup_col} AS split_value,
+                      pitch_type,
+                      SUM(pitches)::int AS pitches,
+                      SUM(velo_sum)::double precision AS velo_sum,
+                      SUM(velo_n)::int AS velo_n,
+                      SUM(ivb_sum)::double precision AS ivb_sum,
+                      SUM(ivb_n)::int AS ivb_n,
+                      SUM(hb_sum)::double precision AS hb_sum,
+                      SUM(CASE WHEN pitcherthrows_norm = 'Left' THEN hb_sum ELSE -hb_sum END)::double precision AS hb_adj_sum,
+                      SUM(hb_n)::int AS hb_n,
+                      SUM(spin_sum)::double precision AS spin_sum,
+                      SUM(spin_n)::int AS spin_n,
+                      SUM(rel_height_sum)::double precision AS rel_height_sum,
+                      SUM(rel_height_n)::int AS rel_height_n,
+                      SUM(rel_side_sum)::double precision AS rel_side_sum,
+                      SUM(rel_side_n)::int AS rel_side_n,
+                      SUM(ext_sum)::double precision AS ext_sum,
+                      SUM(ext_n)::int AS ext_n,
+                      SUM(pitches) FILTER (WHERE pitcherthrows_norm = 'Left')::int AS left_n,
+                      SUM(pitches) FILTER (WHERE pitcherthrows_norm = 'Right')::int AS right_n
+                    FROM {rollup_source}
+                    WHERE {" AND ".join(base_where_parts)}
+                    GROUP BY {split_rollup_col}, pitch_type
+                    """,
+                    base_params,
+                )
+                base_shape_rows = [dict(r) for r in cur.fetchall()]
+        except Exception:
+            base_shape_rows = []
 
     if not grouped_rows:
         # Match PRO behavior: never block request path on synchronous rollup rebuild.
@@ -10892,65 +10775,32 @@ def _try_pitching_overview_daily_rollup(
     usage_count_lt2k_total = int(sum(_nint(r.get("count_lt2k_n")) for r in grouped_rows))
     usage_count_2k_total = int(sum(_nint(r.get("count_2k_n")) for r in grouped_rows))
 
-    stuff_level_clean = (stuff_level or "College").strip() or "College"
-    if stuff_level_clean not in {"Pro", "College", "High School"}:
-        stuff_level_clean = "College"
-    stuff_base_clean = "Sinker" if (stuff_base or "").strip().lower() == "sinker" else "Fastball"
-    stuff_global_by_type: Dict[str, float] = {}
-    try:
-        global_pitch_acc: Dict[str, Dict[str, float]] = {}
-        for row in grouped_rows:
-            pt = str(row.get("pitch_type") or "")
-            if not pt or pt == "Undefined":
-                continue
-            acc = global_pitch_acc.setdefault(
-                pt,
-                {
-                    "velo_sum": 0.0,
-                    "velo_n": 0.0,
-                    "ivb_sum": 0.0,
-                    "ivb_n": 0.0,
-                    "hb_sum": 0.0,
-                    "hb_adj_sum": 0.0,
-                    "hb_n": 0.0,
-                    "rh_sum": 0.0,
-                    "rh_n": 0.0,
-                    "ext_sum": 0.0,
-                    "ext_n": 0.0,
-                },
-            )
-            acc["velo_sum"] += float(row.get("velo_sum") or 0.0)
-            acc["velo_n"] += float(int(row.get("velo_n") or 0))
-            acc["ivb_sum"] += float(row.get("ivb_sum") or 0.0)
-            acc["ivb_n"] += float(int(row.get("ivb_n") or 0))
-            acc["hb_sum"] += float(row.get("hb_sum") or 0.0)
-            acc["hb_adj_sum"] += float(row.get("hb_adj_sum") or 0.0)
-            acc["hb_n"] += float(int(row.get("hb_n") or 0))
-            acc["rh_sum"] += float(row.get("rel_height_sum") or 0.0)
-            acc["rh_n"] += float(int(row.get("rel_height_n") or 0))
-            acc["ext_sum"] += float(row.get("ext_sum") or 0.0)
-            acc["ext_n"] += float(int(row.get("ext_n") or 0))
-        synth_rows: List[Dict[str, object]] = []
-        for pt, acc in global_pitch_acc.items():
-            synth_rows.append(
-                {
-                    "pitch_type": pt,
-                    "rel_speed": (acc["velo_sum"] / acc["velo_n"]) if acc["velo_n"] > 0 else None,
-                    "ivb": (acc["ivb_sum"] / acc["ivb_n"]) if acc["ivb_n"] > 0 else None,
-                    "hb_adj": (acc["hb_adj_sum"] / acc["hb_n"]) if acc["hb_n"] > 0 else None,
-                    "rel_height": (acc["rh_sum"] / acc["rh_n"]) if acc["rh_n"] > 0 else None,
-                    "ext_value": (acc["ext_sum"] / acc["ext_n"]) if acc["ext_n"] > 0 else None,
-                    "is_lefty": False,
-                }
-            )
-        base_for_calc = stuff_base_clean
-        if not any(str(r.get("pitch_type") or "") == base_for_calc for r in synth_rows):
-            alt = "Sinker" if base_for_calc == "Fastball" else "Fastball"
-            if any(str(r.get("pitch_type") or "") == alt for r in synth_rows):
-                base_for_calc = alt
-        _, stuff_global_by_type = _compute_stuff_by_pitch_type(synth_rows, base_type=base_for_calc, level=stuff_level_clean) if synth_rows else (None, {})
-    except Exception:
-        stuff_global_by_type = {}
+    # Stuff+: for the "Pitch Types" split, computed ONCE globally across
+    # all rows in this request -- each split group there is a single pitch
+    # type and needs the full arsenal to find its own fastball/sinker base.
+    # For per-pitcher splits ("Pitcher"/"Pitcher Team"), pooling globally
+    # here would blend one pitcher's usage weights against a stuff2 value
+    # averaged across every OTHER pitcher in the result set too -- instead,
+    # each pitcher's own map is computed just-in-time inside
+    # _build_common_row from that pitcher's own rows_for_split.
+    if stuff2_level in stuff2.LEVELS:
+        stuff2_level_clean = stuff2_level
+    else:
+        stuff2_level_clean = _college_level_norm(college_level_filter)
+        if stuff2_level_clean == "All":
+            stuff2_level_clean = "D1"
+    stuff2_split_is_per_pitcher = split_clean in {"Pitcher", "Pitcher Team"}
+    stuff2_global_by_type = (
+        {} if stuff2_split_is_per_pitcher
+        else _stuff2_by_type_from_rollup_rows([*grouped_rows, *base_shape_rows], stuff2_level_clean)
+    )
+
+    # Per-pitcher base_shape_rows, keyed by split_value, merged into each
+    # pitcher's own rows_for_split below so their Fastball/Sinker base is
+    # available even when pitch_types filters both out of grouped_rows.
+    base_shape_rows_by_split: Dict[str, List[Dict[str, Any]]] = {}
+    for row in base_shape_rows:
+        base_shape_rows_by_split.setdefault(str(row.get("split_value") or ""), []).append(row)
 
     split_items = list(grouped_by_split.items())
     if split_clean == "Pitch Types":
@@ -11020,11 +10870,10 @@ def _try_pitching_overview_daily_rollup(
         # Rollup path does not persist per-pitch QP seed weights; use conservative scaling.
         qp_plus_num = (qp_pct_num * 1.35) if _is_num(qp_pct_num) else None
         ctrl_plus_num = (
-            ((0.6 * float(in_zone_pct_num)) + (0.4 * float(strike_pct_num))) * 1.35
-            if (_is_num(in_zone_pct_num) and _is_num(strike_pct_num))
+            ((0.6 * float(in_zone_pct_num)) + (0.4 * float(comp_pct_num))) * _ctrl_multiplier_for_rows(rows_for_split)
+            if (_is_num(in_zone_pct_num) and _is_num(comp_pct_num))
             else None
         )
-        pitching_plus_num = qp_plus_num
         fps_fb_num = sum(
             _fps_swing_count_from_rollup_row(r)
             for r in rows_for_split
@@ -11154,22 +11003,35 @@ def _try_pitching_overview_daily_rollup(
         avg_val = (hits_n / ab_n) if ab_n > 0 else None
         slg_val = (tb_n / ab_n) if ab_n > 0 else None
         obp_val = ((hits_n + bb_n + hbp_n) / bf_n) if bf_n > 0 else None
-        stuff_avg_local: Optional[float] = None
-        if split_clean == "Pitch Types":
-            stuff_avg_local = stuff_global_by_type.get(str(split_value), None)
+        # Stuff+: for the "Pitch Types" split, looked up from the
+        # global, request-wide map computed once above (stuff2_global_by_type).
+        # For per-pitcher splits ("Pitcher"/"Pitcher Team"), stuff2_global_by_type
+        # is empty (see above) -- instead compute a map scoped to just THIS
+        # pitcher's own rows_for_split, so a pitcher's Stuff+ 2.0 reflects
+        # only their own arsenal, not a value pooled across every pitcher
+        # in the leaderboard.
+        stuff2_avg_local: Optional[float] = None
+        if split_clean == "Pitch Types" and str(label) != "All":
+            stuff2_avg_local = stuff2_global_by_type.get(str(label), None)
         else:
-            stuff_num = 0.0
-            stuff_den = 0
+            stuff2_lookup = (
+                _stuff2_by_type_from_rollup_rows(
+                    [*rows_for_split, *base_shape_rows_by_split.get(str(label), [])], stuff2_level_clean
+                )
+                if stuff2_split_is_per_pitcher
+                else stuff2_global_by_type
+            )
+            stuff2_num = 0.0
+            stuff2_den = 0
             for r in rows_for_split:
                 pt = str(r.get("pitch_type") or "")
-                pt_stuff = stuff_global_by_type.get(pt)
+                pt_stuff2 = stuff2_lookup.get(pt)
                 pt_pitches = int(r.get("pitches") or 0)
-                if _is_num(pt_stuff) and pt_pitches > 0:
-                    stuff_num += float(pt_stuff) * pt_pitches
-                    stuff_den += pt_pitches
-            stuff_avg_local = (stuff_num / stuff_den) if stuff_den > 0 else None
-        if _is_num(stuff_avg_local) and _is_num(qp_plus_num):
-            pitching_plus_num = (float(stuff_avg_local) + float(qp_plus_num)) / 2.0
+                if _is_num(pt_stuff2) and pt_pitches > 0:
+                    stuff2_num += float(pt_stuff2) * pt_pitches
+                    stuff2_den += pt_pitches
+            stuff2_avg_local = (stuff2_num / stuff2_den) if stuff2_den > 0 else None
+
         return {
             split_col_name: label,
             "#": pitches,
@@ -11206,7 +11068,7 @@ def _try_pitching_overview_daily_rollup(
             "VAA": round(avg_vaa_local, 4) if _is_num(avg_vaa_local) else None,
             "nVAA": round(avg_nvaa_local, 4) if _is_num(avg_nvaa_local) else None,
             "HAA": round(avg_haa_local, 4) if _is_num(avg_haa_local) else None,
-            "Stuff+": round(float(stuff_avg_local), 1) if _is_num(stuff_avg_local) else None,
+            "Stuff+": round(float(stuff2_avg_local), 1) if _is_num(stuff2_avg_local) else None,
             "FPS%": _safe_pct(sum(int(r.get("fps_num") or 0) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
             "FPS(FB)%": _safe_pct(fps_fb_num, fps_fb_den),
             "FPS(OS)%": _safe_pct(fps_os_num, fps_os_den),
@@ -11253,7 +11115,6 @@ def _try_pitching_overview_daily_rollup(
             "QP%": (f"{round(qp_pct_num, 1)}%" if _is_num(qp_pct_num) else None),
             "Ctrl+": round(ctrl_plus_num, 1) if _is_num(ctrl_plus_num) else None,
             "QP+": round(qp_plus_num, 1) if _is_num(qp_plus_num) else None,
-            "Pitching+": round(pitching_plus_num, 1) if _is_num(pitching_plus_num) else None,
             "RV/100": round(rv100, 1) if _is_num(rv100) else None,
             "PV/100": round(pv100, 1) if _is_num(pv100) else None,
             "P": pitches,
@@ -12952,7 +12813,6 @@ def _try_pro_pitching_overview_rollup(
         "Stuff+",
         "Ctrl+",
         "QP+",
-        "Pitching+",
         "RV/100",
         "PV/100",
         "IP",
@@ -13277,6 +13137,7 @@ def _try_pro_pitching_overview_rollup(
                 SELECT
                   {split_expr} AS split_value,
                   pitch_type,
+                  MIN(level_bucket)::text AS level_bucket,
                   SUM(pitches)::int AS pitches,
                   SUM(velo_sum)::double precision AS velo_sum,
                   SUM(velo_n)::int AS velo_n,
@@ -13400,6 +13261,59 @@ def _try_pro_pitching_overview_rollup(
             source=rollup_source,
         )
         return None
+
+    # Stuff+/Stuff+ 2.0 both need each pitcher's own Fastball/Sinker shape
+    # to grade off-speed pitches (Stuff+ 2.0 needs it for its fastball/
+    # sinker-relative separation features; the old Stuff+ needs base_vel).
+    # A pitch_types filter that excludes both Fastball and Sinker (e.g.
+    # "Slider" only) means grouped_rows above -- already filtered in SQL --
+    # contains no Fastball/Sinker rows anywhere, so neither metric can find
+    # a base and every pitcher's grade comes back blank. Fetch an
+    # UNFILTERED-by-pitch-type companion query (same scope otherwise) just
+    # for Fastball/Sinker base shapes when this situation applies; the main
+    # `grouped_rows` above stays pitch_types-filtered for everything else
+    # displayed in the table.
+    base_shape_rows: List[Dict[str, Any]] = []
+    if selected_pitch_types and not (set(selected_pitch_types) & {"Fastball", "Sinker"}):
+        try:
+            base_where = [clause for clause in where if not clause.startswith("pitch_type = ANY")]
+            base_where.append("pitch_type = ANY(%(base_shape_pitch_types)s::text[])")
+            base_params = dict(params)
+            base_params["base_shape_pitch_types"] = ["Fastball", "Sinker"]
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT
+                      {split_expr} AS split_value,
+                      pitch_type,
+                      SUM(pitches)::int AS pitches,
+                      SUM(velo_sum)::double precision AS velo_sum,
+                      SUM(velo_n)::int AS velo_n,
+                      SUM(ivb_sum)::double precision AS ivb_sum,
+                      SUM(ivb_n)::int AS ivb_n,
+                      SUM(hb_sum)::double precision AS hb_sum,
+                      SUM(CASE WHEN pitcherthrows_norm = 'Left' THEN hb_sum ELSE -hb_sum END)::double precision AS hb_adj_sum,
+                      SUM(hb_n)::int AS hb_n,
+                      SUM(spin_sum)::double precision AS spin_sum,
+                      SUM(spin_n)::int AS spin_n,
+                      SUM(rel_height_sum)::double precision AS rel_height_sum,
+                      SUM(rel_height_n)::int AS rel_height_n,
+                      SUM(rel_side_sum)::double precision AS rel_side_sum,
+                      SUM(rel_side_n)::int AS rel_side_n,
+                      SUM(ext_sum)::double precision AS ext_sum,
+                      SUM(ext_n)::int AS ext_n,
+                      SUM(pitches) FILTER (WHERE pitcherthrows_norm = 'Left')::int AS left_n,
+                      SUM(pitches) FILTER (WHERE pitcherthrows_norm = 'Right')::int AS right_n
+                    FROM {rollup_source}
+                    WHERE {" AND ".join(base_where)}
+                    GROUP BY {split_expr}, pitch_type
+                    """,
+                    base_params,
+                )
+                base_shape_rows = [dict(r) for r in cur.fetchall()]
+        except Exception:
+            base_shape_rows = []
+
     mode_columns_map: Dict[str, List[str]] = {
         "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA", "Stuff+"],
         "Expected Movement": [split_col_name, "P", "Velo", "Max", "IVB", "xIVB", "dIVB", "HB", "xHB", "dHB", "MagAngle", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA"],
@@ -13525,49 +13439,38 @@ def _try_pro_pitching_overview_rollup(
     strike_pct = ((100.0 * sum(int(r.get("strike_n") or 0) for r in grouped_rows)) / total_pitches) if total_pitches else None
     whiff_pct = ((100.0 * sum(int(r.get("whiff_n") or 0) for r in grouped_rows)) / total_swing_n) if total_swing_n else None
 
-    stuff_base_clean = "Sinker" if str(stuff_base or "").strip() == "Sinker" else "Fastball"
-    stuff_level_clean = str(stuff_level or "Pro").strip() or "Pro"
-    needs_stuff_rollup = mode_clean in {"Stuff", "Bullpen"} or (
-        mode_clean == "Custom"
-        and any(col in {"Stuff+", "Ctrl+", "QP+", "Pitching+"} for col in normalized_custom_columns)
+    # Stuff+: for the "Pitch Types" split, computed ONCE globally across
+    # all rows in this request -- each split group there is a single pitch
+    # type and needs the full arsenal to find its own fastball/sinker base.
+    # For per-pitcher splits ("Pitcher"/"Pitcher Team"), pooling globally
+    # here would blend one pitcher's usage weights against a stuff2 value
+    # averaged across every OTHER pitcher in the result set too -- instead,
+    # each pitcher's own map is computed just-in-time inside
+    # _build_common_row from that pitcher's own rows_for_split.
+    stuff2_level_clean = _pro_level_norm(level_filter)
+    if stuff2_level_clean == "All":
+        stuff2_level_clean = "MLB"
+    stuff2_split_is_per_pitcher = split_clean in {"Pitcher", "Pitcher Team"}
+    stuff2_global_by_type = (
+        {} if stuff2_split_is_per_pitcher
+        else _stuff2_by_type_from_rollup_rows([*grouped_rows, *base_shape_rows], stuff2_level_clean)
     )
-    synthetic_stuff_rows: List[Dict[str, Any]] = []
-    if needs_stuff_rollup:
-        for row in grouped_rows:
-            pt = str(row.get("pitch_type") or "")
-            pitches = int(row.get("pitches") or 0)
-            if not pt or pt == "Undefined" or pitches <= 0:
-                continue
-            velo_n = int(row.get("velo_n") or 0)
-            ivb_n = int(row.get("ivb_n") or 0)
-            hb_n = int(row.get("hb_n") or 0)
-            rh_n = int(row.get("rel_height_n") or 0)
-            ext_n = int(row.get("ext_n") or 0)
-            rel_speed = (float(row.get("velo_sum") or 0.0) / velo_n) if velo_n > 0 else None
-            ivb_v = (float(row.get("ivb_sum") or 0.0) / ivb_n) if ivb_n > 0 else None
-            hb_v = (float(row.get("hb_sum") or 0.0) / hb_n) if hb_n > 0 else None
-            rel_height_v = (float(row.get("rel_height_sum") or 0.0) / rh_n) if rh_n > 0 else None
-            ext_v = (float(row.get("ext_sum") or 0.0) / ext_n) if ext_n > 0 else None
-            if not (_is_num(rel_speed) and _is_num(ivb_v) and _is_num(hb_v)):
-                continue
-            sample_count = max(1, min(25, pitches // 4))
-            for _ in range(sample_count):
-                synthetic_stuff_rows.append(
-                    {
-                        "pitch_type": pt,
-                        "rel_speed": rel_speed,
-                        "ivb": ivb_v,
-                        "hb_adj": hb_v,
-                        "rel_height": rel_height_v,
-                        "ext_value": ext_v,
-                        "is_lefty": (str(hand or "").strip() == "Left"),
-                    }
-                )
-    _, stuff_global_by_type = (
-        _compute_stuff_by_pitch_type(synthetic_stuff_rows, stuff_base_clean, stuff_level_clean)
-        if synthetic_stuff_rows
-        else (None, {})
+    # Request-wide Stuff+ map used only for the pitch-type summary rows and
+    # the headline avg_stuff below -- always computed across the whole
+    # request (unlike stuff2_global_by_type, which is deliberately empty on
+    # per-pitcher splits so each pitcher gets their own just-in-time map).
+    stuff2_summary_by_type = (
+        stuff2_global_by_type
+        if stuff2_global_by_type
+        else _stuff2_by_type_from_rollup_rows([*grouped_rows, *base_shape_rows], stuff2_level_clean)
     )
+
+    # Per-pitcher base_shape_rows, keyed by split_value, merged into each
+    # pitcher's own rows_for_split below so their Fastball/Sinker base is
+    # available even when pitch_types filters both out of grouped_rows.
+    base_shape_rows_by_split: Dict[str, List[Dict[str, Any]]] = {}
+    for row in base_shape_rows:
+        base_shape_rows_by_split.setdefault(str(row.get("split_value") or ""), []).append(row)
 
     table_rows: List[Dict[str, Any]] = []
     def _nint(v: Any) -> int:
@@ -13786,30 +13689,43 @@ def _try_pro_pitching_overview_rollup(
         avg_tilt_dev_local = _tilt_deviation_from_averages(r_tilt_clock, b_tilt)
         in_zone_pct_num = (100.0 * sum(int(r.get("in_zone_n") or 0) for r in rows_for_split) / loc_n) if loc_n > 0 else None
         strike_pct_num = (100.0 * sum(int(r.get("strike_n") or 0) for r in rows_for_split) / pitches) if pitches > 0 else None
+        comp_pct_num = (100.0 * sum(int(r.get("comp_n") or 0) for r in rows_for_split) / loc_n) if loc_n > 0 else None
         qp_pct_num = (100.0 * sum(int(r.get("comp_n") or 0) for r in rows_for_split) / pitches) if pitches > 0 else None
         qp_plus_num = (qp_pct_num * 1.35) if _is_num(qp_pct_num) else None
         ctrl_plus_num = (
-            ((0.6 * float(in_zone_pct_num)) + (0.4 * float(strike_pct_num))) * 1.35
-            if (_is_num(in_zone_pct_num) and _is_num(strike_pct_num))
+            ((0.6 * float(in_zone_pct_num)) + (0.4 * float(comp_pct_num))) * _ctrl_multiplier_for_rows(rows_for_split)
+            if (_is_num(in_zone_pct_num) and _is_num(comp_pct_num))
             else None
         )
-        pitching_plus_num = qp_plus_num
-        stuff_avg_local: Optional[float] = None
-        if split_clean == "Pitch Types":
-            stuff_avg_local = stuff_global_by_type.get(str(label), None)
+        # Stuff+: for the "Pitch Types" split, looked up from the
+        # global, request-wide map computed once above (stuff2_global_by_type).
+        # For per-pitcher splits ("Pitcher"/"Pitcher Team"), stuff2_global_by_type
+        # is empty (see above) -- instead compute a map scoped to just THIS
+        # pitcher's own rows_for_split, so a pitcher's Stuff+ 2.0 reflects
+        # only their own arsenal, not a value pooled across every pitcher
+        # in the leaderboard.
+        stuff2_avg_local: Optional[float] = None
+        if split_clean == "Pitch Types" and str(label) != "All":
+            stuff2_avg_local = stuff2_global_by_type.get(str(label), None)
         else:
-            stuff_num = 0.0
-            stuff_den = 0
+            stuff2_lookup = (
+                _stuff2_by_type_from_rollup_rows(
+                    [*rows_for_split, *base_shape_rows_by_split.get(str(label), [])], stuff2_level_clean
+                )
+                if stuff2_split_is_per_pitcher
+                else stuff2_global_by_type
+            )
+            stuff2_num = 0.0
+            stuff2_den = 0
             for r in rows_for_split:
                 pt = str(r.get("pitch_type") or "")
-                pt_stuff = stuff_global_by_type.get(pt)
+                pt_stuff2 = stuff2_lookup.get(pt)
                 pt_pitches = int(r.get("pitches") or 0)
-                if _is_num(pt_stuff) and pt_pitches > 0:
-                    stuff_num += float(pt_stuff) * pt_pitches
-                    stuff_den += pt_pitches
-            stuff_avg_local = (stuff_num / stuff_den) if stuff_den > 0 else None
-        if _is_num(stuff_avg_local) and _is_num(qp_plus_num):
-            pitching_plus_num = (float(stuff_avg_local) + float(qp_plus_num)) / 2.0
+                if _is_num(pt_stuff2) and pt_pitches > 0:
+                    stuff2_num += float(pt_stuff2) * pt_pitches
+                    stuff2_den += pt_pitches
+            stuff2_avg_local = (stuff2_num / stuff2_den) if stuff2_den > 0 else None
+
         fps_fb_num = sum(_fps_swing_count_from_rollup_row(r) for r in rows_for_split if _is_fastball_or_sinker_pitch_type(r.get("pitch_type")))
         fps_fb_den = sum(int(r.get("fps_den") or 0) for r in rows_for_split if _is_fastball_or_sinker_pitch_type(r.get("pitch_type")))
         fps_os_num = sum(_fps_swing_count_from_rollup_row(r) for r in rows_for_split if not _is_fastball_or_sinker_pitch_type(r.get("pitch_type")))
@@ -13964,7 +13880,7 @@ def _try_pro_pitching_overview_rollup(
             "VAA": round(sum(float(r.get("vaa_sum") or 0.0) for r in rows_for_split) / vaa_n, 4) if vaa_n > 0 else None,
             "nVAA": round(sum(float(r.get("nvaa_sum") or 0.0) for r in rows_for_split) / nvaa_n, 4) if nvaa_n > 0 else None,
             "HAA": round(sum(float(r.get("haa_sum") or 0.0) for r in rows_for_split) / haa_n, 4) if haa_n > 0 else None,
-            "Stuff+": round(float(stuff_avg_local), 1) if _is_num(stuff_avg_local) else None,
+            "Stuff+": round(float(stuff2_avg_local), 1) if _is_num(stuff2_avg_local) else None,
             "FPS%": _safe_pct(sum(int(r.get("fps_num") or 0) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
             "FPS(FB)%": _safe_pct(fps_fb_num, fps_fb_den),
             "FPS(OS)%": _safe_pct(fps_os_num, fps_os_den),
@@ -14012,7 +13928,6 @@ def _try_pro_pitching_overview_rollup(
             "QP%": (f"{round(qp_pct_num, 1)}%" if _is_num(qp_pct_num) else None),
             "Ctrl+": round(ctrl_plus_num, 1) if _is_num(ctrl_plus_num) else None,
             "QP+": round(qp_plus_num, 1) if _is_num(qp_plus_num) else None,
-            "Pitching+": round(pitching_plus_num, 1) if _is_num(pitching_plus_num) else None,
             "RV/100": round(rv100, 1) if _is_num(rv100) else None,
             "PV/100": round(pv100, 1) if _is_num(pv100) else None,
             "P": pitches,
@@ -14184,7 +14099,7 @@ def _try_pro_pitching_overview_rollup(
             avg_spin=(float(v["spin_sum"]) / int(v["spin_n"])) if int(v["spin_n"]) else None,
             avg_ivb=(float(v["ivb_sum"]) / int(v["ivb_n"])) if int(v["ivb_n"]) else None,
             avg_hb=(float(v["hb_sum"]) / int(v["hb_n"])) if int(v["hb_n"]) else None,
-            avg_stuff=stuff_global_by_type.get(pt),
+            avg_stuff=stuff2_summary_by_type.get(pt),
         )
         for pt, v in sorted(pitch_summary.items(), key=lambda kv: (pitch_order.get(str(kv[0]), 99), str(kv[0])))
     ]
@@ -14217,7 +14132,7 @@ def _try_pro_pitching_overview_rollup(
         avg_spin=avg_spin,
         avg_ivb=avg_ivb,
         avg_hb=avg_hb,
-        avg_stuff=(sum(float(v) for v in stuff_global_by_type.values()) / len(stuff_global_by_type)) if stuff_global_by_type else None,
+        avg_stuff=(sum(float(v) for v in stuff2_summary_by_type.values()) / len(stuff2_summary_by_type)) if stuff2_summary_by_type else None,
         zone_pct=zone_pct,
         strike_pct=strike_pct,
         whiff_pct=whiff_pct,
@@ -17131,8 +17046,6 @@ def _pro_rollup_filters_pitching(level_norm: str) -> Optional[PitchingFiltersRes
         opp_hitters=opp_hitters,
         with_video_options=["All", "Yes", "No"],
         break_lines_options=["None", "Fastball", "Sinker"],
-        stuff_level_options=["Pro", "College", "High School"],
-        stuff_base_options=["Fastball", "Sinker"],
         hands=["All", "Left", "Right"],
         batter_sides=["All", "Left", "Right"],
         session_types=["All"],
@@ -17399,8 +17312,6 @@ def _pro_pitching_filters(school_code: str, level: Optional[str] = None) -> Pitc
             opp_hitters=[],
             with_video_options=["All", "Yes", "No"],
             break_lines_options=["None", "Fastball", "Sinker"],
-            stuff_level_options=["Pro", "College", "High School"],
-            stuff_base_options=["Fastball", "Sinker"],
             hands=["All", "Left", "Right"],
             batter_sides=["All", "Left", "Right"],
             session_types=["All"],
@@ -17700,8 +17611,6 @@ def _pro_pitching_filters(school_code: str, level: Optional[str] = None) -> Pitc
         opp_hitters=opp_hitters,
         with_video_options=["All", "Yes", "No"],
         break_lines_options=["None", "Fastball", "Sinker"],
-        stuff_level_options=["Pro", "College", "High School"],
-        stuff_base_options=["Fastball", "Sinker"],
         hands=["All", "Left", "Right"],
         batter_sides=["All", "Left", "Right"],
         session_types=["All"],
@@ -18839,67 +18748,29 @@ def _pro_pitching_overview(
         }
         for r in stuff_source_rows
     ]
-    avg_stuff, avg_stuff_by_pitch_type = _compute_stuff_by_pitch_type(stuff_rows, stuff_base or "Fastball", stuff_level or "Pro")
+    # Headline avg_stuff now comes from the Stuff+ XGBoost model (stuff2),
+    # collapsed from its per-pitch-type map the same way the OLD formula's
+    # first return value was (mean across pitch types, rounded to 0.1).
+    try:
+        _avg_stuff2_by_type = stuff2.compute_stuff2_by_pitch_type(
+            stuff_rows,
+            (_pro_level_norm(level_filter) if _pro_level_norm(level_filter) != "All" else "MLB"),
+        )
+    except Exception:
+        _avg_stuff2_by_type = {}
+    avg_stuff = (
+        round(sum(float(v) for v in _avg_stuff2_by_type.values()) / len(_avg_stuff2_by_type), 1)
+        if _avg_stuff2_by_type
+        else None
+    )
     # Also compute row-level Stuff+ on the actively filtered rows so split-by
     # groups (e.g. Pitcher) do not collapse to one global pitch-type value.
-    live_stuff_rows = [
-        {
-            "id": r.get("id"),
-            "session_date": r.get("session_date"),
-            "game_pk": r.get("game_pk"),
-            "at_bat_index": r.get("at_bat_index"),
-            "event_index": r.get("event_index"),
-            "pitch_no": r.get("pitch_no"),
-            "pitch_uid": r.get("pitch_uid"),
-            "play_id": r.get("play_id"),
-            "pitch_number": r.get("pitch_number"),
-            "pitcher": r.get("pitcher"),
-            "batter": r.get("batter"),
-            "pitch_type": r.get("pitch_type"),
-            "rel_speed": r.get("rel_speed"),
-            "ivb": r.get("ivb"),
-            "hb": r.get("hb"),
-            "rel_height": r.get("rel_height"),
-            "ext_value": r.get("ext_value"),
-            "is_lefty": r.get("is_lefty"),
-            "hb_adj": r.get("hb") if bool(r.get("is_lefty")) else (-float(r["hb"]) if _is_num(r.get("hb")) else None),
-        }
-        for r in rows
-    ]
-    _compute_stuff_by_pitch_type(
-        live_stuff_rows,
-        stuff_base or "Fastball",
-        stuff_level or "Pro",
-        annotate_key="_stuff_plus_calc",
-    )
-    # Keep Stuff+ attached to the active filtered rows directly by index so
-    # split/group tables use row-level Stuff+ instead of global pitch-type
-    # fallbacks when identity keys are sparse or partially missing.
-    for idx, r in enumerate(rows):
-        if idx >= len(live_stuff_rows):
-            break
-        direct = live_stuff_rows[idx].get("_stuff_plus_calc")
-        if _is_num(direct):
-            r["stuff_plus"] = round(float(direct), 1)
-    # Identity-key fallback for any rows not updated above.
-    live_stuff_by_key: Dict[tuple[Any, ...], float] = {}
-    for rr in live_stuff_rows:
-        val = rr.get("_stuff_plus_calc")
-        if not _is_num(val):
-            continue
-        live_stuff_by_key[_pro_pitch_event_identity_key(rr)] = float(val)
-    for r in rows:
-        if _is_num(r.get("stuff_plus")):
-            continue
-        mapped = live_stuff_by_key.get(_pro_pitch_event_identity_key(r))
-        if _is_num(mapped):
-            r["stuff_plus"] = round(float(mapped), 1)
     chart_points_limit = max(100, min(int(parsed_chart_points_limit or 350), 6000))
     if chart_only:
         pitch_type_rows = [
             PitchTypeSummaryRow(
                 **row,
-                avg_stuff=avg_stuff_by_pitch_type.get(str(row.get("pitch_type") or "")),
+                avg_stuff=_avg_stuff2_by_type.get(str(row.get("pitch_type") or "")),
             )
             for row in raw_pitch_type_rows
         ]
@@ -18908,7 +18779,7 @@ def _pro_pitching_overview(
         chart_points = (
             _build_chart_points(
                 chart_source_rows,
-                avg_stuff_by_pitch_type,
+                _avg_stuff2_by_type,
                 max_points=chart_points_limit,
             )
             if include_chart_points
@@ -18917,7 +18788,7 @@ def _pro_pitching_overview(
         heatmap_points = (
             _build_chart_points(
                 heatmap_source_rows,
-                avg_stuff_by_pitch_type,
+                _avg_stuff2_by_type,
                 max_points=max(chart_points_limit * 3, chart_points_limit),
             )
             if include_chart_points
@@ -18965,12 +18836,14 @@ def _pro_pitching_overview(
             heatmap_points=heatmap_points,
             trend_rows=[],
         )
+    resolved_pro_level_for_plus_stats = _pro_level_norm(level_filter) if _pro_level_norm(level_filter) != "All" else "MLB"
     table_columns, table_rows, available_table_columns = _build_dynamic_table(
         rows,
         table_mode,
         split_by,
-        avg_stuff_by_pitch_type,
         selected_custom_columns,
+        stuff2_level=resolved_pro_level_for_plus_stats,
+        ctrl_level=resolved_pro_level_for_plus_stats,
     )
 
     # SEP stats (fbCHivbSEP etc.) computed from `rows` above are wrong when
@@ -19369,6 +19242,32 @@ def _pro_pitching_overview(
         row_obj["Strike%"] = f"{round((100.0 * strike_num) / total_pitches_val, 1)}%" if total_pitches_val > 0 else None
         in_zone_count = sum(1 for r in group_rows if _pro_in_zone_yes(r))
         row_obj["InZone%"] = f"{round((100.0 * in_zone_count) / total_pitches_val, 1)}%" if total_pitches_val > 0 else None
+        # Ctrl+ recomputed here (not left as _build_dynamic_table's own
+        # value) because InZone% above uses PRO's more accurate Statcast
+        # zone_num flag (_pro_in_zone_yes) when available, which differs
+        # from the generic plate_side/plate_height geometry
+        # _build_dynamic_table used internally -- using the stale internal
+        # in_zone_n there would make Ctrl+ inconsistent with the InZone%
+        # actually shown in this same row. Comp% has no PRO-specific
+        # zone_num equivalent (Statcast's zone_num is binary in/out, no
+        # "competitive" bucket), so its geometric definition matches what
+        # _build_dynamic_table already used -- only the comp_n count needs
+        # recomputing here since it isn't otherwise available in this scope.
+        comp_count = sum(
+            1
+            for r in group_rows
+            if _is_num(r.get("plate_side"))
+            and _is_num(r.get("plate_height"))
+            and (-1.5 <= float(r["plate_side"]) <= 1.5)
+            and (COMP_PCT_BOTTOM <= float(r["plate_height"]) <= COMP_PCT_TOP)
+        )
+        if total_pitches_val > 0:
+            in_zone_pct_for_ctrl = 100.0 * in_zone_count / total_pitches_val
+            comp_pct_for_ctrl = 100.0 * comp_count / total_pitches_val
+            ctrl_mult = CTRL_MULTIPLIER_BY_LEVEL.get(resolved_pro_level_for_plus_stats, _CTRL_MULTIPLIER_DEFAULT)
+            row_obj["Ctrl+"] = round(((0.6 * in_zone_pct_for_ctrl) + (0.4 * comp_pct_for_ctrl)) * ctrl_mult, 1)
+        else:
+            row_obj["Ctrl+"] = None
         row_obj["Swing%"] = f"{round((100.0 * swing_num) / total_pitches_val, 1)}%" if total_pitches_val > 0 else None
         row_obj["Whiff%"] = f"{round((100.0 * whiff_num) / swing_num, 1)}%" if swing_num > 0 else None
         row_obj["SwStrk%"] = f"{round((100.0 * whiff_num) / total_pitches_val, 1)}%" if total_pitches_val > 0 else None
@@ -19700,14 +19599,14 @@ def _pro_pitching_overview(
     pitch_type_rows = [
         PitchTypeSummaryRow(
             **row,
-            avg_stuff=avg_stuff_by_pitch_type.get(str(row.get("pitch_type") or "")),
+            avg_stuff=_avg_stuff2_by_type.get(str(row.get("pitch_type") or "")),
         )
         for row in raw_pitch_type_rows
     ]
     chart_points = (
         _build_chart_points(
             _downsample_rows_for_chart_points(rows),
-            avg_stuff_by_pitch_type,
+            _avg_stuff2_by_type,
         )
         if include_chart_points
         else []
@@ -19715,14 +19614,14 @@ def _pro_pitching_overview(
     heatmap_points = (
         _build_chart_points(
             rows,
-            avg_stuff_by_pitch_type,
+            _avg_stuff2_by_type,
             max_points=max(1, len(rows)),
         )
         if include_chart_points
         else []
     )
-    row_pitches_by_key = _build_row_pitch_map(rows, split_by, avg_stuff_by_pitch_type) if include_row_pitches else {}
-    trend_rows = _build_trend_rows(rows, avg_stuff_by_pitch_type, use_osu_date_session_rules=False) if include_trend_rows else []
+    row_pitches_by_key = _build_row_pitch_map(rows, split_by, _avg_stuff2_by_type) if include_row_pitches else {}
+    trend_rows = _build_trend_rows(rows, _avg_stuff2_by_type, use_osu_date_session_rules=False) if include_trend_rows else []
 
     return PitchingOverviewResponse(
         school_code=school_code,
@@ -20644,7 +20543,6 @@ def _pro_hitting_overview(
         ),
     )
     _annotate_times_through_order(out_rows)
-    _, avg_stuff_by_type = _compute_stuff_by_pitch_type(out_rows, "Fastball", "Pro")
     if chart_only:
         pitch_type_legend = sorted(
             {str(row.get("pitch_type") or "Undefined") for row in out_rows},
@@ -20832,8 +20730,9 @@ def _pro_hitting_overview(
         out_rows,
         table_mode_mapped,
         split_by,
-        avg_stuff_by_type,
         selected_custom_columns,
+        stuff2_level=(_pro_level_norm(level_filter) if _pro_level_norm(level_filter) != "All" else "MLB"),
+        ctrl_level=(_pro_level_norm(level_filter) if _pro_level_norm(level_filter) != "All" else "MLB"),
     )
     split_col_name = table_columns[0] if table_columns else "Pitch"
     grouped_rows: Dict[str, List[Dict[str, Any]]] = {}
@@ -21595,8 +21494,7 @@ def pitching_filters(
             "opp_hitters": opp_hitters,
             "with_video_options": ["All", "Yes", "No"],
             "break_lines_options": ["None", "Fastball", "Sinker"],
-            "stuff_level_options": ["Pro", "College", "High School"],
-            "stuff_base_options": ["Fastball", "Sinker"],
+            "stuff2_level_options": list(stuff2.LEVELS),
             "hands": ["All", "Left", "Right"],
             "batter_sides": ["All", "Left", "Right"],
             "session_types": session_types,
@@ -21709,6 +21607,7 @@ def pitching_overview(
     with_video: Optional[str] = Query(default=None),
     break_lines: Optional[str] = Query(default=None),
     stuff_level: Optional[str] = Query(default=None),
+    stuff2_level: Optional[str] = Query(default=None),
     stuff_base: Optional[str] = Query(default=None),
     hand: Optional[str] = Query(default=None),
     batter_side: Optional[str] = Query(default=None),
@@ -22199,6 +22098,7 @@ def pitching_overview(
             "with_video": with_video,
             "break_lines": break_lines,
             "stuff_level": stuff_level,
+            "stuff2_level": stuff2_level,
             "stuff_base": stuff_base,
             "hand": hand,
             "batter_side": batter_side,
@@ -22505,6 +22405,7 @@ def pitching_overview(
             chart_points_limit=parsed_chart_points_limit,
             include_row_pitches=include_row_pitches,
             include_trend_rows=include_trend_rows,
+            stuff2_level=stuff2_level,
         )
     if rollup_fast_response is not None:
         _overview_cache_set(overview_cache_key, rollup_fast_response)
@@ -23340,15 +23241,34 @@ def pitching_overview(
                 }
                 for r in table_source_rows
             ]
-            avg_stuff, avg_stuff_by_pitch_type = _compute_stuff_by_pitch_type(
-                stuff_rows, stuff_base or "Fastball", stuff_level or "College"
+            # Headline avg_stuff now comes from the Stuff+ XGBoost model
+            # (stuff2), collapsed from its per-pitch-type map the same way
+            # the OLD formula's first return value was.
+            try:
+                _avg_stuff2_by_type = stuff2.compute_stuff2_by_pitch_type(
+                    stuff_rows,
+                    (
+                        stuff2_level if stuff2_level in stuff2.LEVELS
+                        else (_college_level_norm(college_level_filter) if _college_level_norm(college_level_filter) != "All" else "D1")
+                    ),
+                )
+            except Exception:
+                _avg_stuff2_by_type = {}
+            avg_stuff = (
+                round(sum(float(v) for v in _avg_stuff2_by_type.values()) / len(_avg_stuff2_by_type), 1)
+                if _avg_stuff2_by_type
+                else None
             )
             table_columns, table_rows, available_table_columns = _build_dynamic_table(
                 table_source_rows,
                 table_mode,
                 split_by,
-                avg_stuff_by_pitch_type,
                 selected_custom_columns,
+                stuff2_level=(
+                    stuff2_level if stuff2_level in stuff2.LEVELS
+                    else (_college_level_norm(college_level_filter) if _college_level_norm(college_level_filter) != "All" else "D1")
+                ),
+                ctrl_level=(_college_level_norm(college_level_filter) if _college_level_norm(college_level_filter) != "All" else "D1"),
             )
             table_rows = _apply_pitch_count_row_threshold(
                 table_rows,
@@ -23362,7 +23282,7 @@ def pitching_overview(
             pitch_type_rows = [
                 PitchTypeSummaryRow(
                     **row,
-                    avg_stuff=avg_stuff_by_pitch_type.get(str(row.get("pitch_type") or "")),
+                    avg_stuff=_avg_stuff2_by_type.get(str(row.get("pitch_type") or "")),
                 )
                 for row in raw_pitch_type_rows
             ]
@@ -23382,7 +23302,7 @@ def pitching_overview(
             chart_points = (
                 _build_chart_points(
                     chart_source_rows,
-                    avg_stuff_by_pitch_type,
+                    _avg_stuff2_by_type,
                 )
                 if include_chart_points
                 else []
@@ -23390,21 +23310,21 @@ def pitching_overview(
             heatmap_points = (
                 _build_chart_points(
                     heatmap_source_rows,
-                    avg_stuff_by_pitch_type,
+                    _avg_stuff2_by_type,
                     max_points=max(1, len(heatmap_source_rows)),
                 )
                 if include_chart_points
                 else []
             )
             row_pitches_by_key = (
-                _build_row_pitch_map(table_source_rows, split_by, avg_stuff_by_pitch_type)
+                _build_row_pitch_map(table_source_rows, split_by, _avg_stuff2_by_type)
                 if include_row_pitches
                 else {}
             )
             trend_rows = (
                 _build_trend_rows(
                     table_source_rows,
-                    avg_stuff_by_pitch_type,
+                    _avg_stuff2_by_type,
                     use_osu_date_session_rules=use_osu_date_session_rules,
                 )
                 if include_trend_rows
@@ -23886,7 +23806,15 @@ def pitching_ab_report(
         is_lefty = bool(r.get("is_lefty"))
         r["hb_adj"] = hb_value if is_lefty else (-hb_value if _is_num(hb_value) else None)
         stuff_rows.append(r)
-    _, avg_stuff_by_pitch_type = _compute_stuff_by_pitch_type(stuff_rows, "Fastball", "College")
+    # Stuff+: this modal has no fine-grained level filter in scope (a
+    # single-pitcher deep-dive, not level-scoped like the overview tables),
+    # so fall back on school_code.
+    try:
+        avg_stuff2_by_pitch_type = stuff2.compute_stuff2_by_pitch_type(
+            stuff_rows, "MLB" if school_code == "PRO" else "D1"
+        )
+    except Exception:
+        avg_stuff2_by_pitch_type = {}
 
     def _row_game_key(row: Dict[str, Any]) -> Optional[str]:
         for field in ("game_id", "game_uid", "game_foreign_id"):
@@ -23987,7 +23915,7 @@ def pitching_ab_report(
             "pa_index": pa_counter,
             "result_label": _ab_pa_result_label(last_row),
             "pitcher_label": str(last_row.get("pitcher") or ""),
-            "pitches": [_pitch_action_payload(row, avg_stuff_by_pitch_type) for row in pa_rows],
+            "pitches": [_pitch_action_payload(row, avg_stuff2_by_pitch_type) for row in pa_rows],
         }
         batter_sections.setdefault(batter_name, []).append(pa_payload)
         raw_batter_side = str(last_row.get("batterside") or "").strip().upper()
@@ -24362,7 +24290,13 @@ def hitting_ab_report(
         is_lefty = bool(r.get("is_lefty"))
         r["hb_adj"] = hb_value if is_lefty else (-hb_value if _is_num(hb_value) else None)
         stuff_rows.append(r)
-    _, avg_stuff_by_pitch_type = _compute_stuff_by_pitch_type(stuff_rows, "Fastball", "College")
+    # Stuff+: same no-level-filter fallback as pitching_ab_report.
+    try:
+        avg_stuff2_by_pitch_type = stuff2.compute_stuff2_by_pitch_type(
+            stuff_rows, "MLB" if school_code == "PRO" else "D1"
+        )
+    except Exception:
+        avg_stuff2_by_pitch_type = {}
 
     def _row_game_key(row: Dict[str, Any]) -> Optional[str]:
         for field in ("game_id", "game_uid", "game_foreign_id"):
@@ -24462,7 +24396,7 @@ def hitting_ab_report(
             "pa_index": pa_counter,
             "result_label": _ab_pa_result_label(last_row),
             "hitter_label": str(last_row.get("batter") or ""),
-            "pitches": [_pitch_action_payload(row, avg_stuff_by_pitch_type) for row in pa_rows],
+            "pitches": [_pitch_action_payload(row, avg_stuff2_by_pitch_type) for row in pa_rows],
         }
         pitcher_sections.setdefault(pitcher_name, []).append(pa_payload)
 
@@ -24615,6 +24549,54 @@ def pitching_manual_velocity_list(
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"manual velocity list failed: {exc}") from exc
+
+
+@app.post("/v1/stuff2/grid", response_model=Stuff2GridResponse)
+def stuff2_grid(payload: Stuff2GridRequest) -> Stuff2GridResponse:
+    """Batch-scores a honeycomb grid of hypothetical (ivb, hb) combinations
+    for ONE fixed pitch shape otherwise -- backs the Stuff+ suite's
+    honeycomb visualization. Pure model inference, no database query."""
+    pitch_type = str(payload.pitch_type or "").strip()
+    if pitch_type not in stuff2.PITCH_TYPES:
+        raise HTTPException(status_code=400, detail=f"Unknown pitch_type: {pitch_type!r}")
+    level = str(payload.level or "").strip()
+    if level not in stuff2.LEVELS:
+        raise HTTPException(status_code=400, detail=f"Unknown level: {level!r}")
+    if not _is_num(payload.rel_speed):
+        raise HTTPException(status_code=400, detail="rel_speed is required.")
+    if payload.pairs:
+        pairs = [(float(p[0]), float(p[1])) for p in payload.pairs if len(p) == 2 and _is_num(p[0]) and _is_num(p[1])]
+    else:
+        ivb_values = [float(v) for v in (payload.ivb_values or []) if _is_num(v)]
+        hb_values = [float(v) for v in (payload.hb_values or []) if _is_num(v)]
+        if not ivb_values or not hb_values:
+            raise HTTPException(status_code=400, detail="pairs, or both ivb_values and hb_values, are required.")
+        pairs = [(ivb, hb) for ivb in ivb_values for hb in hb_values]
+    if not pairs:
+        raise HTTPException(status_code=400, detail="No valid (ivb, hb) pairs provided.")
+    if len(pairs) > 12000:
+        raise HTTPException(status_code=400, detail="Grid too large (max 12000 cells).")
+    base_fastball = payload.base_fastball.model_dump() if payload.base_fastball else None
+    base_sinker = payload.base_sinker.model_dump() if payload.base_sinker else None
+    scores = stuff2.compute_stuff2_grid(
+        pitch_type=pitch_type,
+        level=level,
+        is_lefty=bool(payload.is_lefty),
+        batter_hand=payload.batter_hand,
+        rel_speed=float(payload.rel_speed),
+        spin_rate=payload.spin_rate,
+        ext_value=payload.ext_value,
+        rel_height=payload.rel_height,
+        rel_side=payload.rel_side,
+        ivb_hb_pairs=pairs,
+        base_fastball=base_fastball,
+        base_sinker=base_sinker,
+    )
+    cells = [
+        {"ivb": ivb, "hb": hb, "stuff2": score}
+        for (ivb, hb), score in zip(pairs, scores)
+    ]
+    return Stuff2GridResponse(pitch_type=pitch_type, level=level, cells=cells)
 
 
 @app.post("/v1/pitching/manual-velocity", response_model=ManualVelocityCreateResponse)
@@ -26447,13 +26429,13 @@ def hitting_overview(
         row["result_label"] = result_label
         out_rows.append(row)
 
-    _, avg_stuff_by_type = _compute_stuff_by_pitch_type(out_rows, "Fastball", "College")
     table_columns, table_rows, available_columns = _build_dynamic_table(
         out_rows,
         table_mode_mapped,
         split_by,
-        avg_stuff_by_type,
         selected_custom_columns,
+        stuff2_level=(_college_level_norm(college_level_filter) if _college_level_norm(college_level_filter) != "All" else "D1"),
+        ctrl_level=(_college_level_norm(college_level_filter) if _college_level_norm(college_level_filter) != "All" else "D1"),
     )
 
     pitch_type_legend = sorted(
@@ -27857,20 +27839,6 @@ def catching_overview(
             }
         )
 
-    # Build Stuff+ map for Catching when using Pitching-style table modes.
-    stuff_rows_for_calc: List[Dict[str, Any]] = []
-    for row in filtered:
-        hb_value = row.get("hb")
-        is_lefty = bool(row.get("is_lefty"))
-        row_copy = dict(row)
-        row_copy["hb_adj"] = hb_value if is_lefty else (-hb_value if _is_num(hb_value) else None)
-        stuff_rows_for_calc.append(row_copy)
-    _, avg_stuff_by_pitch_type = _compute_stuff_by_pitch_type(
-        stuff_rows_for_calc,
-        "Fastball",
-        "College",
-    )
-
     pitching_modes = {
         "Stuff",
         "Process",
@@ -27889,8 +27857,9 @@ def catching_overview(
             filtered,
             mode_raw,
             split_by_raw,
-            avg_stuff_by_pitch_type,
             selected_custom_columns,
+            stuff2_level=(level_filter if level_filter not in (None, "All") else ("MLB" if school_code == "PRO" else "D1")),
+            ctrl_level=(level_filter if level_filter not in (None, "All") else ("MLB" if school_code == "PRO" else "D1")),
         )
     else:
         if mode_raw == "Custom":

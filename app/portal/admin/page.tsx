@@ -13,6 +13,7 @@ import {
 import { requirePortalSession } from '../../../lib/portal-session';
 import {
   canUseClientManagement,
+  canUseGameTracker,
   canUseProgrammingData,
   getSchoolProductAccess,
   resolveClientManagementOrganizationId,
@@ -44,18 +45,20 @@ export default async function AdminHomePage() {
   const schoolAccess = await withTimeout(
     getSchoolProductAccess(programmingSchoolCode),
     3_000,
-    { dashboard: true, programming: false, clientManagement: true, mobileSchedule: true, mobileWorkouts: true }
+    { dashboard: true, programming: false, clientManagement: true, mobileSchedule: true, mobileWorkouts: true, gameTracker: true, mobileGameTracker: true }
   );
-  const [clientManagementAllowed, programmingDataAllowed, clientManagementFallbackOrgId, programmingFallbackOrgId] =
+  const [clientManagementAllowed, programmingDataAllowed, gameTrackerAllowed, clientManagementFallbackOrgId, programmingFallbackOrgId] =
     await Promise.all([
       canUseClientManagement(session),
       canUseProgrammingData(session),
+      canUseGameTracker(session),
       resolveClientManagementOrganizationId(session),
       resolveProgrammingOrganizationId(session),
     ]);
   const canAccessClientManagement =
     session.role === 'admin' ? schoolAccess.clientManagement : clientManagementAllowed;
   const canAccessProgramming = session.role === 'admin' ? schoolAccess.programming : programmingDataAllowed;
+  const canAccessGameTracker = session.role === 'admin' ? schoolAccess.gameTracker : gameTrackerAllowed;
   const [resolvedClientManagementOrganizationId, resolvedProgrammingOrganizationId] = await Promise.all([
     withTimeout(
       resolveOrganizationIdForSchool({
@@ -117,13 +120,15 @@ export default async function AdminHomePage() {
     <div className={isTrialSchool ? 'portal-admin-home portal-admin-home--trial' : 'portal-admin-home'} style={{ display: 'grid', gap: 20 }}>
       <PlayerSearch />
     <div className="portal-admin-grid">
-      <article className="portal-admin-card">
-        <h2>Game Tracker</h2>
-        <p>Score games, scrimmages, and live BP pitch by pitch with live box scores and situational stats.</p>
-        <Link href="/portal/admin/game-tracker" className="btn btn-primary as-link">
-          Open Game Tracker
-        </Link>
-      </article>
+      {canAccessGameTracker ? (
+        <article className="portal-admin-card">
+          <h2>Game Tracker</h2>
+          <p>Score games, scrimmages, and live BP pitch by pitch with live box scores and situational stats.</p>
+          <Link href="/portal/admin/game-tracker" className="btn btn-primary as-link">
+            Open Game Tracker
+          </Link>
+        </article>
+      ) : null}
       {programmingOrganizationId <= 0 ? (
         <article className="portal-admin-card">
           <h2>Programming Data</h2>
@@ -137,6 +142,7 @@ export default async function AdminHomePage() {
             dashboard: schoolAccess.dashboard,
             programming: schoolAccess.programming,
             clientManagement: schoolAccess.clientManagement,
+            gameTracker: schoolAccess.gameTracker,
           }}
         />
       ) : null}

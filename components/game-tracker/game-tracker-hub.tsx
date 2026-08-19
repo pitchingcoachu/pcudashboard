@@ -12,6 +12,7 @@ export default function GameTrackerHub({ logoSrc }: { logoSrc: string }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   async function loadGames() {
     setLoading(true);
@@ -39,6 +40,17 @@ export default function GameTrackerHub({ logoSrc }: { logoSrc: string }) {
     setSaving(false);
     if (!response.ok) return setError(body.error ?? 'Could not create the game.');
     window.location.href = `/portal/admin/game-tracker/${body.game.id}`;
+  }
+
+  async function deleteGame(gameId: number) {
+    if (!window.confirm('Delete this game? This cannot be undone.')) return;
+    setDeletingId(gameId);
+    setError('');
+    const response = await fetch(`/api/game-tracker/games/${gameId}`, { method: 'DELETE' });
+    const body = await response.json().catch(() => ({}));
+    setDeletingId(null);
+    if (!response.ok) return setError(body.error ?? 'Could not delete the game.');
+    setGames((prev) => prev.filter((game) => game.id !== gameId));
   }
 
   const today = new Date().toISOString().slice(0, 10);
@@ -76,12 +88,22 @@ export default function GameTrackerHub({ logoSrc }: { logoSrc: string }) {
           <div className="game-tracker-card-heading"><span className="game-tracker-step">02</span><div><h2>Recent sessions</h2><p>Resume live scoring or review completed games.</p></div></div>
           <div className="game-tracker-game-list">
             {loading ? <p className="game-tracker-muted">Loading sessions…</p> : games.length === 0 ? <p className="game-tracker-empty">No sessions yet. Create the first one at left.</p> : games.map((game) => (
-              <Link key={game.id} href={`/portal/admin/game-tracker/${game.id}`} className="game-tracker-game-row">
-                <span className={`game-tracker-status game-tracker-status--${game.status}`}>{game.status}</span>
-                <span><strong>{game.opponentName}</strong><small>{GAME_TYPE_LABELS[game.gameType]} · {game.gameDate}</small></span>
-                <span className="game-tracker-score">{game.state.score.us}<small>–</small>{game.state.score.opponent}</span>
-                <span aria-hidden>→</span>
-              </Link>
+              <div key={game.id} className="game-tracker-game-row-wrap">
+                <Link href={`/portal/admin/game-tracker/${game.id}`} className="game-tracker-game-row">
+                  <span className={`game-tracker-status game-tracker-status--${game.status}`}>{game.status}</span>
+                  <span><strong>{game.opponentName}</strong><small>{GAME_TYPE_LABELS[game.gameType]} · {game.gameDate}</small></span>
+                  <span className="game-tracker-score">{game.state.score.us}<small>–</small>{game.state.score.opponent}</span>
+                  <span aria-hidden>→</span>
+                </Link>
+                <button
+                  type="button"
+                  className="btn btn-ghost game-tracker-game-row-delete"
+                  disabled={deletingId === game.id}
+                  onClick={() => void deleteGame(game.id)}
+                >
+                  {deletingId === game.id ? 'Deleting…' : 'Delete'}
+                </button>
+              </div>
             ))}
           </div>
         </article>

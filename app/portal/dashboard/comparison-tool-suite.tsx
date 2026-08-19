@@ -275,8 +275,8 @@ const PITCH_TYPE_ALIASES: Record<string, (typeof PITCH_TYPE_DISPLAY_ORDER)[numbe
   other: 'Undefined',
 };
 const COLOR_COLUMNS_BY_MODE: Record<string, string[]> = {
-  Process: ['InZone%', 'Comp%', 'Strike%', 'Swing%', 'FPS%', 'FPS(FB)%', 'FPS(OS)%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'QP%', 'Ctrl+', 'QP+', 'Stuff+', 'Pitching+', 'RV/100'],
-  Live: ['InZone%', 'Strike%', 'FPS%', 'FPS(FB)%', 'FPS(OS)%', 'E+A%', 'QP+', 'Ctrl+', 'Pitching+', 'K%', 'BB%', 'Whiff%'],
+  Process: ['InZone%', 'Comp%', 'Strike%', 'Swing%', 'FPS%', 'FPS(FB)%', 'FPS(OS)%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'QP%', 'Ctrl+', 'QP+', 'Stuff+', 'RV/100'],
+  Live: ['InZone%', 'Strike%', 'FPS%', 'FPS(FB)%', 'FPS(OS)%', 'E+A%', 'QP+', 'Ctrl+', 'K%', 'BB%', 'Whiff%'],
   Results: ['FPS(FB)%', 'FPS(OS)%', 'Whiff%', 'K%', 'BB%', 'CSW%', 'GB%', 'Barrel%', 'EV'],
   Bullpen: ['InZone%', 'Comp%', 'Ctrl+', 'Stuff+'],
   Custom: [
@@ -295,7 +295,6 @@ const COLOR_COLUMNS_BY_MODE: Record<string, string[]> = {
     'Ctrl+',
     'QP+',
     'Stuff+',
-    'Pitching+',
     'RV/100',
     'K%',
     'BB%',
@@ -495,9 +494,8 @@ function getProcessThresholds(
   if (columnName === '1-1W%') return { poor: 58, avg: 63, great: 68 };
   if (columnName === 'Ahead%') return isPro ? { poor: 34, avg: 39, great: 44 } : { poor: 32, avg: 37, great: 42 };
   if (columnName === 'QP%') return { poor: 38, avg: 48, great: 58 };
-  if (columnName === 'Ctrl+') return { poor: 75, avg: 85, great: 95 };
+  if (columnName === 'Ctrl+') return { poor: 90, avg: 100, great: 110 };
   if (columnName === 'QP+') return { poor: 75, avg: 90, great: 105 };
-  if (columnName === 'Pitching+') return { poor: 80, avg: 95, great: 110 };
   if (columnName === 'K%' && pitchType === 'all') return { poor: 18, avg: 23, great: 28 };
   if (columnName === 'BB%' && pitchType === 'all') return { poor: 11, avg: 9, great: 7 };
   if (columnName === 'Whiff%') {

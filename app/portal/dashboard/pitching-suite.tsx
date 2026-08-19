@@ -26,8 +26,7 @@ type FiltersPayload = {
   opp_hitters: string[];
   with_video_options: string[];
   break_lines_options: string[];
-  stuff_level_options: string[];
-  stuff_base_options: string[];
+  stuff2_level_options?: string[];
   hands: string[];
   batter_sides: string[];
   session_types: string[];
@@ -78,8 +77,6 @@ type OverviewPayload = {
   pitcher: string | null;
   opp_hitter: string | null;
   break_lines: string | null;
-  stuff_level: string | null;
-  stuff_base: string | null;
   session_type: string | null;
   table_mode: string | null;
   split_by: string | null;
@@ -1612,7 +1609,6 @@ const FALLBACK_AVAILABLE_CUSTOM_COLUMNS = [
   'siSWtotSEP',
   'Ctrl+',
   'QP+',
-  'Pitching+',
   'RV/100',
   'PV/100',
   'IP',
@@ -1800,7 +1796,6 @@ function getProcessThresholds(
   if (metric === 'QP%') return { poor: 38, avg: 48, great: 58 };
   if (metric === 'Ctrl+') return { poor: 75, avg: 85, great: 95 };
   if (metric === 'QP+') return { poor: 75, avg: 90, great: 105 };
-  if (metric === 'Pitching+') return { poor: 80, avg: 95, great: 110 };
   if (metric === 'K%' && pitchType === 'all') return { poor: 18, avg: 23, great: 28 };
   if (metric === 'BB%' && pitchType === 'all') return { poor: 11, avg: 9, great: 7 };
   if (metric === 'HR%' && pitchType === 'all') {
@@ -5066,8 +5061,9 @@ export default function PitchingSuite({
   const [teamType, setTeamType] = useState('All');
   const [withVideo, setWithVideo] = useState('All');
   const [breakLines, setBreakLines] = useState('None');
-  const [stuffLevel, setStuffLevel] = useState('College');
-  const [stuffBase, setStuffBase] = useState('Fastball');
+  const [stuff2Level, setStuff2Level] = useState(
+    initialSchoolCode === 'PRO' ? 'MLB' : 'D1'
+  );
   const [hand, setHand] = useState('All');
   const [batterSide, setBatterSide] = useState('All');
   const [venue, setVenue] = useState('All');
@@ -6036,11 +6032,6 @@ export default function PitchingSuite({
 
   useEffect(() => {
     if (!isPro) return;
-    if (stuffLevel !== 'Pro') setStuffLevel('Pro');
-  }, [isPro, stuffLevel]);
-
-  useEffect(() => {
-    if (!isPro) return;
     if (!PRO_LEVEL_FILTER_OPTIONS.includes(level)) setLevel('MLB');
   }, [isPro, level]);
 
@@ -6312,8 +6303,7 @@ export default function PitchingSuite({
     }
     if (withVideo && withVideo !== 'All') params.set('with_video', withVideo);
     if (breakLines && breakLines !== 'None') params.set('break_lines', breakLines);
-    if (stuffLevel) params.set('stuff_level', stuffLevel);
-    if (stuffBase) params.set('stuff_base', stuffBase);
+    if (stuff2Level) params.set('stuff2_level', stuff2Level);
     if (hand && hand !== 'All') params.set('hand', hand);
     if (batterSide && batterSide !== 'All') params.set('batter_side', batterSide);
     if (venue && venue !== 'All') params.set('venue', venue);
@@ -6879,8 +6869,7 @@ export default function PitchingSuite({
     teamType,
     level,
     breakLines,
-    stuffLevel,
-    stuffBase,
+    stuff2Level,
     dashboardPage,
     isPlayerRole,
     veloMax,
@@ -7411,8 +7400,7 @@ export default function PitchingSuite({
       else if (!isPro && !isLeague && PRO_LEVEL_FILTER_OPTIONS.includes(level) && level !== 'All') params.set('level', level);
       if (withVideo && withVideo !== 'All') params.set('with_video', withVideo);
       if (breakLines && breakLines !== 'None') params.set('break_lines', breakLines);
-      if (stuffLevel) params.set('stuff_level', stuffLevel);
-      if (stuffBase) params.set('stuff_base', stuffBase);
+      if (stuff2Level) params.set('stuff2_level', stuff2Level);
       if (hand && hand !== 'All') params.set('hand', hand);
       if (batterSide && batterSide !== 'All') params.set('batter_side', batterSide);
       if (venue && venue !== 'All') params.set('venue', venue);
@@ -7727,8 +7715,7 @@ export default function PitchingSuite({
     level,
     withVideo,
     breakLines,
-    stuffLevel,
-    stuffBase,
+    stuff2Level,
     hand,
     batterSide,
     venue,
@@ -7790,8 +7777,7 @@ export default function PitchingSuite({
       else if (!isPro && !isLeague && PRO_LEVEL_FILTER_OPTIONS.includes(level) && level !== 'All') params.set('level', level);
       if (withVideo && withVideo !== 'All') params.set('with_video', withVideo);
       if (breakLines && breakLines !== 'None') params.set('break_lines', breakLines);
-      if (stuffLevel) params.set('stuff_level', stuffLevel);
-      if (stuffBase) params.set('stuff_base', stuffBase);
+      if (stuff2Level) params.set('stuff2_level', stuff2Level);
       if (hand && hand !== 'All') params.set('hand', hand);
       if (batterSide && batterSide !== 'All') params.set('batter_side', batterSide);
       if (venue && venue !== 'All') params.set('venue', venue);
@@ -8059,8 +8045,7 @@ export default function PitchingSuite({
     level,
     withVideo,
     breakLines,
-    stuffLevel,
-    stuffBase,
+    stuff2Level,
     hand,
     batterSide,
     venue,
@@ -13283,7 +13268,7 @@ export default function PitchingSuite({
     Stuff: ['Velo', 'Max', 'IVB', 'HB', 'rTilt', 'bTilt', 'TiltDev', 'SpinEff', 'Spin', 'Height', 'Side', 'Ext', 'VAA', 'nVAA', 'HAA', 'Stuff+'],
     'Expected Movement': ['Velo', 'Max', 'IVB', 'xIVB', 'dIVB', 'HB', 'xHB', 'dHB', 'MagAngle', 'rTilt', 'bTilt', 'TiltDev', 'SpinEff', 'Spin', 'Height', 'Side', 'Ext', 'VAA', 'nVAA', 'HAA'],
     Process: ['InZone%', '<2kInZone%', '2kInZone%', 'Strike%', '<2Kstrike%', '2Kstrike%', 'Comp%', 'Swing%', 'FPS%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'HR%', 'RV/100', 'PV/100', 'ERA', 'FIP', 'xFIP', 'SIERA'],
-    Live: ['InZone%', 'Strike%', 'FPS%', 'E+A%', 'QP+', 'Ctrl+', 'Pitching+', 'K%', 'BB%', 'HR%', 'Whiff%', 'SwStrk%', 'ERA', 'FIP', 'xFIP', 'SIERA'],
+    Live: ['InZone%', 'Strike%', 'FPS%', 'E+A%', 'QP+', 'Ctrl+', 'K%', 'BB%', 'HR%', 'Whiff%', 'SwStrk%', 'ERA', 'FIP', 'xFIP', 'SIERA'],
     Results: ['Whiff%', 'SwStrk%', 'K%', 'BB%', 'HR%', 'CSW%', 'GB%', 'FB%', 'Barrel%', 'EV', 'ERA', 'FIP', 'xFIP', 'SIERA'],
     Bullpen: ['InZone%', 'Comp%', 'Ctrl+', 'Stuff+'],
     Banny: ['Strike%', 'Whiff%', 'K%', 'BB%', 'QP+'],
@@ -13325,7 +13310,6 @@ export default function PitchingSuite({
       'Ctrl+',
       'QP+',
       'Stuff+',
-      'Pitching+',
       'RV/100',
       'PV/100',
       'K%',
@@ -14934,19 +14918,10 @@ export default function PitchingSuite({
                 <label>
                   Stuff+ Level
                   <SearchableSingleSelect
-                    options={toOptions(filters.stuff_level_options)}
-                    value={stuffLevel}
-                    onChange={setStuffLevel}
-                    placeholder="College"
-                  />
-                </label>
-                <label>
-                  Stuff+ Base Pitch
-                  <SearchableSingleSelect
-                    options={toOptions(filters.stuff_base_options)}
-                    value={stuffBase}
-                    onChange={setStuffBase}
-                    placeholder="Fastball"
+                    options={toOptions(filters.stuff2_level_options && filters.stuff2_level_options.length > 0 ? filters.stuff2_level_options : ['D1', 'D2', 'D3', 'JUCO', 'NAIA', 'AAA', 'MLB'])}
+                    value={stuff2Level}
+                    onChange={setStuff2Level}
+                    placeholder={isPro ? 'MLB' : 'D1'}
                   />
                 </label>
                 <label>

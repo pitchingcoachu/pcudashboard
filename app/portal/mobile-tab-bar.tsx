@@ -30,11 +30,13 @@ export default function MobileTabBar({
   role,
   scheduleLocked,
   workoutsLocked,
+  gameTrackerVisible = true,
   previewPlayerId,
 }: {
   role: 'admin' | 'coach' | 'player';
   scheduleLocked: boolean;
   workoutsLocked: boolean;
+  gameTrackerVisible?: boolean;
   previewPlayerId: number | null;
 }) {
   const pathname = usePathname();
@@ -70,7 +72,7 @@ export default function MobileTabBar({
     },
     { key: 'workouts', href: workoutsHref, label: 'Workouts', icon: <WorkoutsIcon locked={workoutsLocked} /> },
     { key: 'dashboard', href: '/portal/dashboard', label: 'Dashboard', icon: <DashboardIcon /> },
-    ...(isStaff
+    ...(isStaff && gameTrackerVisible
       ? [{ key: 'game-tracker', href: '/portal/admin/game-tracker', label: 'Game Tracker', icon: <GameTrackerIcon /> }]
       : []),
     {

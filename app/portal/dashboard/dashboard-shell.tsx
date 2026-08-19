@@ -12,7 +12,7 @@ import PlayerPlansSuite from './player-plans-suite';
 import PitchingSuite from './pitching-suite';
 import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../lib/league-team-name-map';
 import { getProTeamDisplayName, getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
-import StuffCalculatorSuite from './stuff-calculator-suite';
+import StuffPlusSuite from './stuff-plus-suite';
 import { dashboardActivityPath, dispatchPortalActivity } from './activity-events';
 
 type DashboardShellProps = {
@@ -568,7 +568,7 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
       ) : null}
       {!isLeague && mountedSuites['Stuff+ Calculator'] ? (
         <div style={{ display: showSuite('Stuff+ Calculator') ? 'block' : 'none' }}>
-          <StuffCalculatorSuite />
+          <StuffPlusSuite />
         </div>
       ) : null}
     </div>

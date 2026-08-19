@@ -5,7 +5,7 @@ import PortalChrome from '../portal-chrome';
 import LogoutButton from '../logout-button';
 import PortalUserMenu from '../user-menu';
 import { resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
-import { canUseDashboardData, canUseProgrammingData } from '../../../lib/programming-scope';
+import { canUseDashboardData, canUseGameTracker, canUseProgrammingData } from '../../../lib/programming-scope';
 import { schoolBrandCssVars } from '../../../lib/school-brand';
 import DashboardSchoolSelector from './dashboard-school-selector';
 import DashboardShell from './dashboard-shell';
@@ -50,6 +50,9 @@ const SUITE_SLUG_MAP: Record<string, DashboardSuiteName> = {
   'stuff-calculator': 'Stuff+ Calculator',
   stuff_calculator: 'Stuff+ Calculator',
   'stuff+ calculator': 'Stuff+ Calculator',
+  'stuff-plus': 'Stuff+ Calculator',
+  stuff_plus: 'Stuff+ Calculator',
+  'stuff+': 'Stuff+ Calculator',
 };
 
 function readSuiteParam(
@@ -77,6 +80,7 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
   const selectedSchool = resolveDashboardSchoolCode(session);
   const canAccessDashboard = await canUseDashboardData(session);
   const canAccessProgramming = await canUseProgrammingData(session);
+  const canAccessGameTracker = await canUseGameTracker(session);
 
   const isProSchool = String(selectedSchool ?? '').trim().toUpperCase() === 'PRO';
 
@@ -171,6 +175,7 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
       }
       sectionClassName={canAccessDashboard ? undefined : 'portal-panel'}
       tabBarRole={session.role}
+      tabBarGameTrackerVisible={canAccessGameTracker}
     >
       {canAccessDashboard ? (
         <DashboardShell

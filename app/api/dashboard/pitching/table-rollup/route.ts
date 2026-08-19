@@ -251,8 +251,6 @@ type AggRow = {
   qp_plus_n: number;
   ctrl_plus_sum: number;
   ctrl_plus_n: number;
-  pitching_plus_sum: number;
-  pitching_plus_n: number;
   k_n: number;
   bb_n: number;
   rv_sum: number;
@@ -292,7 +290,7 @@ type AggRow = {
   // dynamically like the sum/count fields above, not hand-typed here.
   [sepHandCountKey: `sep_${string}_left_n` | `sep_${string}_right_n`]: number;
 };
-type PlusMetricKey = 'Stuff+' | 'QP+' | 'Ctrl+' | 'Pitching+';
+type PlusMetricKey = 'Stuff+' | 'QP+' | 'Ctrl+';
 
 function toRate(n: number, d: number): number | null {
   if (!Number.isFinite(n) || !Number.isFinite(d) || d <= 0) return null;
@@ -357,8 +355,6 @@ function toCell(metric: string, row: AggRow): number | string {
   const qpPlusN = Number(row.qp_plus_n || 0);
   const ctrlPlusSum = Number(row.ctrl_plus_sum || 0);
   const ctrlPlusN = Number(row.ctrl_plus_n || 0);
-  const pitchingPlusSum = Number(row.pitching_plus_sum || 0);
-  const pitchingPlusN = Number(row.pitching_plus_n || 0);
   const k = Number(row.k_n || 0);
   const bb = Number(row.bb_n || 0);
   const rv = Number(row.rv_sum || 0);
@@ -459,7 +455,6 @@ function toCell(metric: string, row: AggRow): number | string {
   if (metric === 'Stuff+') return stuffPlusN > 0 ? Number((stuffPlusSum / stuffPlusN).toFixed(1)) : '-';
   if (metric === 'QP+') return qpPlusN > 0 ? Number((qpPlusSum / qpPlusN).toFixed(1)) : '-';
   if (metric === 'Ctrl+') return ctrlPlusN > 0 ? Number((ctrlPlusSum / ctrlPlusN).toFixed(1)) : '-';
-  if (metric === 'Pitching+') return pitchingPlusN > 0 ? Number((pitchingPlusSum / pitchingPlusN).toFixed(1)) : '-';
   if (metric === 'H') return h;
   if (metric === 'XBH') return xbh;
   if (metric === 'HR') return hr;
@@ -557,7 +552,7 @@ export async function GET(request: Request) {
   const pitchTypeSet = new Set(pitchTypes.map((value) => normalizePitchType(value).toLowerCase()).filter(Boolean));
   const columns = parseCsv(url.searchParams.get('custom_columns'));
   const defaultColumns = ['#', 'Velo', 'Max', 'IVB', 'HB', 'FPS%', 'E+A%', 'InZone%', 'Strike%', 'Whiff%', 'K%', 'BB%', 'HR%', 'QP+'];
-  const plusMetrics: PlusMetricKey[] = ['Stuff+', 'QP+', 'Ctrl+', 'Pitching+'].filter((metric) => columns.includes(metric)) as PlusMetricKey[];
+  const plusMetrics: PlusMetricKey[] = ['Stuff+', 'QP+', 'Ctrl+'].filter((metric) => columns.includes(metric)) as PlusMetricKey[];
   const supportedColumns = new Set([
     '#', 'P', 'PA', 'BF', 'AB', 'AVG', 'OBP', 'SLG', 'OPS', 'H', 'XBH', 'HR', 'HBP', 'BB', 'K', 'Whiffs',
     'Velo', 'Max', 'IVB', 'xIVB', 'dIVB', 'HB', 'xHB', 'dHB', 'Spin', 'Height', 'Side', 'Ext', 'rTilt', 'TiltDev',
@@ -565,7 +560,7 @@ export async function GET(request: Request) {
     'FPS(FB)%', 'FPS(OS)%',
     'Swing%', 'Whiff%', 'SwStrk%', 'GB%', 'K%', 'BB%', 'K-BB%', 'CSW%', 'Called-S%', 'Take%', 'Chase%',
     'EV', 'Barrel%', 'xWOBA', 'xISO', 'RV/100', 'PV/100',
-    'Stuff+', 'QP+', 'Ctrl+', 'Pitching+',
+    'Stuff+', 'QP+', 'Ctrl+',
     'ERA', 'FIP', 'xFIP', 'SIERA', 'WHIP',
     ...SEP_BASE_TYPES.flatMap((base) => SEP_PITCH_TYPES.flatMap((off) => [
       `${base.prefix}${off.abbr}ivbSEP`,
@@ -849,8 +844,6 @@ export async function GET(request: Request) {
         SUM(pitches)::int AS qp_plus_n,
         0::double precision AS ctrl_plus_sum,
         0::int AS ctrl_plus_n,
-        0::double precision AS pitching_plus_sum,
-        0::int AS pitching_plus_n,
         SUM(k_n)::int AS k_n,
         SUM(bb_n)::int AS bb_n,
         SUM(rv_sum)::double precision AS rv_sum,
@@ -974,8 +967,6 @@ export async function GET(request: Request) {
         SUM(pitches)::int AS qp_plus_n,
         0::double precision AS ctrl_plus_sum,
         0::int AS ctrl_plus_n,
-        0::double precision AS pitching_plus_sum,
-        0::int AS pitching_plus_n,
         SUM(k_n)::int AS k_n,
         SUM(bb_n)::int AS bb_n,
         SUM(rv_sum)::double precision AS rv_sum,
@@ -1068,8 +1059,6 @@ export async function GET(request: Request) {
         SUM(qp_plus_n)::int AS qp_plus_n,
         SUM(ctrl_plus_sum)::double precision AS ctrl_plus_sum,
         SUM(ctrl_plus_n)::int AS ctrl_plus_n,
-        SUM(pitching_plus_sum)::double precision AS pitching_plus_sum,
-        SUM(pitching_plus_n)::int AS pitching_plus_n,
         SUM(k_n)::int AS k_n,
         SUM(bb_n)::int AS bb_n,
         SUM(rv_sum)::double precision AS rv_sum,
@@ -1164,8 +1153,6 @@ export async function GET(request: Request) {
         SUM(qp_plus_n)::int AS qp_plus_n,
         SUM(ctrl_plus_sum)::double precision AS ctrl_plus_sum,
         SUM(ctrl_plus_n)::int AS ctrl_plus_n,
-        SUM(pitching_plus_sum)::double precision AS pitching_plus_sum,
-        SUM(pitching_plus_n)::int AS pitching_plus_n,
         SUM(k_n)::int AS k_n,
         SUM(bb_n)::int AS bb_n,
         SUM(rv_sum)::double precision AS rv_sum,
@@ -1290,8 +1277,6 @@ export async function GET(request: Request) {
       qp_plus_n: acc.qp_plus_n + Number(row.qp_plus_n || 0),
       ctrl_plus_sum: acc.ctrl_plus_sum + Number(row.ctrl_plus_sum || 0),
       ctrl_plus_n: acc.ctrl_plus_n + Number(row.ctrl_plus_n || 0),
-      pitching_plus_sum: acc.pitching_plus_sum + Number(row.pitching_plus_sum || 0),
-      pitching_plus_n: acc.pitching_plus_n + Number(row.pitching_plus_n || 0),
       k_n: acc.k_n + Number(row.k_n || 0),
       bb_n: acc.bb_n + Number(row.bb_n || 0),
       rv_sum: acc.rv_sum + Number(row.rv_sum || 0),
@@ -1312,7 +1297,7 @@ export async function GET(request: Request) {
       chase_n: 0,
       h_n: 0, xbh_n: 0, hr_n: 0, hbp_n: 0,
       fps_fb_den: 0, fps_fb_num: 0, fps_os_den: 0, fps_os_num: 0,
-      barrel_n: 0, xiso_sum: 0, xiso_n: 0, relspeed_sum: 0, relspeed_n: 0, relspeed_max: 0, ivb_sum: 0, ivb_n: 0, hb_sum: 0, hb_n: 0, xivb_sum: 0, xhb_sum: 0, expected_move_n: 0, divb_sum: 0, dhb_sum: 0, tilt_dev_minutes_sum: 0, tilt_dev_n: 0, spin_sum: 0, spin_n: 0, relheight_sum: 0, relheight_n: 0, relside_sum: 0, relside_n: 0, extension_sum: 0, extension_n: 0, releasetilt_sum: 0, releasetilt_n: 0, stuff_plus_sum: 0, stuff_plus_n: 0, qp_plus_sum: 0, qp_plus_n: 0, ctrl_plus_sum: 0, ctrl_plus_n: 0, pitching_plus_sum: 0, pitching_plus_n: 0,
+      barrel_n: 0, xiso_sum: 0, xiso_n: 0, relspeed_sum: 0, relspeed_n: 0, relspeed_max: 0, ivb_sum: 0, ivb_n: 0, hb_sum: 0, hb_n: 0, xivb_sum: 0, xhb_sum: 0, expected_move_n: 0, divb_sum: 0, dhb_sum: 0, tilt_dev_minutes_sum: 0, tilt_dev_n: 0, spin_sum: 0, spin_n: 0, relheight_sum: 0, relheight_n: 0, relside_sum: 0, relside_n: 0, extension_sum: 0, extension_n: 0, releasetilt_sum: 0, releasetilt_n: 0, stuff_plus_sum: 0, stuff_plus_n: 0, qp_plus_sum: 0, qp_plus_n: 0, ctrl_plus_sum: 0, ctrl_plus_n: 0,
       k_n: 0, bb_n: 0,
       rv_sum: 0, pv_sum: 0, xwoba_sum: 0, xwoba_n: 0, ev_sum: 0, ev_n: 0,
       ...Object.fromEntries(SEP_AGG_FIELD_NAMES.map((field) => [field, 0])),
@@ -1328,7 +1313,14 @@ export async function GET(request: Request) {
   }
   if (!isPitcherArsenalSplit) rows.push(allRow);
 
-  if (schoolCode === 'PRO' && plusMetrics.length) {
+  // Stuff+/Ctrl+ have no native rollup SQL computation here
+  // (their sum/n columns above are always hardcoded to 0) -- this hybrid
+  // fetch overlays real values from the same /v1/pitching/overview backend
+  // pitching-suite.tsx uses, so both surfaces show identical numbers. This
+  // used to run for PRO only, leaving every non-PRO Custom Reports panel
+  // showing "-" for these columns; there's nothing PRO-specific about the
+  // merge itself; it now runs for any school.
+  if (plusMetrics.length) {
     try {
       const apiBase = resolveDashboardApiBaseUrl();
       const plusUrl = new URL(`${apiBase}/v1/pitching/overview`);
@@ -1337,6 +1329,10 @@ export async function GET(request: Request) {
       plusUrl.searchParams.set('custom_columns', plusMetrics.join(','));
       plusUrl.searchParams.set('split_by', splitByNorm);
       plusUrl.searchParams.set('include_chart_points', '0');
+      if (level && level !== 'ALL') {
+        plusUrl.searchParams.set('level', level);
+        plusUrl.searchParams.set('stuff2_level', level);
+      }
       if (startDate) plusUrl.searchParams.set('start_date', startDate);
       if (endDate) plusUrl.searchParams.set('end_date', endDate);
       if (sessionType) plusUrl.searchParams.set('session_type', sessionType);

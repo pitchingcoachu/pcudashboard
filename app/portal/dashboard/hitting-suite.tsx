@@ -340,7 +340,6 @@ const FALLBACK_AVAILABLE_CUSTOM_COLUMNS = [
   'Stuff+',
   'Ctrl+',
   'QP+',
-  'Pitching+',
   'RV/100',
   'PV/100',
   'IP',

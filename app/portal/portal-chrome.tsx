@@ -27,6 +27,7 @@ type PortalChromeProps = {
   tabBarRole?: 'admin' | 'coach' | 'player';
   tabBarScheduleLocked?: boolean;
   tabBarWorkoutsLocked?: boolean;
+  tabBarGameTrackerVisible?: boolean;
   tabBarPreviewPlayerId?: number | null;
 };
 
@@ -47,6 +48,7 @@ export default async function PortalChrome({
   tabBarRole,
   tabBarScheduleLocked = false,
   tabBarWorkoutsLocked = false,
+  tabBarGameTrackerVisible = true,
   tabBarPreviewPlayerId = null,
 }: PortalChromeProps) {
   const viewMode = await resolveViewMode();
@@ -85,6 +87,7 @@ export default async function PortalChrome({
           role={tabBarRole}
           scheduleLocked={tabBarScheduleLocked}
           workoutsLocked={tabBarWorkoutsLocked}
+          gameTrackerVisible={tabBarGameTrackerVisible}
           previewPlayerId={tabBarPreviewPlayerId}
         />
       ) : null}

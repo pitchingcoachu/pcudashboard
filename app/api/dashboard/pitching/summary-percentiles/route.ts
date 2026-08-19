@@ -61,7 +61,7 @@ export async function POST(request: Request) {
     'FPS(FB)%', 'FPS(OS)%',
     'Swing%', 'Whiff%', 'SwStrk%', 'GB%', 'K%', 'BB%', 'K-BB%', 'CSW%', 'Called-S%', 'Take%', 'Chase%',
     'EV', 'Barrel%', 'xWOBA', 'xISO', 'RV/100', 'PV/100',
-    'Stuff+', 'QP+', 'Ctrl+', 'Pitching+',
+    'Stuff+', 'QP+', 'Ctrl+',
     'ERA', 'FIP', 'xFIP', 'SIERA', 'WHIP',
   ]);
   const columns = requestedColumns.filter((column) => supportedColumns.has(column));

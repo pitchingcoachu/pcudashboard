@@ -169,6 +169,13 @@ export default function GameTrackerLive({ gameId }: { gameId: number }) {
     const response = await fetch(`/api/game-tracker/games/${gameId}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status }) });
     if (response.ok) await load();
   }
+  async function deleteGame() {
+    if (!window.confirm('Delete this game? This cannot be undone.')) return;
+    const response = await fetch(`/api/game-tracker/games/${gameId}`, { method: 'DELETE' });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) return setError(body.error ?? 'Could not delete the game.');
+    window.location.href = '/portal/admin/game-tracker';
+  }
 
   if (!bundle) return <main className={`${styles.shell} game-tracker-shell`}><p>{error || 'Loading Game Tracker…'}</p></main>;
   const state = bundle.game.state;
@@ -247,6 +254,7 @@ export default function GameTrackerLive({ gameId }: { gameId: number }) {
         <div className="game-tracker-event-log"><h3>Last plays</h3>{bundle.events.filter((event) => !event.isVoided).slice(-6).reverse().map((event) => <p key={event.id}><strong>{event.sequence}.</strong> {event.input.type === 'pitch' ? `${event.input.pitchType} · ${(event.input.plateAppearanceResult ?? event.input.result).replaceAll('_', ' ')}` : event.input.reason.replaceAll('_', ' ')}</p>)}</div>
         <button className="btn btn-ghost" disabled={busy || bundle.events.length === 0} onClick={undo}>Undo last play</button>
         {bundle.game.status === 'final' ? <button className="btn btn-primary" onClick={() => setStatus('live')}>Reopen game</button> : <button className="btn btn-primary" onClick={() => setStatus('final')}>Finalize game</button>}
+        <button className="btn btn-ghost" onClick={deleteGame}>Delete game</button>
       </aside>
     </section>
   </main>;

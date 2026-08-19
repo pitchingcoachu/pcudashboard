@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers';
 import { getSessionFromRequest } from '../auth';
-import { resolveProgrammingSchoolCode } from '../programming-scope';
+import { canUseGameTracker, resolveProgrammingSchoolCode } from '../programming-scope';
 import { resolveOrganizationIdForSchool } from '../training-db';
 
 export class GameTrackerAccessError extends Error {
@@ -14,6 +14,9 @@ export async function requireGameTrackerAccess(request: Request, write = false) 
   if (!session) throw new GameTrackerAccessError('Unauthorized', 401);
   if (session.role === 'player' || (write && session.role !== 'admin' && session.role !== 'coach')) {
     throw new GameTrackerAccessError('Game Tracker scoring is available to coaches and admins.', 403);
+  }
+  if (!(await canUseGameTracker(session))) {
+    throw new GameTrackerAccessError('Game Tracker is not enabled for this school.', 403);
   }
   const schoolCode = resolveProgrammingSchoolCode(session);
   const organizationId = await resolveOrganizationIdForSchool({

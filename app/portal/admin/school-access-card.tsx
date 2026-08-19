@@ -9,6 +9,7 @@ type Props = {
     dashboard: boolean;
     programming: boolean;
     clientManagement: boolean;
+    gameTracker: boolean;
   };
 };
 
@@ -17,6 +18,7 @@ export default function SchoolAccessCard({ schoolCode, initialAccess }: Props) {
   const [dashboard, setDashboard] = useState(initialAccess.dashboard);
   const [programming, setProgramming] = useState(initialAccess.programming);
   const [clientManagement, setClientManagement] = useState(initialAccess.clientManagement);
+  const [gameTracker, setGameTracker] = useState(initialAccess.gameTracker);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
 
@@ -24,7 +26,8 @@ export default function SchoolAccessCard({ schoolCode, initialAccess }: Props) {
     setDashboard(initialAccess.dashboard);
     setProgramming(initialAccess.programming);
     setClientManagement(initialAccess.clientManagement);
-  }, [initialAccess.clientManagement, initialAccess.dashboard, initialAccess.programming, schoolCode]);
+    setGameTracker(initialAccess.gameTracker);
+  }, [initialAccess.clientManagement, initialAccess.dashboard, initialAccess.programming, initialAccess.gameTracker, schoolCode]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -40,11 +43,13 @@ export default function SchoolAccessCard({ schoolCode, initialAccess }: Props) {
           dashboard?: boolean;
           programming?: boolean;
           clientManagement?: boolean;
+          gameTracker?: boolean;
         };
         if (!response.ok) throw new Error(payload.error ?? 'Failed to load school access.');
         if (typeof payload.dashboard === 'boolean') setDashboard(payload.dashboard);
         if (typeof payload.programming === 'boolean') setProgramming(payload.programming);
         if (typeof payload.clientManagement === 'boolean') setClientManagement(payload.clientManagement);
+        if (typeof payload.gameTracker === 'boolean') setGameTracker(payload.gameTracker);
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') return;
       } finally {
@@ -69,6 +74,7 @@ export default function SchoolAccessCard({ schoolCode, initialAccess }: Props) {
           dashboard,
           programming,
           clientManagement,
+          gameTracker,
         }),
       });
       const payload = (await response.json().catch(() => ({}))) as { error?: string };
@@ -86,7 +92,7 @@ export default function SchoolAccessCard({ schoolCode, initialAccess }: Props) {
     <article className="portal-admin-card">
       <h2>School Access</h2>
       <p>{`Selected School: ${schoolCode}`}</p>
-      <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
+      <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}>
         <label className="portal-checkbox-label">
           <input type="checkbox" checked={dashboard} onChange={(event) => setDashboard(event.target.checked)} />
           Dashboard
@@ -98,6 +104,10 @@ export default function SchoolAccessCard({ schoolCode, initialAccess }: Props) {
         <label className="portal-checkbox-label">
           <input type="checkbox" checked={clientManagement} onChange={(event) => setClientManagement(event.target.checked)} />
           Client/Coach Mgmt
+        </label>
+        <label className="portal-checkbox-label">
+          <input type="checkbox" checked={gameTracker} onChange={(event) => setGameTracker(event.target.checked)} />
+          Game Tracker
         </label>
       </div>
       <div className="portal-choice-line-actions">

@@ -14,8 +14,7 @@ class PitchingFiltersResponse(BaseModel):
     opp_hitters: List[str]
     with_video_options: List[str]
     break_lines_options: List[str]
-    stuff_level_options: List[str]
-    stuff_base_options: List[str]
+    stuff2_level_options: List[str] = Field(default_factory=list)
     hands: List[str]
     batter_sides: List[str]
     session_types: List[str]
@@ -184,3 +183,43 @@ class ManualVelocityCreateResponse(BaseModel):
 class ManualVelocityDeleteResponse(BaseModel):
     ok: bool
     deleted_id: str
+
+
+class Stuff2GridBase(BaseModel):
+    rel_speed: Optional[float] = None
+    ivb: Optional[float] = None
+    hb_adj: Optional[float] = None
+
+
+class Stuff2GridRequest(BaseModel):
+    pitch_type: str
+    level: str
+    is_lefty: bool = False
+    batter_hand: Optional[str] = None
+    rel_speed: float
+    spin_rate: Optional[float] = None
+    ext_value: Optional[float] = None
+    rel_height: Optional[float] = None
+    rel_side: Optional[float] = None
+    # Preferred: explicit (ivb, hb) pairs, e.g. from an offset/honeycomb
+    # tiling where HB values differ per row -- a plain ivb_values x
+    # hb_values cross-product can't represent that sparsely. ivb_values/
+    # hb_values (a dense rectangular cross-product) are kept as a fallback
+    # for simpler rectangular-grid callers.
+    pairs: Optional[List[List[float]]] = None
+    ivb_values: Optional[List[float]] = None
+    hb_values: Optional[List[float]] = None
+    base_fastball: Optional[Stuff2GridBase] = None
+    base_sinker: Optional[Stuff2GridBase] = None
+
+
+class Stuff2GridCell(BaseModel):
+    ivb: float
+    hb: float
+    stuff2: Optional[float] = None
+
+
+class Stuff2GridResponse(BaseModel):
+    pitch_type: str
+    level: str
+    cells: List[Stuff2GridCell]

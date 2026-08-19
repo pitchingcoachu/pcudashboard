@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromRequest } from '../../../../lib/auth';
 import { resolveProgrammingOrganizationId } from '../../../../lib/programming-scope';
-import { getPlayerForUser, getRecoverableVelocityScripts, getScheduleThrowingState, playerExistsInOrganization } from '../../../../lib/training-db';
+import { getPlayerForUser, getRecoverableVelocityScripts, getScheduleThrowingState, listExercisesByOrganization, playerExistsInOrganization } from '../../../../lib/training-db';
 import { canManagePlayer } from '../../../../lib/portal-access';
 import { normalizeDrillsState } from '../../../../lib/drills-program';
 import { normalizeHittingDrillsState, normalizeDrillTemplates as normalizeHittingDrillTemplates } from '../../../../lib/hitting-drills-program';
@@ -197,10 +197,19 @@ export async function GET(request: Request) {
   const exists = await playerExistsInOrganization({ organizationId, playerId });
   if (!exists) return NextResponse.json({ error: 'Player not found in this organization.' }, { status: 404 });
 
-  const [playerState, sharedState] = await Promise.all([
+  const [playerState, sharedState, exercises] = await Promise.all([
     getScheduleThrowingState({ organizationId, playerId }),
     getScheduleThrowingState({ organizationId, playerId: SHARED_PLAYER_ID }),
+    listExercisesByOrganization(organizationId),
   ]);
+  // Drill rows don't carry their own video URL -- a drill's video is
+  // resolved by matching its name against the Exercise library, same as
+  // web's drills/hitting-drills pages do (see listExercisesByOrganization
+  // usage in those page.tsx files). Exposed here so mobile (which only
+  // hits this API, not the web page component) can do the same lookup.
+  const drillVideos = exercises
+    .map((exercise) => ({ name: exercise.name, instructionVideoUrl: String(exercise.instructionVideoUrl ?? '').trim() }))
+    .filter((exercise) => exercise.name.trim() && exercise.instructionVideoUrl);
 
   const playerTemplatesObj = parseTemplatesObject(playerState.templates);
   const sharedTemplatesObj = parseTemplatesObject(sharedState.templates);
@@ -238,6 +247,7 @@ export async function GET(request: Request) {
     drillsState,
     hittingDrillsState,
     hittingDrillTemplates,
+    drillVideos,
     catchPlayNotes: normalizeCatchPlayNotes(playerTemplatesObj.catchPlayNotes),
     cycleNotes: normalizeCycleNotes(playerTemplatesObj.cycleNotes),
   });

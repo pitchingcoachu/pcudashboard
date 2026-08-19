@@ -14,7 +14,7 @@ import {
   listPlayerPlanGoalsForPlayer,
   listProgramItemsForPlayerByDateRange,
 } from '../../../lib/training-db';
-import { canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../lib/programming-scope';
+import { canUseGameTracker, canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../lib/programming-scope';
 import PortalChrome from '../portal-chrome';
 import PreviewAthleteSelect from '../preview-athlete-select';
 import LogoutButton from '../logout-button';
@@ -70,6 +70,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
   if (session.role === 'player' && !canAccessProgramming) {
     redirect('/portal/dashboard');
   }
+  const canAccessGameTracker = await canUseGameTracker(session);
   const programmingOrganizationId = await resolveProgrammingOrganizationId(session);
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
   const params = await searchParams;
@@ -141,6 +142,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
         }
         sectionClassName="portal-panel"
         tabBarRole={session.role}
+        tabBarGameTrackerVisible={canAccessGameTracker}
       >
         <h2>Programming Data</h2>
         <p>No programming data is configured for {programmingSchoolCode} yet.</p>
@@ -335,6 +337,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
       }
       sectionClassName="portal-panel portal-player-panel"
       tabBarRole={session.role}
+      tabBarGameTrackerVisible={canAccessGameTracker}
       tabBarPreviewPlayerId={session.role === 'admin' || session.role === 'coach' ? effectivePlayerId : null}
     >
       {session.role === 'player' ? <PlayerQuestionnaireGate playerId={player.id} /> : null}

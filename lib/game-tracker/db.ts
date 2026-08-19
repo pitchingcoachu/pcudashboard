@@ -469,6 +469,16 @@ export async function setGameTrackerStatus(input: { organizationId: number; game
   return mapGame(result.rows[0]);
 }
 
+export async function deleteGameTrackerGame(input: { organizationId: number; gameId: number }): Promise<{ ok: true } | { ok: false; error: string }> {
+  await ensureGameTrackerReady();
+  const result = await getDbPool().query<{ id: number }>(
+    `DELETE FROM game_tracker_games WHERE id = $1 AND organization_id = $2 RETURNING id`,
+    [input.gameId, input.organizationId]
+  );
+  if ((result.rowCount ?? 0) !== 1) return { ok: false, error: 'Game not found.' };
+  return { ok: true };
+}
+
 export async function getGameTrackerStats(organizationId: number, filters: ScenarioFilters = {}) {
   await ensureGameTrackerReady();
   const pool = getDbPool();

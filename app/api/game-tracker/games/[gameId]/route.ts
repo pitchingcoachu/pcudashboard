@@ -1,5 +1,5 @@
 import { gameTrackerErrorResponse, requireGameTrackerAccess } from '../../../../../lib/game-tracker/access';
-import { getGameTrackerBundle, setGameTrackerStatus } from '../../../../../lib/game-tracker/db';
+import { deleteGameTrackerGame, getGameTrackerBundle, setGameTrackerStatus } from '../../../../../lib/game-tracker/db';
 import { statusSchema } from '../../../../../lib/game-tracker/validation';
 
 type Context = { params: Promise<{ gameId: string }> };
@@ -22,6 +22,18 @@ export async function PATCH(request: Request, context: Context) {
     const gameId = Number((await context.params).gameId);
     const { status } = statusSchema.parse(await request.json());
     return Response.json({ game: await setGameTrackerStatus({ organizationId: access.organizationId, gameId, status }) });
+  } catch (error) {
+    return gameTrackerErrorResponse(error);
+  }
+}
+
+export async function DELETE(request: Request, context: Context) {
+  try {
+    const access = await requireGameTrackerAccess(request, true);
+    const gameId = Number((await context.params).gameId);
+    const result = await deleteGameTrackerGame({ organizationId: access.organizationId, gameId });
+    if (!result.ok) return Response.json({ error: result.error }, { status: 404 });
+    return Response.json({ ok: true });
   } catch (error) {
     return gameTrackerErrorResponse(error);
   }

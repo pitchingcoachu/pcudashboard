@@ -34,43 +34,61 @@ export async function uploadPlayerMediaFile(args: {
   const presignData = await presignRes.json() as { presign: boolean; uploadUrl?: string; r2Key?: string; contentType?: string };
 
   if (presignData.presign && presignData.uploadUrl && presignData.r2Key) {
-    // Upload directly to R2 — bypasses Vercel's 4.5MB body limit
-    const putRes = await fetch(presignData.uploadUrl, {
-      method: 'PUT',
-      headers: { 'Content-Type': presignData.contentType ?? contentType },
-      body: file,
-    });
-    if (!putRes.ok) {
-      return { ok: false, error: `Storage upload failed (${putRes.status}).` };
+    // Upload directly to R2 — bypasses Vercel's 4.5MB body limit.
+    // A rejected fetch here (as opposed to a non-ok response) usually means the
+    // request never reached R2 at all -- most commonly a CORS preflight failure
+    // from the bucket's CORS policy not allowing this origin. Fall back to
+    // routing the upload through the server instead of failing outright.
+    let putOk = false;
+    let putStatus = 0;
+    try {
+      const putRes = await fetch(presignData.uploadUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': presignData.contentType ?? contentType },
+        body: file,
+      });
+      putOk = putRes.ok;
+      putStatus = putRes.status;
+    } catch {
+      putOk = false;
     }
 
-    // Save metadata to DB
-    const metaRes = await fetch('/api/player/media', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        playerId,
-        r2Key: presignData.r2Key,
-        fileName: file.name,
-        contentType: presignData.contentType ?? contentType,
-        sizeBytes: file.size,
-        title,
-        category,
-        sourceType: sourceType ?? '',
-        sourceLabel: sourceLabel ?? '',
-      }),
-    });
-    const metaBody = await metaRes.json().catch(() => ({})) as { ok?: boolean; media?: unknown[]; categories?: string[]; createdMedia?: unknown; error?: string };
-    if (!metaRes.ok) return { ok: false, error: metaBody.error ?? 'Failed to save media record.' };
-    return {
-      ok: true,
-      media: Array.isArray(metaBody.media) ? metaBody.media : [],
-      categories: Array.isArray(metaBody.categories) ? metaBody.categories : undefined,
-      createdMedia: metaBody.createdMedia,
-    };
+    if (putOk) {
+      // Save metadata to DB
+      const metaRes = await fetch('/api/player/media', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          playerId,
+          r2Key: presignData.r2Key,
+          fileName: file.name,
+          contentType: presignData.contentType ?? contentType,
+          sizeBytes: file.size,
+          title,
+          category,
+          sourceType: sourceType ?? '',
+          sourceLabel: sourceLabel ?? '',
+        }),
+      });
+      const metaBody = await metaRes.json().catch(() => ({})) as { ok?: boolean; media?: unknown[]; categories?: string[]; createdMedia?: unknown; error?: string };
+      if (!metaRes.ok) return { ok: false, error: metaBody.error ?? 'Failed to save media record.' };
+      return {
+        ok: true,
+        media: Array.isArray(metaBody.media) ? metaBody.media : [],
+        categories: Array.isArray(metaBody.categories) ? metaBody.categories : undefined,
+        createdMedia: metaBody.createdMedia,
+      };
+    }
+
+    // Direct-to-R2 upload failed (e.g. CORS) -- if the file is small enough to
+    // route through the server, fall through to the FormData path below rather
+    // than failing the whole upload.
+    if (file.size > 4 * 1024 * 1024) {
+      return { ok: false, error: `Storage upload failed (${putStatus || 'network error'}).` };
+    }
   }
 
-  // Fallback: direct FormData POST (local dev, no R2)
+  // Fallback: direct FormData POST (local dev with no R2, or a failed direct-to-R2 PUT)
   const form = new FormData();
   form.set('playerId', String(playerId));
   form.set('file', file);

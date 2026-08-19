@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { requirePortalSession } from '../../../lib/portal-session';
 import { resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
-import { canUseClientManagement, canUseProgrammingData, getSchoolProductAccess } from '../../../lib/programming-scope';
+import { canUseClientManagement, canUseGameTracker, canUseProgrammingData, getSchoolProductAccess } from '../../../lib/programming-scope';
 import { resolveSchoolBrand, schoolBrandCssVars } from '../../../lib/school-brand';
 import PortalChrome from '../portal-chrome';
 import PortalUserMenu from '../user-menu';
@@ -33,20 +33,22 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   const selectedSchool = resolveDashboardSchoolCode(session);
   const schoolOptions = await withTimeout(resolveSessionDashboardSchoolOptions(session), 3_000, [selectedSchool, 'LEAGUE', 'PRO']);
   const brand = resolveSchoolBrand(selectedSchool);
-  const [programmingDataAllowed, clientManagementAllowed] = await Promise.all([
+  const [programmingDataAllowed, clientManagementAllowed, gameTrackerAllowed] = await Promise.all([
     canUseProgrammingData(session),
     canUseClientManagement(session),
+    canUseGameTracker(session),
   ]);
   const schoolAccess =
     session.role === 'admin'
       ? await withTimeout(
           getSchoolProductAccess(selectedSchool),
           3_000,
-          { dashboard: true, programming: programmingDataAllowed, clientManagement: clientManagementAllowed, mobileSchedule: true, mobileWorkouts: true }
+          { dashboard: true, programming: programmingDataAllowed, clientManagement: clientManagementAllowed, mobileSchedule: true, mobileWorkouts: true, gameTracker: gameTrackerAllowed, mobileGameTracker: true }
         )
       : null;
   const canAccessProgramming = session.role === 'admin' ? schoolAccess?.programming === true : programmingDataAllowed;
   const canAccessClientManagement = session.role === 'admin' ? schoolAccess?.clientManagement !== false : clientManagementAllowed;
+  const canAccessGameTracker = session.role === 'admin' ? schoolAccess?.gameTracker !== false : gameTrackerAllowed;
   const isProSchool = String(selectedSchool).trim().toUpperCase() === 'PRO';
   const showCoachClientTabs = canAccessClientManagement && !(session.role === 'coach' && isProSchool);
   const useCompactProgrammingNav = canAccessProgramming;
@@ -117,9 +119,11 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             <Link href="/portal/dashboard" className="portal-nav-link">
               Dashboard
             </Link>
-            <Link href="/portal/admin/game-tracker" className="portal-nav-link">
-              Game Tracker
-            </Link>
+            {canAccessGameTracker && (
+              <Link href="/portal/admin/game-tracker" className="portal-nav-link">
+                Game Tracker
+              </Link>
+            )}
             <Link href="/portal/admin/schedule" className="portal-nav-link">
               Schedule
             </Link>
@@ -138,9 +142,11 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             <Link href="/portal/dashboard" className="portal-nav-link">
               Dashboard
             </Link>
-            <Link href="/portal/admin/game-tracker" className="portal-nav-link">
-              Game Tracker
-            </Link>
+            {canAccessGameTracker && (
+              <Link href="/portal/admin/game-tracker" className="portal-nav-link">
+                Game Tracker
+              </Link>
+            )}
             {canAccessPlayerNotes && (
               <Link href="/portal/admin/player-notes" className="portal-nav-link">
                 Player Notes
@@ -156,7 +162,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           ? [
               { href: '/portal/admin', label: 'Home' },
               { href: '/portal/dashboard', label: 'Dashboard' },
-              { href: '/portal/admin/game-tracker', label: 'Game Tracker' },
+              ...(canAccessGameTracker ? [{ href: '/portal/admin/game-tracker', label: 'Game Tracker' }] : []),
               { href: '/portal/admin/schedule', label: 'Schedule' },
               ...(canAccessPlayerNotes ? [{ href: '/portal/admin/player-notes', label: 'Player Notes' }] : []),
               ...moreItemsCompact,
@@ -164,7 +170,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           : [
               { href: '/portal/admin', label: 'Home' },
               { href: '/portal/dashboard', label: 'Dashboard' },
-              { href: '/portal/admin/game-tracker', label: 'Game Tracker' },
+              ...(canAccessGameTracker ? [{ href: '/portal/admin/game-tracker', label: 'Game Tracker' }] : []),
               ...(canAccessPlayerNotes ? [{ href: '/portal/admin/player-notes', label: 'Player Notes' }] : []),
               ...moreItemsClientManagement,
             ]
@@ -201,6 +207,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       tabBarRole={session.role}
       tabBarScheduleLocked={session.role === 'admin' ? schoolAccess?.mobileSchedule === false : false}
       tabBarWorkoutsLocked={session.role === 'admin' ? schoolAccess?.mobileWorkouts === false : false}
+      tabBarGameTrackerVisible={canAccessGameTracker}
     >
       {children}
     </PortalChrome>

@@ -114,6 +114,8 @@ type SchoolProductAccess = {
   clientManagement?: boolean;
   mobileSchedule?: boolean;
   mobileWorkouts?: boolean;
+  gameTracker?: boolean;
+  mobileGameTracker?: boolean;
 };
 
 type SchoolProductAccessRecord = {
@@ -122,6 +124,8 @@ type SchoolProductAccessRecord = {
   clientManagement: boolean;
   mobileSchedule: boolean;
   mobileWorkouts: boolean;
+  gameTracker: boolean;
+  mobileGameTracker: boolean;
 };
 
 declare global {
@@ -144,6 +148,8 @@ function parseSchoolProductAccessMap(raw: string): Record<string, SchoolProductA
         clientManagement: typeof record.clientManagement === 'boolean' ? record.clientManagement : undefined,
         mobileSchedule: typeof record.mobileSchedule === 'boolean' ? record.mobileSchedule : undefined,
         mobileWorkouts: typeof record.mobileWorkouts === 'boolean' ? record.mobileWorkouts : undefined,
+        gameTracker: typeof record.gameTracker === 'boolean' ? record.gameTracker : undefined,
+        mobileGameTracker: typeof record.mobileGameTracker === 'boolean' ? record.mobileGameTracker : undefined,
       };
     }
     return out;
@@ -159,6 +165,8 @@ function normalizeAccess(value: SchoolProductAccess): SchoolProductAccessRecord 
     clientManagement: value.clientManagement !== false,
     mobileSchedule: value.mobileSchedule !== false,
     mobileWorkouts: value.mobileWorkouts !== false,
+    gameTracker: value.gameTracker !== false,
+    mobileGameTracker: value.mobileGameTracker !== false,
   };
 }
 
@@ -177,7 +185,7 @@ function getCachedSchoolAccessMap(): Record<string, SchoolProductAccessRecord> {
   return global.__pcuSchoolAccessCache;
 }
 
-function mergeWithEnvDefaults(rows: Array<{ school_code: string; dashboard: boolean; programming: boolean; client_management: boolean; mobile_schedule: boolean; mobile_workouts: boolean }>) {
+function mergeWithEnvDefaults(rows: Array<{ school_code: string; dashboard: boolean; programming: boolean; client_management: boolean; mobile_schedule: boolean; mobile_workouts: boolean; game_tracker: boolean; mobile_game_tracker: boolean }>) {
   const map: Record<string, SchoolProductAccessRecord> = parseEnvSchoolProductAccessMap();
   for (const row of rows) {
     const schoolCode = normalizeSchoolCode(row.school_code);
@@ -188,6 +196,8 @@ function mergeWithEnvDefaults(rows: Array<{ school_code: string; dashboard: bool
       clientManagement: Boolean(row.client_management),
       mobileSchedule: Boolean(row.mobile_schedule),
       mobileWorkouts: Boolean(row.mobile_workouts),
+      gameTracker: Boolean(row.game_tracker),
+      mobileGameTracker: Boolean(row.mobile_game_tracker),
     };
   }
   return map;
@@ -210,6 +220,13 @@ async function ensureSchoolProductAccessTable(): Promise<void> {
   // reusing `programming`, which continues to control web independently.
   await pool.query(`ALTER TABLE school_product_access ADD COLUMN IF NOT EXISTS mobile_schedule BOOLEAN NOT NULL DEFAULT TRUE;`);
   await pool.query(`ALTER TABLE school_product_access ADD COLUMN IF NOT EXISTS mobile_workouts BOOLEAN NOT NULL DEFAULT TRUE;`);
+  // Defaults to TRUE (unlike `programming`) since Game Tracker already shipped
+  // unguarded -- this column only needs to let an admin turn it OFF, not opt in.
+  await pool.query(`ALTER TABLE school_product_access ADD COLUMN IF NOT EXISTS game_tracker BOOLEAN NOT NULL DEFAULT TRUE;`);
+  // Mobile-only lock icon for Game Tracker, same pattern as mobile_schedule/
+  // mobile_workouts -- deliberately independent of `game_tracker`, which
+  // continues to gate web+API access.
+  await pool.query(`ALTER TABLE school_product_access ADD COLUMN IF NOT EXISTS mobile_game_tracker BOOLEAN NOT NULL DEFAULT TRUE;`);
 }
 
 export async function refreshSchoolProductAccessCache(force = false): Promise<void> {
@@ -235,8 +252,10 @@ export async function refreshSchoolProductAccessCache(force = false): Promise<vo
       client_management: boolean;
       mobile_schedule: boolean;
       mobile_workouts: boolean;
+      game_tracker: boolean;
+      mobile_game_tracker: boolean;
     }>(
-      `SELECT school_code, dashboard, programming, client_management, mobile_schedule, mobile_workouts FROM school_product_access`
+      `SELECT school_code, dashboard, programming, client_management, mobile_schedule, mobile_workouts, game_tracker, mobile_game_tracker FROM school_product_access`
     );
     global.__pcuSchoolAccessCache = mergeWithEnvDefaults(rows.rows);
     global.__pcuSchoolAccessCacheAt = Date.now();
@@ -263,6 +282,8 @@ export async function getSchoolProductAccess(schoolCode: string): Promise<School
     clientManagement: true,
     mobileSchedule: true,
     mobileWorkouts: true,
+    gameTracker: true,
+    mobileGameTracker: true,
   });
   return fallback;
 }
@@ -273,6 +294,7 @@ export async function setSchoolProductAccess(
     dashboard: boolean;
     programming: boolean;
     clientManagement: boolean;
+    gameTracker: boolean;
     updatedByUserId?: number | null;
   }
 ): Promise<void> {
@@ -281,15 +303,16 @@ export async function setSchoolProductAccess(
   if (isDatabaseConfigured()) {
     await ensureSchoolProductAccessTable();
     const pool = getDbPool();
-    const params = [schoolCode, input.dashboard, input.programming, input.clientManagement, input.updatedByUserId ?? null];
+    const params = [schoolCode, input.dashboard, input.programming, input.clientManagement, input.gameTracker, input.updatedByUserId ?? null];
     const upsertSql = `
-      INSERT INTO school_product_access (school_code, dashboard, programming, client_management, updated_at, updated_by_user_id)
-      VALUES ($1, $2, $3, $4, NOW(), $5)
+      INSERT INTO school_product_access (school_code, dashboard, programming, client_management, game_tracker, updated_at, updated_by_user_id)
+      VALUES ($1, $2, $3, $4, $5, NOW(), $6)
       ON CONFLICT (school_code)
       DO UPDATE SET
         dashboard = EXCLUDED.dashboard,
         programming = EXCLUDED.programming,
         client_management = EXCLUDED.client_management,
+        game_tracker = EXCLUDED.game_tracker,
         updated_at = NOW(),
         updated_by_user_id = EXCLUDED.updated_by_user_id
     `;
@@ -299,7 +322,7 @@ export async function setSchoolProductAccess(
       const typed = error as { code?: string } | null;
       if (typed?.code === '23503') {
         // Allow access toggles to save even if the acting session user is not persisted in auth_users.
-        await pool.query(upsertSql, [schoolCode, input.dashboard, input.programming, input.clientManagement, null]);
+        await pool.query(upsertSql, [schoolCode, input.dashboard, input.programming, input.clientManagement, input.gameTracker, null]);
       } else {
         throw error;
       }
@@ -311,6 +334,7 @@ export async function setSchoolProductAccess(
     dashboard: input.dashboard,
     programming: input.programming,
     clientManagement: input.clientManagement,
+    gameTracker: input.gameTracker,
   };
   global.__pcuSchoolAccessCache = { ...map };
   global.__pcuSchoolAccessCacheAt = Date.now();
@@ -324,6 +348,7 @@ export async function setSchoolMobileAccess(
     schoolCode: string;
     mobileSchedule: boolean;
     mobileWorkouts: boolean;
+    mobileGameTracker: boolean;
     updatedByUserId?: number | null;
   }
 ): Promise<void> {
@@ -332,14 +357,15 @@ export async function setSchoolMobileAccess(
   if (isDatabaseConfigured()) {
     await ensureSchoolProductAccessTable();
     const pool = getDbPool();
-    const params = [schoolCode, input.mobileSchedule, input.mobileWorkouts, input.updatedByUserId ?? null];
+    const params = [schoolCode, input.mobileSchedule, input.mobileWorkouts, input.mobileGameTracker, input.updatedByUserId ?? null];
     const upsertSql = `
-      INSERT INTO school_product_access (school_code, mobile_schedule, mobile_workouts, updated_at, updated_by_user_id)
-      VALUES ($1, $2, $3, NOW(), $4)
+      INSERT INTO school_product_access (school_code, mobile_schedule, mobile_workouts, mobile_game_tracker, updated_at, updated_by_user_id)
+      VALUES ($1, $2, $3, $4, NOW(), $5)
       ON CONFLICT (school_code)
       DO UPDATE SET
         mobile_schedule = EXCLUDED.mobile_schedule,
         mobile_workouts = EXCLUDED.mobile_workouts,
+        mobile_game_tracker = EXCLUDED.mobile_game_tracker,
         updated_at = NOW(),
         updated_by_user_id = EXCLUDED.updated_by_user_id
     `;
@@ -348,7 +374,7 @@ export async function setSchoolMobileAccess(
     } catch (error) {
       const typed = error as { code?: string } | null;
       if (typed?.code === '23503') {
-        await pool.query(upsertSql, [schoolCode, input.mobileSchedule, input.mobileWorkouts, null]);
+        await pool.query(upsertSql, [schoolCode, input.mobileSchedule, input.mobileWorkouts, input.mobileGameTracker, null]);
       } else {
         throw error;
       }
@@ -359,6 +385,7 @@ export async function setSchoolMobileAccess(
     ...normalizeAccess(map[schoolCode] ?? {}),
     mobileSchedule: input.mobileSchedule,
     mobileWorkouts: input.mobileWorkouts,
+    mobileGameTracker: input.mobileGameTracker,
   };
   global.__pcuSchoolAccessCache = { ...map };
   global.__pcuSchoolAccessCacheAt = Date.now();
@@ -405,6 +432,11 @@ export async function canUseProgrammingData(session: SessionLike): Promise<boole
   return access.programming;
 }
 
+export async function canUseGameTracker(session: SessionLike): Promise<boolean> {
+  const access = await resolveSchoolProductAccess(session);
+  return access.gameTracker;
+}
+
 export async function canUseMobileSchedule(session: SessionLike): Promise<boolean> {
   const access = await resolveSchoolProductAccess(session);
   return access.mobileSchedule;
@@ -413,6 +445,11 @@ export async function canUseMobileSchedule(session: SessionLike): Promise<boolea
 export async function canUseMobileWorkouts(session: SessionLike): Promise<boolean> {
   const access = await resolveSchoolProductAccess(session);
   return access.mobileWorkouts;
+}
+
+export async function canUseMobileGameTracker(session: SessionLike): Promise<boolean> {
+  const access = await resolveSchoolProductAccess(session);
+  return access.mobileGameTracker;
 }
 
 export async function canUseClientManagement(session: SessionLike): Promise<boolean> {

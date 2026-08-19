@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { getSessionFromRequest } from '../../../../lib/auth';
 import { resolveSessionDashboardSchoolOptions } from '../../../../lib/dashboard-school-options';
-import { canUseMobileSchedule, canUseMobileWorkouts, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
+import { canUseMobileGameTracker, canUseMobileSchedule, canUseMobileWorkouts, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
 
 export async function GET(request: Request) {
   const cookieStore = await cookies();
@@ -26,9 +26,10 @@ export async function GET(request: Request) {
   });
 
   const schoolCode = resolveProgrammingSchoolCode(session);
-  const [mobileScheduleEnabled, mobileWorkoutsEnabled] = await Promise.all([
+  const [mobileScheduleEnabled, mobileWorkoutsEnabled, mobileGameTrackerEnabled] = await Promise.all([
     canUseMobileSchedule({ ...session, dashboardSchoolCode: schoolCode }),
     canUseMobileWorkouts({ ...session, dashboardSchoolCode: schoolCode }),
+    canUseMobileGameTracker({ ...session, dashboardSchoolCode: schoolCode }),
   ]);
 
   return NextResponse.json({
@@ -44,5 +45,6 @@ export async function GET(request: Request) {
     allowedDashboardSchoolCodes,
     mobileScheduleEnabled,
     mobileWorkoutsEnabled,
+    mobileGameTrackerEnabled,
   });
 }

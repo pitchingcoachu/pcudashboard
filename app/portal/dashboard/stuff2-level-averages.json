@@ -1,0 +1,522 @@
+{
+  "Fastball": {
+    "D1": {
+      "relSpeed": 90.1,
+      "ivb": 15.9,
+      "hb": 10.3,
+      "spinRate": 2224.0,
+      "extension": 6.03,
+      "relHeight": 5.79,
+      "relSide": -1.58
+    },
+    "D2": {
+      "relSpeed": 86.6,
+      "ivb": 14.9,
+      "hb": 10.6,
+      "spinRate": 2148.0,
+      "extension": 5.95,
+      "relHeight": 5.78,
+      "relSide": -1.57
+    },
+    "D3": {
+      "relSpeed": 84.3,
+      "ivb": 14.0,
+      "hb": 10.8,
+      "spinRate": 2084.0,
+      "extension": 5.98,
+      "relHeight": 5.66,
+      "relSide": -1.57
+    },
+    "JUCO": {
+      "relSpeed": 86.6,
+      "ivb": 14.4,
+      "hb": 10.8,
+      "spinRate": 2126.0,
+      "extension": 6.07,
+      "relHeight": 5.73,
+      "relSide": -1.6
+    },
+    "NAIA": {
+      "relSpeed": 86.1,
+      "ivb": 15.6,
+      "hb": 10.9,
+      "spinRate": 2140.0,
+      "extension": 5.94,
+      "relHeight": 5.8,
+      "relSide": -1.49
+    },
+    "AAA": {
+      "relSpeed": 94.2,
+      "ivb": 16.1,
+      "hb": 8.0,
+      "spinRate": 2279.0,
+      "extension": 6.37,
+      "relHeight": 5.73,
+      "relSide": -1.57
+    },
+    "MLB": {
+      "relSpeed": 95.0,
+      "ivb": 15.7,
+      "hb": 7.7,
+      "spinRate": 2333.0,
+      "extension": 6.52,
+      "relHeight": 5.66,
+      "relSide": -1.65
+    }
+  },
+  "Sinker": {
+    "D1": {
+      "relSpeed": 89.6,
+      "ivb": 8.2,
+      "hb": 16.3,
+      "spinRate": 2157.0,
+      "extension": 5.92,
+      "relHeight": 5.33,
+      "relSide": -2.02
+    },
+    "D2": {
+      "relSpeed": 85.0,
+      "ivb": 8.2,
+      "hb": 15.7,
+      "spinRate": 2058.0,
+      "extension": 5.97,
+      "relHeight": 5.19,
+      "relSide": -2.03
+    },
+    "D3": {
+      "relSpeed": 83.3,
+      "ivb": 10.5,
+      "hb": 12.8,
+      "spinRate": 2043.0,
+      "extension": 6.07,
+      "relHeight": 5.49,
+      "relSide": -1.75
+    },
+    "JUCO": {
+      "relSpeed": 86.0,
+      "ivb": 6.1,
+      "hb": 15.2,
+      "spinRate": 2099.0,
+      "extension": 5.9,
+      "relHeight": 5.35,
+      "relSide": -2.02
+    },
+    "NAIA": {
+      "relSpeed": 85.4,
+      "ivb": 8.9,
+      "hb": 15.4,
+      "spinRate": 2081.0,
+      "extension": 5.86,
+      "relHeight": 5.39,
+      "relSide": -2.0
+    },
+    "AAA": {
+      "relSpeed": 93.3,
+      "ivb": 7.6,
+      "hb": 15.4,
+      "spinRate": 2151.0,
+      "extension": 6.33,
+      "relHeight": 5.46,
+      "relSide": -1.83
+    },
+    "MLB": {
+      "relSpeed": 94.3,
+      "ivb": 7.5,
+      "hb": 15.1,
+      "spinRate": 2199.0,
+      "extension": 6.43,
+      "relHeight": 5.5,
+      "relSide": -1.7
+    }
+  },
+  "Cutter": {
+    "D1": {
+      "relSpeed": 84.8,
+      "ivb": 6.2,
+      "hb": -1.4,
+      "spinRate": 2337.0,
+      "extension": 5.78,
+      "relHeight": 5.73,
+      "relSide": -1.76
+    },
+    "D2": {
+      "relSpeed": 81.7,
+      "ivb": 6.6,
+      "hb": -0.4,
+      "spinRate": 2272.0,
+      "extension": 5.72,
+      "relHeight": 5.7,
+      "relSide": -1.72
+    },
+    "D3": {
+      "relSpeed": 79.2,
+      "ivb": 7.0,
+      "hb": -2.7,
+      "spinRate": 2232.0,
+      "extension": 5.66,
+      "relHeight": 5.72,
+      "relSide": -1.48
+    },
+    "JUCO": {
+      "relSpeed": 82.1,
+      "ivb": 5.7,
+      "hb": 0.0,
+      "spinRate": 2196.0,
+      "extension": 5.83,
+      "relHeight": 5.73,
+      "relSide": -1.61
+    },
+    "NAIA": {
+      "relSpeed": 81.9,
+      "ivb": 7.3,
+      "hb": -0.9,
+      "spinRate": 2292.0,
+      "extension": 5.62,
+      "relHeight": 5.69,
+      "relSide": -1.85
+    },
+    "AAA": {
+      "relSpeed": 88.6,
+      "ivb": 7.4,
+      "hb": -2.2,
+      "spinRate": 2369.0,
+      "extension": 6.29,
+      "relHeight": 5.6,
+      "relSide": -1.8
+    },
+    "MLB": {
+      "relSpeed": 90.2,
+      "ivb": 8.2,
+      "hb": -2.2,
+      "spinRate": 2422.0,
+      "extension": 6.39,
+      "relHeight": 5.67,
+      "relSide": -1.71
+    }
+  },
+  "Slider": {
+    "D1": {
+      "relSpeed": 80.5,
+      "ivb": 0.5,
+      "hb": -7.2,
+      "spinRate": 2393.0,
+      "extension": 5.54,
+      "relHeight": 5.62,
+      "relSide": -1.81
+    },
+    "D2": {
+      "relSpeed": 77.0,
+      "ivb": 0.4,
+      "hb": -8.0,
+      "spinRate": 2306.0,
+      "extension": 5.47,
+      "relHeight": 5.58,
+      "relSide": -1.81
+    },
+    "D3": {
+      "relSpeed": 75.2,
+      "ivb": 0.3,
+      "hb": -7.9,
+      "spinRate": 2243.0,
+      "extension": 5.51,
+      "relHeight": 5.44,
+      "relSide": -1.8
+    },
+    "JUCO": {
+      "relSpeed": 77.1,
+      "ivb": 0.0,
+      "hb": -7.6,
+      "spinRate": 2306.0,
+      "extension": 5.61,
+      "relHeight": 5.55,
+      "relSide": -1.78
+    },
+    "NAIA": {
+      "relSpeed": 76.7,
+      "ivb": 0.5,
+      "hb": -8.1,
+      "spinRate": 2313.0,
+      "extension": 5.5,
+      "relHeight": 5.58,
+      "relSide": -1.76
+    },
+    "AAA": {
+      "relSpeed": 85.6,
+      "ivb": 2.1,
+      "hb": -3.8,
+      "spinRate": 2358.0,
+      "extension": 6.25,
+      "relHeight": 5.79,
+      "relSide": -1.69
+    },
+    "MLB": {
+      "relSpeed": 86.7,
+      "ivb": 1.6,
+      "hb": -4.2,
+      "spinRate": 2447.0,
+      "extension": 6.41,
+      "relHeight": 5.73,
+      "relSide": -1.66
+    }
+  },
+  "Sweeper": {
+    "D1": {
+      "relSpeed": 79.8,
+      "ivb": -0.4,
+      "hb": -13.3,
+      "spinRate": 2502.0,
+      "extension": 5.5,
+      "relHeight": 5.4,
+      "relSide": -2.09
+    },
+    "D2": {
+      "relSpeed": 76.7,
+      "ivb": -0.0,
+      "hb": -8.8,
+      "spinRate": 2256.0,
+      "extension": 5.51,
+      "relHeight": 5.3,
+      "relSide": -1.9
+    },
+    "D3": {
+      "relSpeed": 75.0,
+      "ivb": 5.1,
+      "hb": -11.6,
+      "spinRate": 2285.0,
+      "extension": 5.63,
+      "relHeight": 5.34,
+      "relSide": -2.2
+    },
+    "JUCO": {
+      "relSpeed": 74.3,
+      "ivb": -0.6,
+      "hb": -14.2,
+      "spinRate": 2367.0,
+      "extension": 5.35,
+      "relHeight": 5.18,
+      "relSide": -1.73
+    },
+    "NAIA": {
+      "relSpeed": 74.5,
+      "ivb": -0.2,
+      "hb": -14.5,
+      "spinRate": 2398.0,
+      "extension": 5.28,
+      "relHeight": 5.37,
+      "relSide": -2.27
+    },
+    "AAA": {
+      "relSpeed": 82.2,
+      "ivb": 1.7,
+      "hb": -13.5,
+      "spinRate": 2591.0,
+      "extension": 6.26,
+      "relHeight": 5.34,
+      "relSide": -2.18
+    },
+    "MLB": {
+      "relSpeed": 83.3,
+      "ivb": 1.0,
+      "hb": -13.8,
+      "spinRate": 2640.0,
+      "extension": 6.36,
+      "relHeight": 5.46,
+      "relSide": -2.02
+    }
+  },
+  "Curveball": {
+    "D1": {
+      "relSpeed": 77.8,
+      "ivb": -9.2,
+      "hb": -8.6,
+      "spinRate": 2419.0,
+      "extension": 5.46,
+      "relHeight": 5.92,
+      "relSide": -1.48
+    },
+    "D2": {
+      "relSpeed": 74.9,
+      "ivb": -6.7,
+      "hb": -8.4,
+      "spinRate": 2289.0,
+      "extension": 5.39,
+      "relHeight": 5.95,
+      "relSide": -1.38
+    },
+    "D3": {
+      "relSpeed": 72.3,
+      "ivb": -6.0,
+      "hb": -9.8,
+      "spinRate": 2211.0,
+      "extension": 5.38,
+      "relHeight": 5.87,
+      "relSide": -1.43
+    },
+    "JUCO": {
+      "relSpeed": 74.9,
+      "ivb": -6.6,
+      "hb": -8.5,
+      "spinRate": 2271.0,
+      "extension": 5.6,
+      "relHeight": 5.92,
+      "relSide": -1.44
+    },
+    "NAIA": {
+      "relSpeed": 74.4,
+      "ivb": -6.6,
+      "hb": -8.2,
+      "spinRate": 2278.0,
+      "extension": 5.45,
+      "relHeight": 5.87,
+      "relSide": -1.52
+    },
+    "AAA": {
+      "relSpeed": 80.0,
+      "ivb": -10.2,
+      "hb": -9.5,
+      "spinRate": 2457.0,
+      "extension": 6.34,
+      "relHeight": 5.9,
+      "relSide": -1.65
+    },
+    "MLB": {
+      "relSpeed": 80.8,
+      "ivb": -10.0,
+      "hb": -9.2,
+      "spinRate": 2605.0,
+      "extension": 6.39,
+      "relHeight": 5.9,
+      "relSide": -1.7
+    }
+  },
+  "ChangeUp": {
+    "D1": {
+      "relSpeed": 81.8,
+      "ivb": 6.2,
+      "hb": 13.3,
+      "spinRate": 1706.0,
+      "extension": 5.93,
+      "relHeight": 5.63,
+      "relSide": -1.74
+    },
+    "D2": {
+      "relSpeed": 79.1,
+      "ivb": 6.5,
+      "hb": 12.7,
+      "spinRate": 1631.0,
+      "extension": 5.89,
+      "relHeight": 5.59,
+      "relSide": -1.74
+    },
+    "D3": {
+      "relSpeed": 77.0,
+      "ivb": 6.9,
+      "hb": 12.2,
+      "spinRate": 1632.0,
+      "extension": 5.91,
+      "relHeight": 5.54,
+      "relSide": -1.62
+    },
+    "JUCO": {
+      "relSpeed": 79.3,
+      "ivb": 6.6,
+      "hb": 10.8,
+      "spinRate": 1704.0,
+      "extension": 5.94,
+      "relHeight": 5.55,
+      "relSide": -1.72
+    },
+    "NAIA": {
+      "relSpeed": 78.5,
+      "ivb": 6.6,
+      "hb": 12.2,
+      "spinRate": 1704.0,
+      "extension": 5.91,
+      "relHeight": 5.54,
+      "relSide": -1.67
+    },
+    "AAA": {
+      "relSpeed": 84.7,
+      "ivb": 4.4,
+      "hb": 13.9,
+      "spinRate": 1737.0,
+      "extension": 6.36,
+      "relHeight": 5.62,
+      "relSide": -1.6
+    },
+    "MLB": {
+      "relSpeed": 86.7,
+      "ivb": 4.0,
+      "hb": 14.4,
+      "spinRate": 1800.0,
+      "extension": 6.46,
+      "relHeight": 5.57,
+      "relSide": -1.74
+    }
+  },
+  "Splitter": {
+    "D1": {
+      "relSpeed": 81.5,
+      "ivb": 4.8,
+      "hb": 9.0,
+      "spinRate": 1330.0,
+      "extension": 5.73,
+      "relHeight": 5.92,
+      "relSide": -1.58
+    },
+    "D2": {
+      "relSpeed": 78.1,
+      "ivb": 4.5,
+      "hb": 8.7,
+      "spinRate": 1368.0,
+      "extension": 5.59,
+      "relHeight": 5.95,
+      "relSide": -1.48
+    },
+    "D3": {
+      "relSpeed": 76.5,
+      "ivb": 5.5,
+      "hb": 8.4,
+      "spinRate": 1323.0,
+      "extension": 5.67,
+      "relHeight": 5.86,
+      "relSide": -1.22
+    },
+    "JUCO": {
+      "relSpeed": 80.0,
+      "ivb": 4.8,
+      "hb": 7.9,
+      "spinRate": 1316.0,
+      "extension": 5.8,
+      "relHeight": 5.98,
+      "relSide": -1.25
+    },
+    "NAIA": {
+      "relSpeed": 78.1,
+      "ivb": 5.2,
+      "hb": 8.1,
+      "spinRate": 1433.0,
+      "extension": 5.56,
+      "relHeight": 5.79,
+      "relSide": -1.25
+    },
+    "AAA": {
+      "relSpeed": 85.3,
+      "ivb": 3.0,
+      "hb": 10.2,
+      "spinRate": 1344.0,
+      "extension": 6.4,
+      "relHeight": 5.95,
+      "relSide": -1.59
+    },
+    "MLB": {
+      "relSpeed": 86.7,
+      "ivb": 3.0,
+      "hb": 11.2,
+      "spinRate": 1367.0,
+      "extension": 6.59,
+      "relHeight": 5.68,
+      "relSide": -1.63
+    }
+  }
+}

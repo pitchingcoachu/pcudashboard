@@ -1,0 +1,513 @@
+{
+  "Cutter": {
+    "D1": {
+      "fastball": {
+        "relSpeed": 90.4,
+        "ivb": 15.2,
+        "hb": 9.7
+      },
+      "sinker": {
+        "relSpeed": 90.1,
+        "ivb": 9.2,
+        "hb": 15.3
+      }
+    },
+    "D2": {
+      "fastball": {
+        "relSpeed": 86.8,
+        "ivb": 14.4,
+        "hb": 10.1
+      },
+      "sinker": {
+        "relSpeed": 86.0,
+        "ivb": 8.7,
+        "hb": 16.4
+      }
+    },
+    "D3": {
+      "fastball": {
+        "relSpeed": 84.5,
+        "ivb": 14.1,
+        "hb": 7.8
+      },
+      "sinker": {
+        "relSpeed": 84.1,
+        "ivb": 14.8,
+        "hb": 12.3
+      }
+    },
+    "JUCO": {
+      "fastball": {
+        "relSpeed": 87.8,
+        "ivb": 13.6,
+        "hb": 10.2
+      },
+      "sinker": {
+        "relSpeed": 87.4,
+        "ivb": 7.3,
+        "hb": 15.7
+      }
+    },
+    "NAIA": {
+      "fastball": {
+        "relSpeed": 85.7,
+        "ivb": 14.3,
+        "hb": 8.5
+      },
+      "sinker": {
+        "relSpeed": 85.2,
+        "ivb": 8.0,
+        "hb": 13.0
+      }
+    },
+    "AAA": {
+      "fastball": {
+        "relSpeed": 94.2,
+        "ivb": 15.5,
+        "hb": 7.4
+      },
+      "sinker": {
+        "relSpeed": 93.2,
+        "ivb": 7.5,
+        "hb": 15.1
+      }
+    },
+    "MLB": {
+      "fastball": {
+        "relSpeed": 94.4,
+        "ivb": 15.3,
+        "hb": 7.5
+      },
+      "sinker": {
+        "relSpeed": 93.9,
+        "ivb": 9.1,
+        "hb": 14.5
+      }
+    }
+  },
+  "Slider": {
+    "D1": {
+      "fastball": {
+        "relSpeed": 89.9,
+        "ivb": 14.8,
+        "hb": 10.7
+      },
+      "sinker": {
+        "relSpeed": 89.5,
+        "ivb": 9.2,
+        "hb": 15.6
+      }
+    },
+    "D2": {
+      "fastball": {
+        "relSpeed": 86.5,
+        "ivb": 14.1,
+        "hb": 11.0
+      },
+      "sinker": {
+        "relSpeed": 84.9,
+        "ivb": 7.9,
+        "hb": 15.2
+      }
+    },
+    "D3": {
+      "fastball": {
+        "relSpeed": 84.3,
+        "ivb": 13.0,
+        "hb": 11.2
+      },
+      "sinker": {
+        "relSpeed": 84.0,
+        "ivb": 11.5,
+        "hb": 14.2
+      }
+    },
+    "JUCO": {
+      "fastball": {
+        "relSpeed": 86.8,
+        "ivb": 13.8,
+        "hb": 11.0
+      },
+      "sinker": {
+        "relSpeed": 85.2,
+        "ivb": 5.1,
+        "hb": 14.3
+      }
+    },
+    "NAIA": {
+      "fastball": {
+        "relSpeed": 86.0,
+        "ivb": 15.0,
+        "hb": 11.0
+      },
+      "sinker": {
+        "relSpeed": 85.5,
+        "ivb": 8.6,
+        "hb": 14.7
+      }
+    },
+    "AAA": {
+      "fastball": {
+        "relSpeed": 94.6,
+        "ivb": 15.6,
+        "hb": 7.8
+      },
+      "sinker": {
+        "relSpeed": 94.6,
+        "ivb": 9.0,
+        "hb": 15.0
+      }
+    },
+    "MLB": {
+      "fastball": {
+        "relSpeed": 95.3,
+        "ivb": 15.5,
+        "hb": 7.4
+      },
+      "sinker": {
+        "relSpeed": 94.6,
+        "ivb": 9.5,
+        "hb": 14.5
+      }
+    }
+  },
+  "Sweeper": {
+    "D1": {
+      "fastball": {
+        "relSpeed": 90.6,
+        "ivb": 13.3,
+        "hb": 11.4
+      },
+      "sinker": {
+        "relSpeed": 89.9,
+        "ivb": 7.9,
+        "hb": 16.4
+      }
+    },
+    "D2": {
+      "fastball": {
+        "relSpeed": 87.0,
+        "ivb": 13.5,
+        "hb": 12.4
+      },
+      "sinker": {
+        "relSpeed": 84.3,
+        "ivb": 11.4,
+        "hb": 14.5
+      }
+    },
+    "D3": {
+      "fastball": {
+        "relSpeed": 84.8,
+        "ivb": 11.2,
+        "hb": 11.0
+      },
+      "sinker": {
+        "relSpeed": 87.5,
+        "ivb": 9.9,
+        "hb": 14.9
+      }
+    },
+    "JUCO": {
+      "fastball": {
+        "relSpeed": 85.6,
+        "ivb": 14.1,
+        "hb": 8.4
+      }
+    },
+    "NAIA": {
+      "fastball": {
+        "relSpeed": 84.7,
+        "ivb": 13.4,
+        "hb": 9.7
+      },
+      "sinker": {
+        "relSpeed": 82.3,
+        "ivb": 8.8,
+        "hb": 8.1
+      }
+    },
+    "AAA": {
+      "fastball": {
+        "relSpeed": 93.9,
+        "ivb": 13.9,
+        "hb": 9.4
+      },
+      "sinker": {
+        "relSpeed": 93.2,
+        "ivb": 6.6,
+        "hb": 15.4
+      }
+    },
+    "MLB": {
+      "fastball": {
+        "relSpeed": 94.6,
+        "ivb": 14.4,
+        "hb": 7.9
+      },
+      "sinker": {
+        "relSpeed": 94.1,
+        "ivb": 7.5,
+        "hb": 15.1
+      }
+    }
+  },
+  "Curveball": {
+    "D1": {
+      "fastball": {
+        "relSpeed": 90.1,
+        "ivb": 16.6,
+        "hb": 9.1
+      },
+      "sinker": {
+        "relSpeed": 89.8,
+        "ivb": 10.6,
+        "hb": 14.9
+      }
+    },
+    "D2": {
+      "fastball": {
+        "relSpeed": 86.6,
+        "ivb": 16.1,
+        "hb": 8.9
+      },
+      "sinker": {
+        "relSpeed": 84.0,
+        "ivb": 9.8,
+        "hb": 16.4
+      }
+    },
+    "D3": {
+      "fastball": {
+        "relSpeed": 83.7,
+        "ivb": 15.2,
+        "hb": 9.1
+      },
+      "sinker": {
+        "relSpeed": 84.9,
+        "ivb": 13.9,
+        "hb": 13.6
+      }
+    },
+    "JUCO": {
+      "fastball": {
+        "relSpeed": 87.0,
+        "ivb": 15.5,
+        "hb": 9.4
+      },
+      "sinker": {
+        "relSpeed": 86.2,
+        "ivb": 9.3,
+        "hb": 14.5
+      }
+    },
+    "NAIA": {
+      "fastball": {
+        "relSpeed": 86.0,
+        "ivb": 16.6,
+        "hb": 9.5
+      },
+      "sinker": {
+        "relSpeed": 84.5,
+        "ivb": 9.9,
+        "hb": 13.5
+      }
+    },
+    "AAA": {
+      "fastball": {
+        "relSpeed": 94.2,
+        "ivb": 15.5,
+        "hb": 6.9
+      },
+      "sinker": {
+        "relSpeed": 93.8,
+        "ivb": 9.1,
+        "hb": 14.1
+      }
+    },
+    "MLB": {
+      "fastball": {
+        "relSpeed": 94.7,
+        "ivb": 15.5,
+        "hb": 7.4
+      },
+      "sinker": {
+        "relSpeed": 94.1,
+        "ivb": 9.5,
+        "hb": 14.6
+      }
+    }
+  },
+  "ChangeUp": {
+    "D1": {
+      "fastball": {
+        "relSpeed": 89.7,
+        "ivb": 15.5,
+        "hb": 11.5
+      },
+      "sinker": {
+        "relSpeed": 89.2,
+        "ivb": 9.8,
+        "hb": 16.1
+      }
+    },
+    "D2": {
+      "fastball": {
+        "relSpeed": 86.4,
+        "ivb": 14.4,
+        "hb": 11.7
+      },
+      "sinker": {
+        "relSpeed": 85.2,
+        "ivb": 8.4,
+        "hb": 15.7
+      }
+    },
+    "D3": {
+      "fastball": {
+        "relSpeed": 84.1,
+        "ivb": 14.1,
+        "hb": 11.8
+      },
+      "sinker": {
+        "relSpeed": 84.6,
+        "ivb": 11.5,
+        "hb": 14.7
+      }
+    },
+    "JUCO": {
+      "fastball": {
+        "relSpeed": 86.6,
+        "ivb": 14.4,
+        "hb": 11.5
+      },
+      "sinker": {
+        "relSpeed": 85.0,
+        "ivb": 5.1,
+        "hb": 15.2
+      }
+    },
+    "NAIA": {
+      "fastball": {
+        "relSpeed": 85.8,
+        "ivb": 14.9,
+        "hb": 12.0
+      },
+      "sinker": {
+        "relSpeed": 85.6,
+        "ivb": 9.2,
+        "hb": 15.3
+      }
+    },
+    "AAA": {
+      "fastball": {
+        "relSpeed": 93.4,
+        "ivb": 15.4,
+        "hb": 8.5
+      },
+      "sinker": {
+        "relSpeed": 92.5,
+        "ivb": 8.0,
+        "hb": 14.9
+      }
+    },
+    "MLB": {
+      "fastball": {
+        "relSpeed": 94.3,
+        "ivb": 15.3,
+        "hb": 8.2
+      },
+      "sinker": {
+        "relSpeed": 93.9,
+        "ivb": 8.7,
+        "hb": 15.0
+      }
+    }
+  },
+  "Splitter": {
+    "D1": {
+      "fastball": {
+        "relSpeed": 90.2,
+        "ivb": 17.0,
+        "hb": 10.1
+      },
+      "sinker": {
+        "relSpeed": 88.9,
+        "ivb": 9.9,
+        "hb": 15.4
+      }
+    },
+    "D2": {
+      "fastball": {
+        "relSpeed": 86.5,
+        "ivb": 16.7,
+        "hb": 10.8
+      },
+      "sinker": {
+        "relSpeed": 85.7,
+        "ivb": 12.4,
+        "hb": 14.2
+      }
+    },
+    "D3": {
+      "fastball": {
+        "relSpeed": 83.8,
+        "ivb": 16.1,
+        "hb": 10.7
+      },
+      "sinker": {
+        "relSpeed": 82.0,
+        "ivb": 14.0,
+        "hb": 12.5
+      }
+    },
+    "JUCO": {
+      "fastball": {
+        "relSpeed": 88.0,
+        "ivb": 15.8,
+        "hb": 10.3
+      },
+      "sinker": {
+        "relSpeed": 77.5,
+        "ivb": -1.8,
+        "hb": 10.2
+      }
+    },
+    "NAIA": {
+      "fastball": {
+        "relSpeed": 86.0,
+        "ivb": 16.1,
+        "hb": 8.5
+      },
+      "sinker": {
+        "relSpeed": 85.5,
+        "ivb": 8.5,
+        "hb": 10.3
+      }
+    },
+    "AAA": {
+      "fastball": {
+        "relSpeed": 94.0,
+        "ivb": 16.5,
+        "hb": 7.4
+      },
+      "sinker": {
+        "relSpeed": 94.2,
+        "ivb": 8.8,
+        "hb": 16.3
+      }
+    },
+    "MLB": {
+      "fastball": {
+        "relSpeed": 94.9,
+        "ivb": 16.0,
+        "hb": 8.4
+      },
+      "sinker": {
+        "relSpeed": 94.3,
+        "ivb": 10.4,
+        "hb": 14.6
+      }
+    }
+  }
+}
