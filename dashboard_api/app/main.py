@@ -22,6 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import get_settings
 from .db import get_conn
 from . import stuff2
+from . import command
 from .schemas import (
     HittingAbReportResponse,
     PitchingAbReportResponse,
@@ -3251,6 +3252,7 @@ ALL_TABLE_COLUMNS: List[str] = [
     "BatSpeed",
     "MaxBatSpeed",
     "Stuff+",
+    "Command+",
     "Ctrl+",
     "QP+",
     "RV/100",
@@ -3916,6 +3918,26 @@ def _build_dynamic_table(
             })
         return out
 
+    def _command_rows_from_raw(raw_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for r in raw_rows:
+            pt = r.get("pitch_type")
+            if pt not in command.PITCH_TYPES:
+                continue
+            is_lefty = r.get("is_lefty")
+            if is_lefty is None:
+                is_lefty = str(r.get("pitcherthrows") or "").strip().upper().startswith("L")
+            out.append({
+                "pitch_type": pt,
+                "plate_side": r.get("plate_side"),
+                "plate_height": r.get("plate_height"),
+                "is_lefty": bool(is_lefty),
+                "balls": r.get("balls_num"),
+                "strikes": r.get("strikes_num"),
+                "batterside": r.get("batterside"),
+            })
+        return out
+
     # Stuff+ 2.0: for the "Pitch Types" split, computed ONCE globally across
     # ALL rows passed to this table -- each split group there is a single
     # pitch type and needs the full arsenal to find its own fastball/sinker
@@ -3932,6 +3954,21 @@ def _build_dynamic_table(
         )
     except Exception:
         stuff2_global_by_type = {}
+
+    # Command+ mirrors Stuff+ 2.0's exact per-split-type/per-pitcher pooling
+    # logic above -- same reasoning applies (a "Pitch Types" split needs the
+    # full arsenal computed once globally; per-pitcher splits compute their
+    # own map just-in-time per pitcher below). Reuses the SAME stuff2_level
+    # value/dropdown as Stuff+ 2.0 -- both models share an identical LEVELS
+    # set (D1/D2/D3/JUCO/NAIA/AAA/MLB), so there's no need for a second,
+    # separate level selector just for Command+.
+    try:
+        command_global_by_type = (
+            {} if stuff2_split_is_per_pitcher
+            else command.compute_command_by_pitch_type(_command_rows_from_raw(rows), stuff2_level or "D1")
+        )
+    except Exception:
+        command_global_by_type = {}
 
     def _row_for_group(key: str, grp: List[Dict[str, Any]]) -> Dict[str, Any]:
         n = len(grp)
@@ -4609,6 +4646,18 @@ def _build_dynamic_table(
             for r in grp
             if str(r.get("pitch_type") or "") in stuff2_lookup
         ]
+
+        # Command+: identical lookup pattern to Stuff+ immediately above.
+        command_lookup = (
+            command.compute_command_by_pitch_type(_command_rows_from_raw(grp), stuff2_level or "D1")
+            if stuff2_split_is_per_pitcher
+            else command_global_by_type
+        )
+        command_vals: List[float] = [
+            command_lookup[str(r.get("pitch_type") or "")]
+            for r in grp
+            if str(r.get("pitch_type") or "") in command_lookup
+        ]
         fps_opp = sum(1 for r in grp if _is_competitive_row(r) and r.get("balls_num") == 0 and r.get("strikes_num") == 0)
         fps_yes = sum(
             1
@@ -4959,6 +5008,7 @@ def _build_dynamic_table(
                 else None
             ),
             "Stuff+": round(sum(float(v) for v in stuff2_vals) / len(stuff2_vals), 1) if stuff2_vals else None,
+            "Command+": round(sum(float(v) for v in command_vals) / len(command_vals), 1) if command_vals else None,
             "Ctrl+": ctrl_plus,
             "QP+": round((qp_mean * 200.0), 1) if _is_num(qp_mean) else None,
             "RV/100": round(rv100, 1) if _is_num(rv100) else None,
@@ -5126,7 +5176,7 @@ def _build_dynamic_table(
         "Banny": [split_col_name, "#", "Usage", "Velo", "Max", "IVB", "HB", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
         "Hitting Results": [split_col_name, "PA", "AB", "AVG", "SLG", "OBP", "OPS", "wOBA", "xWOBA", "ISO", "xISO", "BABIP", "Swing%", "FPS(FB)%", "FPS(OS)%", "Whiff%", "GB%", "K%", "BB%", "Barrel%", "EV", "LA"],
         "Swing Metrics": [split_col_name, "VertAttack", "HorzAttack", "BatSpeed", "MaxBatSpeed", "EV", "MaxEV", "LA"],
-        "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
+        "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+", "Command+"],
         "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
         "Usage": [split_col_name, "#", "Usage", "0-0", "Behind", "Even", "Ahead", "<2K", "2K"],
         "Pitch Usage": _pitch_usage_mode_columns(split_col_name),
@@ -8527,7 +8577,8 @@ def _refresh_league_daily_rollup(
                   bf_n, k_n, bb_n, hbp_n, single_n, double_n, triple_n, hr_n, sf_n,
                   rel_height_sum, rel_height_n, rel_side_sum, rel_side_n, ext_sum, ext_n,
                   spin_eff_sum, spin_eff_n, xivb_sum, xhb_sum, expected_move_n, divb_sum, dhb_sum, tilt_dev_minutes_sum, tilt_dev_n,
-                  vaa_sum, vaa_n, nvaa_sum, nvaa_n, haa_sum, haa_n, r_tilt_x_sum, r_tilt_y_sum, r_tilt_n, r_tilt_sample
+                  vaa_sum, vaa_n, nvaa_sum, nvaa_n, haa_sum, haa_n, r_tilt_x_sum, r_tilt_y_sum, r_tilt_n, r_tilt_sample,
+                  plate_side_sum, plate_side_n, plate_height_sum, plate_height_n, balls_sum, strikes_sum
                 )
                 SELECT
                   %(school_code)s::text,
@@ -8691,7 +8742,13 @@ def _refresh_league_daily_rollup(
                   SUM(CASE WHEN b.release_tilt_deg IS NOT NULL THEN COS(RADIANS(b.release_tilt_deg)) ELSE 0.0 END)::double precision AS r_tilt_x_sum,
                   SUM(CASE WHEN b.release_tilt_deg IS NOT NULL THEN SIN(RADIANS(b.release_tilt_deg)) ELSE 0.0 END)::double precision AS r_tilt_y_sum,
                   SUM(CASE WHEN b.release_tilt_deg IS NOT NULL THEN 1 ELSE 0 END)::int AS r_tilt_n,
-                  COALESCE(MIN(NULLIF(b.release_tilt, '')), '') AS r_tilt_sample
+                  COALESCE(MIN(NULLIF(b.release_tilt, '')), '') AS r_tilt_sample,
+                  COALESCE(SUM(b.plate_side), 0.0)::double precision AS plate_side_sum,
+                  COUNT(b.plate_side)::int AS plate_side_n,
+                  COALESCE(SUM(b.plate_height), 0.0)::double precision AS plate_height_sum,
+                  COUNT(b.plate_height)::int AS plate_height_n,
+                  COALESCE(SUM(b.balls_num), 0.0)::double precision AS balls_sum,
+                  COALESCE(SUM(b.strikes_num), 0.0)::double precision AS strikes_sum
                 FROM base b
                 WHERE b.pitch_type <> 'Undefined'
                 GROUP BY
@@ -9074,7 +9131,8 @@ def _refresh_league_daily_rollup(
                   bf_n, k_n, bb_n, hbp_n, single_n, double_n, triple_n, hr_n, sf_n,
                   rel_height_sum, rel_height_n, rel_side_sum, rel_side_n, ext_sum, ext_n,
                   spin_eff_sum, spin_eff_n, xivb_sum, xhb_sum, expected_move_n, divb_sum, dhb_sum, tilt_dev_minutes_sum, tilt_dev_n,
-                  vaa_sum, vaa_n, nvaa_sum, nvaa_n, haa_sum, haa_n, r_tilt_x_sum, r_tilt_y_sum, r_tilt_n, r_tilt_sample
+                  vaa_sum, vaa_n, nvaa_sum, nvaa_n, haa_sum, haa_n, r_tilt_x_sum, r_tilt_y_sum, r_tilt_n, r_tilt_sample,
+                  plate_side_sum, plate_side_n, plate_height_sum, plate_height_n, balls_sum, strikes_sum
                 )
                 SELECT
                   %(school_code)s::text,
@@ -9229,7 +9287,13 @@ def _refresh_league_daily_rollup(
                   SUM(CASE WHEN e.release_tilt_deg IS NOT NULL THEN COS(RADIANS(e.release_tilt_deg)) ELSE 0.0 END)::double precision AS r_tilt_x_sum,
                   SUM(CASE WHEN e.release_tilt_deg IS NOT NULL THEN SIN(RADIANS(e.release_tilt_deg)) ELSE 0.0 END)::double precision AS r_tilt_y_sum,
                   SUM(CASE WHEN e.release_tilt_deg IS NOT NULL THEN 1 ELSE 0 END)::int AS r_tilt_n,
-                  COALESCE(MIN(NULLIF(e.release_tilt, '')), '') AS r_tilt_sample
+                  COALESCE(MIN(NULLIF(e.release_tilt, '')), '') AS r_tilt_sample,
+                  COALESCE(SUM(e.plate_side), 0.0)::double precision AS plate_side_sum,
+                  COUNT(e.plate_side)::int AS plate_side_n,
+                  COALESCE(SUM(e.plate_height), 0.0)::double precision AS plate_height_sum,
+                  COUNT(e.plate_height)::int AS plate_height_n,
+                  COALESCE(SUM(e.balls_num), 0.0)::double precision AS balls_sum,
+                  COALESCE(SUM(e.strikes_num), 0.0)::double precision AS strikes_sum
                 FROM expanded e
                 GROUP BY
                   e.session_date, e.split_group, e.split_value, (CASE WHEN e.split_group IN ('After Count', 'Game') THEN 'All' ELSE e.pitch_type END), e.pitcher_norm, e.batter_norm, e.catcher_norm,
@@ -9885,6 +9949,59 @@ def _stuff2_by_type_from_rollup_rows(rows: List[Dict[str, Any]], level: str) -> 
         return {}
 
 
+def _command_by_type_from_rollup_rows(rows: List[Dict[str, Any]], level: str) -> Dict[str, float]:
+    """Command+ variant of _stuff2_by_type_from_rollup_rows: unlike Stuff+
+    2.0 (pitch SHAPE, safely averaged down to one row per pitch type),
+    Command+ needs count and batter hand preserved per bucket -- those are
+    literal model features, not just informational splits, so this builds
+    ONE bucket per distinct rollup row (each row is already scoped to a
+    single pitcher hand / batter hand / exact-or-average count -- see the
+    plate_side_sum/plate_side_n/plate_height_sum/plate_height_n columns
+    added alongside the existing shape sums) rather than pooling rows
+    together first, and lets compute_command_from_rollup_averages's
+    pitch-count-weighted averaging do the pooling per pitch type."""
+    try:
+        buckets: List[Dict[str, Any]] = []
+        for row in rows:
+            pt = row.get("pitch_type")
+            if not pt or pt == "Undefined":
+                continue
+            plate_side_n = int(row.get("plate_side_n") or 0)
+            plate_height_n = int(row.get("plate_height_n") or 0)
+            if plate_side_n <= 0 or plate_height_n <= 0:
+                continue
+            plate_side = float(row.get("plate_side_sum") or 0.0) / plate_side_n
+            plate_height = float(row.get("plate_height_sum") or 0.0) / plate_height_n
+            # PRO rollup rows already group by exact balls_num/strikes_num
+            # (so each row IS one count); LEAGUE rollup rows only carry
+            # balls_sum/strikes_sum (an average count per bucket) -- prefer
+            # the exact value when present, fall back to the average.
+            balls_num = row.get("balls_num")
+            strikes_num = row.get("strikes_num")
+            pitches_n = int(row.get("pitches") or 0)
+            if balls_num is not None and int(balls_num) >= 0 and strikes_num is not None and int(strikes_num) >= 0:
+                balls = float(balls_num)
+                strikes = float(strikes_num)
+            elif pitches_n > 0 and row.get("balls_sum") is not None and row.get("strikes_sum") is not None:
+                balls = float(row.get("balls_sum") or 0.0) / pitches_n
+                strikes = float(row.get("strikes_sum") or 0.0) / pitches_n
+            else:
+                continue
+            buckets.append({
+                "pitch_type": pt,
+                "plate_side": plate_side,
+                "plate_height": plate_height,
+                "is_lefty": str(row.get("pitcherthrows_norm") or "").strip().lower() == "left",
+                "balls": balls,
+                "strikes": strikes,
+                "batterside": row.get("batterside_norm"),
+                "weight": min(plate_side_n, plate_height_n),
+            })
+        return command.compute_command_from_rollup_averages(buckets, level)
+    except Exception:
+        return {}
+
+
 def _try_pitching_overview_daily_rollup(
     *,
     school_code: str,
@@ -9992,6 +10109,7 @@ def _try_pitching_overview_daily_rollup(
         "EV",
         "LA",
         "Stuff+",
+        "Command+",
         "Ctrl+",
         "QP+",
         "RV/100",
@@ -10179,7 +10297,7 @@ def _try_pitching_overview_daily_rollup(
     mode_columns_map: Dict[str, List[str]] = {
         "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA", "Stuff+"],
         "Expected Movement": [split_col_name, "P", "Velo", "Max", "IVB", "xIVB", "dIVB", "HB", "xHB", "dHB", "MagAngle", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA"],
-        "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
+        "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+", "Command+"],
         "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
         "Banny": [split_col_name, "#", "Usage", "Velo", "Max", "IVB", "HB", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
         "Process": [split_col_name, "#", "BF", "RV/100", "PV/100", "InZone%", "<2kInZone%", "2kInZone%", "Strike%", "<2Kstrike%", "2Kstrike%", "Comp%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "HR%"],
@@ -10794,6 +10912,10 @@ def _try_pitching_overview_daily_rollup(
         {} if stuff2_split_is_per_pitcher
         else _stuff2_by_type_from_rollup_rows([*grouped_rows, *base_shape_rows], stuff2_level_clean)
     )
+    command_global_by_type = (
+        {} if stuff2_split_is_per_pitcher
+        else _command_by_type_from_rollup_rows([*grouped_rows, *base_shape_rows], stuff2_level_clean)
+    )
 
     # Per-pitcher base_shape_rows, keyed by split_value, merged into each
     # pitcher's own rows_for_split below so their Fastball/Sinker base is
@@ -11032,6 +11154,29 @@ def _try_pitching_overview_daily_rollup(
                     stuff2_den += pt_pitches
             stuff2_avg_local = (stuff2_num / stuff2_den) if stuff2_den > 0 else None
 
+        # Command+: identical lookup pattern to Stuff+ immediately above.
+        command_avg_local: Optional[float] = None
+        if split_clean == "Pitch Types" and str(label) != "All":
+            command_avg_local = command_global_by_type.get(str(label), None)
+        else:
+            command_lookup = (
+                _command_by_type_from_rollup_rows(
+                    [*rows_for_split, *base_shape_rows_by_split.get(str(label), [])], stuff2_level_clean
+                )
+                if stuff2_split_is_per_pitcher
+                else command_global_by_type
+            )
+            command_num = 0.0
+            command_den = 0
+            for r in rows_for_split:
+                pt = str(r.get("pitch_type") or "")
+                pt_command = command_lookup.get(pt)
+                pt_pitches = int(r.get("pitches") or 0)
+                if _is_num(pt_command) and pt_pitches > 0:
+                    command_num += float(pt_command) * pt_pitches
+                    command_den += pt_pitches
+            command_avg_local = (command_num / command_den) if command_den > 0 else None
+
         return {
             split_col_name: label,
             "#": pitches,
@@ -11069,6 +11214,7 @@ def _try_pitching_overview_daily_rollup(
             "nVAA": round(avg_nvaa_local, 4) if _is_num(avg_nvaa_local) else None,
             "HAA": round(avg_haa_local, 4) if _is_num(avg_haa_local) else None,
             "Stuff+": round(float(stuff2_avg_local), 1) if _is_num(stuff2_avg_local) else None,
+            "Command+": round(float(command_avg_local), 1) if _is_num(command_avg_local) else None,
             "FPS%": _safe_pct(sum(int(r.get("fps_num") or 0) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
             "FPS(FB)%": _safe_pct(fps_fb_num, fps_fb_den),
             "FPS(OS)%": _safe_pct(fps_os_num, fps_os_den),
@@ -11342,7 +11488,7 @@ def _try_pitching_overview_daily_rollup(
     mode_columns_map: Dict[str, List[str]] = {
         "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA", "Stuff+"],
         "Expected Movement": [split_col_name, "P", "Velo", "Max", "IVB", "xIVB", "dIVB", "HB", "xHB", "dHB", "MagAngle", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA"],
-        "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
+        "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+", "Command+"],
         "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
         "Banny": [split_col_name, "#", "Usage", "Velo", "Max", "IVB", "HB", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
         "Process": [split_col_name, "#", "BF", "RV/100", "PV/100", "InZone%", "<2kInZone%", "2kInZone%", "Strike%", "<2Kstrike%", "2Kstrike%", "Comp%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "HR%"],
@@ -11761,7 +11907,8 @@ def _refresh_pro_daily_rollup(
                   rv_sum, pv_sum,
                   count_00_n, count_behind_n, count_even_n, count_ahead_n, count_lt2k_n, count_2k_n,
                   xwoba_sum, xwoba_n, woba_sum, woba_n,
-                  official_er_w_sum, official_outs_w_sum
+                  official_er_w_sum, official_outs_w_sum,
+                  plate_side_sum, plate_side_n, plate_height_sum, plate_height_n
                 )
                 SELECT
                   school_code, session_date, sport_id, level_bucket, pitch_type,
@@ -11950,7 +12097,11 @@ def _refresh_pro_daily_rollup(
                       END
                     ),
                     0.0
-                  )::double precision AS official_outs_w_sum
+                  )::double precision AS official_outs_w_sum,
+                  COALESCE(SUM(plate_side), 0.0)::double precision AS plate_side_sum,
+                  COUNT(plate_side)::int AS plate_side_n,
+                  COALESCE(SUM(plate_height), 0.0)::double precision AS plate_height_sum,
+                  COUNT(plate_height)::int AS plate_height_n
                 FROM staged staged
                 GROUP BY
                   school_code, session_date, sport_id, level_bucket, pitch_type,
@@ -12336,7 +12487,8 @@ def _refresh_pro_daily_rollup(
                   rv_sum, pv_sum,
                   count_00_n, count_behind_n, count_even_n, count_ahead_n, count_lt2k_n, count_2k_n,
                   xwoba_sum, xwoba_n, woba_sum, woba_n,
-                  official_er_w_sum, official_outs_w_sum
+                  official_er_w_sum, official_outs_w_sum,
+                  plate_side_sum, plate_side_n, plate_height_sum, plate_height_n
                 )
                 SELECT
                   school_code, session_date, sport_id, level_bucket, split_group, split_value,
@@ -12484,7 +12636,11 @@ def _refresh_pro_daily_rollup(
                       END
                     ),
                     0.0
-                  )::double precision AS official_outs_w_sum
+                  )::double precision AS official_outs_w_sum,
+                  COALESCE(SUM(plate_side), 0.0)::double precision AS plate_side_sum,
+                  COUNT(plate_side)::int AS plate_side_n,
+                  COALESCE(SUM(plate_height), 0.0)::double precision AS plate_height_sum,
+                  COUNT(plate_height)::int AS plate_height_n
                 FROM expanded e
                 GROUP BY
                   school_code, session_date, sport_id, level_bucket, split_group, split_value,
@@ -12811,6 +12967,7 @@ def _try_pro_pitching_overview_rollup(
         "EV",
         "LA",
         "Stuff+",
+        "Command+",
         "Ctrl+",
         "QP+",
         "RV/100",
@@ -13317,7 +13474,7 @@ def _try_pro_pitching_overview_rollup(
     mode_columns_map: Dict[str, List[str]] = {
         "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA", "Stuff+"],
         "Expected Movement": [split_col_name, "P", "Velo", "Max", "IVB", "xIVB", "dIVB", "HB", "xHB", "dHB", "MagAngle", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA"],
-        "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
+        "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+", "Command+"],
         "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
         "Banny": [split_col_name, "#", "Usage", "Velo", "Max", "IVB", "HB", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
         "Process": [split_col_name, "#", "BF", "RV/100", "PV/100", "InZone%", "<2kInZone%", "2kInZone%", "Strike%", "<2Kstrike%", "2Kstrike%", "Comp%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "HR%"],
@@ -13463,6 +13620,10 @@ def _try_pro_pitching_overview_rollup(
         stuff2_global_by_type
         if stuff2_global_by_type
         else _stuff2_by_type_from_rollup_rows([*grouped_rows, *base_shape_rows], stuff2_level_clean)
+    )
+    command_global_by_type = (
+        {} if stuff2_split_is_per_pitcher
+        else _command_by_type_from_rollup_rows([*grouped_rows, *base_shape_rows], stuff2_level_clean)
     )
 
     # Per-pitcher base_shape_rows, keyed by split_value, merged into each
@@ -13726,6 +13887,29 @@ def _try_pro_pitching_overview_rollup(
                     stuff2_den += pt_pitches
             stuff2_avg_local = (stuff2_num / stuff2_den) if stuff2_den > 0 else None
 
+        # Command+: identical lookup pattern to Stuff+ immediately above.
+        command_avg_local: Optional[float] = None
+        if split_clean == "Pitch Types" and str(label) != "All":
+            command_avg_local = command_global_by_type.get(str(label), None)
+        else:
+            command_lookup = (
+                _command_by_type_from_rollup_rows(
+                    [*rows_for_split, *base_shape_rows_by_split.get(str(label), [])], stuff2_level_clean
+                )
+                if stuff2_split_is_per_pitcher
+                else command_global_by_type
+            )
+            command_num = 0.0
+            command_den = 0
+            for r in rows_for_split:
+                pt = str(r.get("pitch_type") or "")
+                pt_command = command_lookup.get(pt)
+                pt_pitches = int(r.get("pitches") or 0)
+                if _is_num(pt_command) and pt_pitches > 0:
+                    command_num += float(pt_command) * pt_pitches
+                    command_den += pt_pitches
+            command_avg_local = (command_num / command_den) if command_den > 0 else None
+
         fps_fb_num = sum(_fps_swing_count_from_rollup_row(r) for r in rows_for_split if _is_fastball_or_sinker_pitch_type(r.get("pitch_type")))
         fps_fb_den = sum(int(r.get("fps_den") or 0) for r in rows_for_split if _is_fastball_or_sinker_pitch_type(r.get("pitch_type")))
         fps_os_num = sum(_fps_swing_count_from_rollup_row(r) for r in rows_for_split if not _is_fastball_or_sinker_pitch_type(r.get("pitch_type")))
@@ -13881,6 +14065,7 @@ def _try_pro_pitching_overview_rollup(
             "nVAA": round(sum(float(r.get("nvaa_sum") or 0.0) for r in rows_for_split) / nvaa_n, 4) if nvaa_n > 0 else None,
             "HAA": round(sum(float(r.get("haa_sum") or 0.0) for r in rows_for_split) / haa_n, 4) if haa_n > 0 else None,
             "Stuff+": round(float(stuff2_avg_local), 1) if _is_num(stuff2_avg_local) else None,
+            "Command+": round(float(command_avg_local), 1) if _is_num(command_avg_local) else None,
             "FPS%": _safe_pct(sum(int(r.get("fps_num") or 0) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
             "FPS(FB)%": _safe_pct(fps_fb_num, fps_fb_den),
             "FPS(OS)%": _safe_pct(fps_os_num, fps_os_den),

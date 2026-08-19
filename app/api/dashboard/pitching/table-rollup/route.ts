@@ -290,7 +290,7 @@ type AggRow = {
   // dynamically like the sum/count fields above, not hand-typed here.
   [sepHandCountKey: `sep_${string}_left_n` | `sep_${string}_right_n`]: number;
 };
-type PlusMetricKey = 'Stuff+' | 'QP+' | 'Ctrl+';
+type PlusMetricKey = 'Stuff+' | 'Command+' | 'QP+' | 'Ctrl+';
 
 function toRate(n: number, d: number): number | null {
   if (!Number.isFinite(n) || !Number.isFinite(d) || d <= 0) return null;
@@ -453,6 +453,12 @@ function toCell(metric: string, row: AggRow): number | string {
     }
   }
   if (metric === 'Stuff+') return stuffPlusN > 0 ? Number((stuffPlusSum / stuffPlusN).toFixed(1)) : '-';
+  // Command+ has no native rollup SQL computation at all (unlike Stuff+,
+  // which has always-zero sum/n placeholders above) -- it's only ever
+  // populated by the hybrid /v1/pitching/overview merge below. This
+  // placeholder just ensures the column renders something before that
+  // merge runs (or if it fails/is unavailable).
+  if (metric === 'Command+') return '-';
   if (metric === 'QP+') return qpPlusN > 0 ? Number((qpPlusSum / qpPlusN).toFixed(1)) : '-';
   if (metric === 'Ctrl+') return ctrlPlusN > 0 ? Number((ctrlPlusSum / ctrlPlusN).toFixed(1)) : '-';
   if (metric === 'H') return h;
@@ -552,7 +558,7 @@ export async function GET(request: Request) {
   const pitchTypeSet = new Set(pitchTypes.map((value) => normalizePitchType(value).toLowerCase()).filter(Boolean));
   const columns = parseCsv(url.searchParams.get('custom_columns'));
   const defaultColumns = ['#', 'Velo', 'Max', 'IVB', 'HB', 'FPS%', 'E+A%', 'InZone%', 'Strike%', 'Whiff%', 'K%', 'BB%', 'HR%', 'QP+'];
-  const plusMetrics: PlusMetricKey[] = ['Stuff+', 'QP+', 'Ctrl+'].filter((metric) => columns.includes(metric)) as PlusMetricKey[];
+  const plusMetrics: PlusMetricKey[] = ['Stuff+', 'Command+', 'QP+', 'Ctrl+'].filter((metric) => columns.includes(metric)) as PlusMetricKey[];
   const supportedColumns = new Set([
     '#', 'P', 'PA', 'BF', 'AB', 'AVG', 'OBP', 'SLG', 'OPS', 'H', 'XBH', 'HR', 'HBP', 'BB', 'K', 'Whiffs',
     'Velo', 'Max', 'IVB', 'xIVB', 'dIVB', 'HB', 'xHB', 'dHB', 'Spin', 'Height', 'Side', 'Ext', 'rTilt', 'TiltDev',
@@ -560,7 +566,7 @@ export async function GET(request: Request) {
     'FPS(FB)%', 'FPS(OS)%',
     'Swing%', 'Whiff%', 'SwStrk%', 'GB%', 'K%', 'BB%', 'K-BB%', 'CSW%', 'Called-S%', 'Take%', 'Chase%',
     'EV', 'Barrel%', 'xWOBA', 'xISO', 'RV/100', 'PV/100',
-    'Stuff+', 'QP+', 'Ctrl+',
+    'Stuff+', 'Command+', 'QP+', 'Ctrl+',
     'ERA', 'FIP', 'xFIP', 'SIERA', 'WHIP',
     ...SEP_BASE_TYPES.flatMap((base) => SEP_PITCH_TYPES.flatMap((off) => [
       `${base.prefix}${off.abbr}ivbSEP`,

@@ -13237,3 +13237,15 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
   font-style: italic;
   color: var(--text-muted, #999);
 }
+
+/* PlayerRosterCards (app/portal/admin/clients/player-roster-cards.tsx) is a
+   mobile-only avatar-row alternative to the desktop <table> below it -- see
+   the matching rules in app/pearl-mobile.css, which show these cards (and
+   hide the table) only inside .portal-shell.portal-shell--viewmode-auto.
+   This page only loads globals.css, so without a base hide rule here the
+   cards render with no layout at all (unstyled links/spans collapse into a
+   single run-on line of text) instead of staying invisible on desktop. */
+.portal-roster-cards,
+.portal-roster-card {
+  display: none;
+}

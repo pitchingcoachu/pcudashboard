@@ -189,3 +189,82 @@ def compute_command_by_pitch_type(
         out[pitch_type] = _apply_calibration(avg_pred, level_cal)
 
     return out
+
+
+def compute_command_from_rollup_averages(
+    buckets: List[Dict[str, Any]],
+    level: str,
+) -> Dict[str, float]:
+    """Rollup-path variant of compute_command_by_pitch_type: instead of
+    scoring individual raw pitches, scores one representative "average
+    pitch" per (pitch_type, is_lefty, batter_hand, balls, strikes) bucket
+    from pre-aggregated rollup sums (see plate_side_sum/plate_side_n/
+    plate_height_sum/plate_height_n on pro_pitch_events_daily_rollup* and
+    pitch_events_daily_rollup_league*).
+
+    `buckets`: dicts with pitch_type, plate_side (already averaged),
+    plate_height (already averaged), is_lefty, balls, strikes, and
+    optionally batterside, weight (pitch count for this bucket -- used to
+    weight this bucket's prediction into the pitch type's overall average;
+    defaults to 1 if omitted).
+
+    Mirroring plate_side by pitcher hand is done the same way as the
+    per-pitch function -- safe here because each bucket is already scoped
+    to a single pitcher hand (mirroring a sum/average by one sign flip is
+    only equivalent to mirroring every pitch individually when hand is
+    constant within the bucket, which the rollup grouping guarantees)."""
+    if not buckets:
+        return {}
+    try:
+        _load()
+    except Exception:
+        return {}
+    if not _models or _calibration is None:
+        return {}
+
+    by_type: Dict[str, List[Dict[str, Any]]] = {}
+    for bucket in buckets:
+        pt = bucket.get("pitch_type")
+        if pt not in _models:
+            continue
+        by_type.setdefault(pt, []).append(bucket)
+
+    out: Dict[str, float] = {}
+    for pitch_type, type_buckets in by_type.items():
+        model = _models[pitch_type]
+        feature_rows: List[List[float]] = []
+        weights: List[float] = []
+        for bucket in type_buckets:
+            if not (
+                _is_num(bucket.get("plate_side"))
+                and _is_num(bucket.get("plate_height"))
+                and _is_num(bucket.get("balls"))
+                and _is_num(bucket.get("strikes"))
+            ):
+                continue
+            is_lefty = bool(bucket.get("is_lefty"))
+            plate_side = float(bucket["plate_side"])
+            plate_side_mirrored = -plate_side if not is_lefty else plate_side
+            plate_height = float(bucket["plate_height"])
+            edge_dist_h = _edge_distance(plate_side_mirrored, ZONE_LEFT, ZONE_RIGHT)
+            edge_dist_v = _edge_distance(plate_height, ZONE_BOTTOM, ZONE_TOP)
+            batter_hand_code = {"Left": -1, "Right": 1}.get(_norm_hand(bucket.get("batterside")), 0)
+            level_one_hot = [1 if level == lvl else 0 for lvl in LEVELS]
+            feats = [edge_dist_h, edge_dist_v, float(bucket["balls"]), float(bucket["strikes"])]
+            feature_rows.append(feats + [batter_hand_code] + level_one_hot)
+            weight = bucket.get("weight")
+            weights.append(float(weight) if _is_num(weight) and float(weight) > 0 else 1.0)
+
+        if not feature_rows:
+            continue
+
+        preds = model.predict(feature_rows)
+        total_weight = sum(weights)
+        avg_pred = float(sum(p * w for p, w in zip(preds, weights)) / total_weight) if total_weight > 0 else float(sum(preds) / len(preds))
+
+        level_cal = _level_calibration(pitch_type, level)
+        if level_cal is None:
+            continue
+        out[pitch_type] = _apply_calibration(avg_pred, level_cal)
+
+    return out
