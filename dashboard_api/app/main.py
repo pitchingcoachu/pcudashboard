@@ -15629,6 +15629,28 @@ def health() -> Dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/health/stuff2")
+def health_stuff2() -> Dict[str, Any]:
+    """Diagnostic-only: reports whether the Stuff+ 2.0 model files loaded
+    successfully, and the load error (if any) -- compute_stuff2_* normally
+    swallows load failures and just returns blank Stuff+ everywhere, with
+    no other visible trace, so this is the fastest way to confirm/rule out
+    a model-load problem in a given deployment."""
+    try:
+        stuff2._load()
+        return {
+            "available": True,
+            "models_loaded": sorted(stuff2._models.keys()),
+            "models_dir": stuff2._MODELS_DIR,
+        }
+    except Exception as exc:
+        return {
+            "available": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "models_dir": stuff2._MODELS_DIR,
+        }
+
+
 @app.head("/health")
 def health_head() -> Response:
     return Response(status_code=200)

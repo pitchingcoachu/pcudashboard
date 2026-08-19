@@ -28,11 +28,14 @@ calibration artifacts this module loads.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from typing import Any, Dict, List, Optional
 
 import xgboost as xgb
+
+logger = logging.getLogger("dashboard_api")
 
 _MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stuff2_models")
 
@@ -67,16 +70,28 @@ def _load() -> None:
     with _lock:
         if _calibration is not None and len(_models) == len(PITCH_TYPES):
             return
-        cal_path = os.path.join(_MODELS_DIR, "calibration.json")
-        with open(cal_path) as f:
-            _calibration = json.load(f)
-        for pitch_type in PITCH_TYPES:
-            model_path = os.path.join(_MODELS_DIR, f"{pitch_type.lower()}.json")
-            if not os.path.exists(model_path):
-                continue
-            model = xgb.XGBRegressor()
-            model.load_model(model_path)
-            _models[pitch_type] = model
+        try:
+            cal_path = os.path.join(_MODELS_DIR, "calibration.json")
+            with open(cal_path) as f:
+                _calibration = json.load(f)
+            for pitch_type in PITCH_TYPES:
+                model_path = os.path.join(_MODELS_DIR, f"{pitch_type.lower()}.json")
+                if not os.path.exists(model_path):
+                    logger.error("stuff2: model file missing: %s", model_path)
+                    continue
+                model = xgb.XGBRegressor()
+                model.load_model(model_path)
+                _models[pitch_type] = model
+        except Exception:
+            # Every caller of compute_stuff2_* treats a load failure as
+            # "no Stuff+ 2.0 data available" and silently renders blank
+            # rather than erroring the whole request -- that's the right
+            # behavior for callers, but it means a load failure (missing
+            # file, corrupt JSON, xgboost incompatibility, etc.) previously
+            # had NO visible trace anywhere. Log it loudly so a
+            # silent-everywhere-blank regression shows up in server logs.
+            logger.exception("stuff2: failed to load models from %s", _MODELS_DIR)
+            raise
 
 
 def is_available() -> bool:
