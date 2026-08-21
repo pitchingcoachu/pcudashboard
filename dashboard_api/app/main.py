@@ -9950,16 +9950,17 @@ def _stuff2_by_type_from_rollup_rows(rows: List[Dict[str, Any]], level: str) -> 
 
 
 def _command_by_type_from_rollup_rows(rows: List[Dict[str, Any]], level: str) -> Dict[str, float]:
-    """Command+ variant of _stuff2_by_type_from_rollup_rows: unlike Stuff+
-    2.0 (pitch SHAPE, safely averaged down to one row per pitch type),
-    Command+ needs count and batter hand preserved per bucket -- those are
-    literal model features, not just informational splits, so this builds
-    ONE bucket per distinct rollup row (each row is already scoped to a
-    single pitcher hand / batter hand / exact-or-average count -- see the
-    plate_side_sum/plate_side_n/plate_height_sum/plate_height_n columns
-    added alongside the existing shape sums) rather than pooling rows
-    together first, and lets compute_command_from_rollup_averages's
-    pitch-count-weighted averaging do the pooling per pitch type."""
+    """Command+ variant of _stuff2_by_type_from_rollup_rows: `rows` here are
+    ALREADY POOLED per (split_value, pitch_type) by the calling SQL query
+    (GROUP BY split_expr, pitch_type -- see _try_pro_pitching_overview_rollup
+    / _try_pitching_overview_daily_rollup), summing away individual counts
+    and pitcher hands the same way Stuff+ 2.0's rollup path already does.
+    This builds ONE averaged "representative pitch" bucket per pitch type
+    from those pooled sums (average location, average count, majority-vote
+    hand via left_n/right_n, neutral/"All" batter hand -- same approximation
+    compute_stuff2_from_rollup_averages already makes for pitch shape),
+    rather than one bucket per raw count/hand combo (that granularity does
+    not survive this level of SQL aggregation)."""
     try:
         buckets: List[Dict[str, Any]] = []
         for row in rows:
@@ -9972,34 +9973,263 @@ def _command_by_type_from_rollup_rows(rows: List[Dict[str, Any]], level: str) ->
                 continue
             plate_side = float(row.get("plate_side_sum") or 0.0) / plate_side_n
             plate_height = float(row.get("plate_height_sum") or 0.0) / plate_height_n
-            # PRO rollup rows already group by exact balls_num/strikes_num
-            # (so each row IS one count); LEAGUE rollup rows only carry
-            # balls_sum/strikes_sum (an average count per bucket) -- prefer
-            # the exact value when present, fall back to the average.
-            balls_num = row.get("balls_num")
-            strikes_num = row.get("strikes_num")
-            pitches_n = int(row.get("pitches") or 0)
-            if balls_num is not None and int(balls_num) >= 0 and strikes_num is not None and int(strikes_num) >= 0:
-                balls = float(balls_num)
-                strikes = float(strikes_num)
-            elif pitches_n > 0 and row.get("balls_sum") is not None and row.get("strikes_sum") is not None:
-                balls = float(row.get("balls_sum") or 0.0) / pitches_n
-                strikes = float(row.get("strikes_sum") or 0.0) / pitches_n
-            else:
+            # command_count_n (PRO) / omitted entirely (LEAGUE, which has no
+            # sentinel rows to exclude) counts only pitches with a real,
+            # non-sentinel count; fall back to total pitches when absent.
+            count_n = int(row.get("command_count_n") if row.get("command_count_n") is not None else (row.get("pitches") or 0))
+            if count_n <= 0 or row.get("balls_sum") is None or row.get("strikes_sum") is None:
                 continue
+            balls = float(row.get("balls_sum") or 0.0) / count_n
+            strikes = float(row.get("strikes_sum") or 0.0) / count_n
+            left_n = int(row.get("left_n") or 0)
+            right_n = int(row.get("right_n") or 0)
             buckets.append({
                 "pitch_type": pt,
                 "plate_side": plate_side,
                 "plate_height": plate_height,
-                "is_lefty": str(row.get("pitcherthrows_norm") or "").strip().lower() == "left",
+                "is_lefty": left_n >= right_n and left_n > 0,
                 "balls": balls,
                 "strikes": strikes,
-                "batterside": row.get("batterside_norm"),
+                "batterside": None,
                 "weight": min(plate_side_n, plate_height_n),
             })
         return command.compute_command_from_rollup_averages(buckets, level)
     except Exception:
         return {}
+
+
+def _command_by_pitcher_pro_live(
+    *,
+    start_date: Optional[date],
+    end_date: Optional[date],
+    level_filter: Optional[str],
+    selected_pitcher_keys: List[str],
+    team_type: Optional[str],
+    hand: Optional[str],
+    batter_side: Optional[str],
+    level: str,
+) -> Dict[str, Dict[str, float]]:
+    """Command+ per-pitcher map computed from a dedicated, fine-grained live
+    SQL aggregation against public.pro_pitch_events, NOT the pre-aggregated
+    daily rollup tables (see _command_by_type_from_rollup_rows).
+
+    Why this exists: the daily rollup only stores SUMS (one average location
+    per pitcher x pitch_type), and Command+'s model is spatially non-linear
+    (edge-distance-to-zone-boundary features) -- scoring one "average pitch"
+    from those sums is measurably biased (~10-20 Command+ points high on
+    real PRO data, confirmed via direct comparison against per-pitch
+    scoring) versus scoring each real pitch and averaging the SCORES. This
+    query instead groups by (pitcher, pitch_type, exact count, batter hand,
+    a coarse 0.3ft location grid cell) so each bucket's average location is
+    close enough to every real pitch in it that scoring the bucket average
+    is a good proxy for scoring each pitch individually -- confirmed via the
+    same comparison to bring the bias down to ~1 point. EXPLAIN ANALYZE on
+    the worst case (whole PRO history, no pitcher filter) came back ~4.4s;
+    any pitcher-scoped request (the common case) hits the pitcher_norm_date
+    partial index and returns in single-digit milliseconds.
+    """
+    try:
+        where = ["school_code = 'PRO'", "platelocside IS NOT NULL", "platelocheight IS NOT NULL"]
+        params: Dict[str, Any] = {}
+        if start_date is not None:
+            where.append("session_date >= %(start_date)s::date")
+            params["start_date"] = start_date
+        if end_date is not None:
+            where.append("session_date <= %(end_date)s::date")
+            params["end_date"] = end_date
+        if selected_pitcher_keys:
+            where.append(
+                "regexp_replace(lower(COALESCE(NULLIF(TRIM(pitcher), ''), '')), '[^a-z0-9]', '', 'g') = ANY(%(pitchers_norm)s::text[])"
+            )
+            params["pitchers_norm"] = selected_pitcher_keys
+        level_norm = _pro_level_norm(level_filter)
+        if level_norm != "All":
+            where.append(_pro_level_sql_clause(level_filter))
+            params["overlap_team_codes"] = PRO_TEAM_CODE_OVERLAP
+            params["aaa_only_team_codes"] = PRO_AAA_ONLY_TEAM_CODES
+            params["mlb_only_team_codes"] = PRO_MLB_ONLY_TEAM_CODES
+        team_type_norm = _pro_team_code_from_value(team_type or "")
+        if team_type_norm and team_type_norm != "ALL":
+            where.append("UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) = %(team_type_norm)s::text")
+            params["team_type_norm"] = _normalize_team_code(team_type_norm)
+        if (hand or "").strip() and hand != "All":
+            where.append(
+                "CASE WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(pitcherthrows), ''), ''), 1)) = 'L' THEN 'Left' "
+                "WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(pitcherthrows), ''), ''), 1)) = 'R' THEN 'Right' ELSE 'Unknown' END = %(hand)s::text"
+            )
+            params["hand"] = hand
+        if (batter_side or "").strip() and batter_side != "All":
+            where.append(
+                "CASE WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(batterside), ''), ''), 1)) = 'L' THEN 'Left' "
+                "WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(batterside), ''), ''), 1)) = 'R' THEN 'Right' ELSE 'Unknown' END = %(batter_side)s::text"
+            )
+            params["batter_side"] = batter_side
+        where_sql = " AND ".join(where)
+
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SET LOCAL statement_timeout = '15s'")
+            cur.execute(
+                f"""
+                SELECT
+                  regexp_replace(lower(COALESCE(NULLIF(TRIM(pitcher), ''), '')), '[^a-z0-9]', '', 'g') AS pitcher_norm,
+                  {PRO_PITCH_TYPE_SQL} AS pitch_type,
+                  CASE WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(pitcherthrows), ''), ''), 1)) = 'L' THEN 'Left' ELSE 'Right' END AS is_lefty_bucket,
+                  balls, strikes,
+                  CASE WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(batterside), ''), ''), 1)) = 'L' THEN 'Left'
+                       WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(batterside), ''), ''), 1)) = 'R' THEN 'Right'
+                       ELSE 'Unknown' END AS batterside_bucket,
+                  ROUND(platelocside::numeric / 0.3) AS side_cell,
+                  ROUND(platelocheight::numeric / 0.3) AS height_cell,
+                  AVG(platelocside::double precision) AS avg_side,
+                  AVG(platelocheight::double precision) AS avg_height,
+                  COUNT(*)::int AS n
+                FROM pro_pitch_events
+                WHERE {where_sql}
+                GROUP BY pitcher_norm, pitch_type, is_lefty_bucket, balls, strikes, batterside_bucket, side_cell, height_cell
+                """,
+                params,
+            )
+            grouped = cur.fetchall()
+    except Exception:
+        return {}
+
+    by_pitcher: Dict[str, List[Dict[str, Any]]] = {}
+    for row in grouped:
+        pitcher_norm = str(row.get("pitcher_norm") or "")
+        pt = row.get("pitch_type")
+        if not pitcher_norm or not pt or pt == "Undefined":
+            continue
+        if not _is_num(row.get("avg_side")) or not _is_num(row.get("avg_height")):
+            continue
+        by_pitcher.setdefault(pitcher_norm, []).append({
+            "pitch_type": pt,
+            "plate_side": float(row["avg_side"]),
+            "plate_height": float(row["avg_height"]),
+            "is_lefty": row.get("is_lefty_bucket") == "Left",
+            "balls": row.get("balls"),
+            "strikes": row.get("strikes"),
+            "batterside": row.get("batterside_bucket"),
+            "weight": int(row.get("n") or 0),
+        })
+
+    out: Dict[str, Dict[str, float]] = {}
+    for pitcher_norm, buckets in by_pitcher.items():
+        out[pitcher_norm] = command.compute_command_from_rollup_averages(buckets, level)
+    return out
+
+
+def _command_by_pitcher_league_live(
+    *,
+    school_code: str,
+    start_date: Optional[date],
+    end_date: Optional[date],
+    selected_pitcher_keys: List[str],
+    hand: Optional[str],
+    batter_side: Optional[str],
+    level: str,
+) -> Dict[str, Dict[str, float]]:
+    """LEAGUE/college counterpart to _command_by_pitcher_pro_live -- same
+    fine-grained (pitcher, pitch_type, exact count, batter hand, coarse
+    location grid) live aggregation, against public.pitch_events instead of
+    public.pro_pitch_events. balls/strikes/platelocside/platelocheight are
+    TEXT columns on this table (unlike pro_pitch_events' native numeric
+    columns), so values are extracted the same regexp-based way the daily
+    rollup ETL itself already does (see _refresh_league_daily_rollup).
+
+    Does NOT filter by college level (D1/D2/.../NAIA) -- the rollup's own
+    level_bucket filter chain is a non-trivial fallback (exact match, OR no
+    graded data exists for this scope) that isn't a simple expression to
+    replicate against raw pitch_events. Callers should only use this map
+    when no college level filter is active; _command_by_type_from_rollup_rows
+    (the existing, pooled-sums approximation) remains the fallback otherwise
+    -- see the caller in _try_pitching_overview_daily_rollup."""
+    try:
+        where = [
+            (LEAGUE_SCHOOL_SCOPE_SQL if school_code == "LEAGUE" else "school_code = %(school_code)s::text"),
+            "platelocside IS NOT NULL",
+            "TRIM(platelocside) <> ''",
+            "platelocheight IS NOT NULL",
+            "TRIM(platelocheight) <> ''",
+        ]
+        params: Dict[str, Any] = {"school_code": school_code}
+        if start_date is not None:
+            where.append("session_date >= %(start_date)s::date")
+            params["start_date"] = start_date
+        if end_date is not None:
+            where.append("session_date <= %(end_date)s::date")
+            params["end_date"] = end_date
+        if selected_pitcher_keys:
+            where.append(
+                "regexp_replace(lower(COALESCE(NULLIF(TRIM(pitcher), ''), '')), '[^a-z0-9]', '', 'g') = ANY(%(pitchers_norm)s::text[])"
+            )
+            params["pitchers_norm"] = selected_pitcher_keys
+        if (hand or "").strip() and hand != "All":
+            where.append(
+                "CASE WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(pitcherthrows), ''), ''), 1)) = 'L' THEN 'Left' "
+                "WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(pitcherthrows), ''), ''), 1)) = 'R' THEN 'Right' ELSE 'Unknown' END = %(hand)s::text"
+            )
+            params["hand"] = hand
+        if (batter_side or "").strip() and batter_side != "All":
+            where.append(
+                "CASE WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(batterside), ''), ''), 1)) = 'L' THEN 'Left' "
+                "WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(batterside), ''), ''), 1)) = 'R' THEN 'Right' ELSE 'Unknown' END = %(batter_side)s::text"
+            )
+            params["batter_side"] = batter_side
+        where_sql = " AND ".join(where)
+
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SET LOCAL statement_timeout = '15s'")
+            cur.execute(
+                f"""
+                SELECT
+                  regexp_replace(lower(COALESCE(NULLIF(TRIM(pitcher), ''), '')), '[^a-z0-9]', '', 'g') AS pitcher_norm,
+                  ({PITCH_TYPE_NORMALIZE_SQL}) AS pitch_type,
+                  CASE WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(pitcherthrows), ''), ''), 1)) = 'L' THEN 'Left' ELSE 'Right' END AS is_lefty_bucket,
+                  (regexp_match(COALESCE(balls, ''), '[-+]?[0-9]+'))[1]::int AS balls,
+                  (regexp_match(COALESCE(strikes, ''), '[-+]?[0-9]+'))[1]::int AS strikes,
+                  CASE WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(batterside), ''), ''), 1)) = 'L' THEN 'Left'
+                       WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(batterside), ''), ''), 1)) = 'R' THEN 'Right'
+                       ELSE 'Unknown' END AS batterside_bucket,
+                  ROUND((regexp_match(platelocside, '[-+]?[0-9]*\\.?[0-9]+'))[1]::numeric / 0.3) AS side_cell,
+                  ROUND((regexp_match(platelocheight, '[-+]?[0-9]*\\.?[0-9]+'))[1]::numeric / 0.3) AS height_cell,
+                  AVG((regexp_match(platelocside, '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision) AS avg_side,
+                  AVG((regexp_match(platelocheight, '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision) AS avg_height,
+                  COUNT(*)::int AS n
+                FROM pitch_events
+                WHERE {where_sql}
+                GROUP BY pitcher_norm, pitch_type, is_lefty_bucket, balls, strikes, batterside_bucket, side_cell, height_cell
+                """,
+                params,
+            )
+            grouped = cur.fetchall()
+    except Exception:
+        return {}
+
+    by_pitcher: Dict[str, List[Dict[str, Any]]] = {}
+    for row in grouped:
+        pitcher_norm = str(row.get("pitcher_norm") or "")
+        pt = row.get("pitch_type")
+        if not pitcher_norm or not pt or pt == "Undefined":
+            continue
+        if not _is_num(row.get("avg_side")) or not _is_num(row.get("avg_height")):
+            continue
+        if not _is_num(row.get("balls")) or not _is_num(row.get("strikes")):
+            continue
+        by_pitcher.setdefault(pitcher_norm, []).append({
+            "pitch_type": pt,
+            "plate_side": float(row["avg_side"]),
+            "plate_height": float(row["avg_height"]),
+            "is_lefty": row.get("is_lefty_bucket") == "Left",
+            "balls": row.get("balls"),
+            "strikes": row.get("strikes"),
+            "batterside": row.get("batterside_bucket"),
+            "weight": int(row.get("n") or 0),
+        })
+
+    out: Dict[str, Dict[str, float]] = {}
+    for pitcher_norm, buckets in by_pitcher.items():
+        out[pitcher_norm] = command.compute_command_from_rollup_averages(buckets, level)
+    return out
 
 
 def _try_pitching_overview_daily_rollup(
@@ -10294,6 +10524,24 @@ def _try_pitching_overview_daily_rollup(
     # Older Game rollup rows can have bf_n keyed by pitch identity. count_00_n is
     # the durable PA-start count used by Summary/Leaderboard BF.
     bf_sum_select = "SUM(count_00_n)::int AS bf_n" if split_clean == "Game" else "SUM(bf_n)::int AS bf_n"
+    # Command+ location/count sums only exist on the two daily rollup
+    # tables, not pitch_events_game_rollup_league -- select zeros there
+    # instead of a hard "column does not exist" SQL error.
+    if {"plate_side_sum", "plate_side_n", "plate_height_sum", "plate_height_n", "balls_sum", "strikes_sum"} <= _table_columns_cached(rollup_source):
+        command_plus_select = (
+            "SUM(plate_side_sum)::double precision AS plate_side_sum, "
+            "SUM(plate_side_n)::int AS plate_side_n, "
+            "SUM(plate_height_sum)::double precision AS plate_height_sum, "
+            "SUM(plate_height_n)::int AS plate_height_n, "
+            "SUM(balls_sum)::double precision AS balls_sum, "
+            "SUM(strikes_sum)::double precision AS strikes_sum"
+        )
+    else:
+        command_plus_select = (
+            "0.0::double precision AS plate_side_sum, 0::int AS plate_side_n, "
+            "0.0::double precision AS plate_height_sum, 0::int AS plate_height_n, "
+            "0.0::double precision AS balls_sum, 0.0::double precision AS strikes_sum"
+        )
     mode_columns_map: Dict[str, List[str]] = {
         "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA", "Stuff+"],
         "Expected Movement": [split_col_name, "P", "Velo", "Max", "IVB", "xIVB", "dIVB", "HB", "xHB", "dHB", "MagAngle", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA"],
@@ -10667,7 +10915,8 @@ def _try_pitching_overview_daily_rollup(
                   SUM(r_tilt_x_sum)::double precision AS r_tilt_x_sum,
                   SUM(r_tilt_y_sum)::double precision AS r_tilt_y_sum,
                   SUM(r_tilt_n)::int AS r_tilt_n,
-                  COALESCE(MIN(NULLIF(r_tilt_sample, '')), '') AS r_tilt_sample
+                  COALESCE(MIN(NULLIF(r_tilt_sample, '')), '') AS r_tilt_sample,
+                  {command_plus_select}
                 FROM {rollup_source}
                 WHERE {where_sql}
                 GROUP BY {split_rollup_col}, pitch_type
@@ -10916,6 +11165,24 @@ def _try_pitching_overview_daily_rollup(
         {} if stuff2_split_is_per_pitcher
         else _command_by_type_from_rollup_rows([*grouped_rows, *base_shape_rows], stuff2_level_clean)
     )
+    # Per-pitcher Command+: same pooled-sums bias fix as PRO (see
+    # _command_by_pitcher_pro_live's docstring) -- skipped (falls back to
+    # the pooled-sums approximation per-pitcher below) when a college level
+    # filter is active, since _command_by_pitcher_league_live doesn't
+    # replicate the rollup's level_bucket fallback-chain filter.
+    command_by_pitcher_live: Dict[str, Dict[str, float]] = (
+        _command_by_pitcher_league_live(
+            school_code=school_code,
+            start_date=start_date,
+            end_date=end_date,
+            selected_pitcher_keys=selected_pitcher_keys,
+            hand=hand,
+            batter_side=batter_side,
+            level=stuff2_level_clean,
+        )
+        if stuff2_split_is_per_pitcher and _college_level_norm(college_level_filter) == "All"
+        else {}
+    )
 
     # Per-pitcher base_shape_rows, keyed by split_value, merged into each
     # pitcher's own rows_for_split below so their Fastball/Sinker base is
@@ -11154,15 +11421,22 @@ def _try_pitching_overview_daily_rollup(
                     stuff2_den += pt_pitches
             stuff2_avg_local = (stuff2_num / stuff2_den) if stuff2_den > 0 else None
 
-        # Command+: identical lookup pattern to Stuff+ immediately above.
+        # Command+: identical lookup pattern to Stuff+ immediately above,
+        # except per-pitcher splits prefer command_by_pitcher_live (fine-
+        # grained live query, keyed by normalized pitcher name) over
+        # _command_by_type_from_rollup_rows (biased pooled-sums approach) --
+        # see command_by_pitcher_live's construction above for why/when it's
+        # empty (a college level filter is active, or this label is a team
+        # code from a "Pitcher Team" split rather than a pitcher name).
         command_avg_local: Optional[float] = None
         if split_clean == "Pitch Types" and str(label) != "All":
             command_avg_local = command_global_by_type.get(str(label), None)
         else:
             command_lookup = (
-                _command_by_type_from_rollup_rows(
-                    [*rows_for_split, *base_shape_rows_by_split.get(str(label), [])], stuff2_level_clean
-                )
+                (command_by_pitcher_live.get(_normalize_name_key(str(label)))
+                 or _command_by_type_from_rollup_rows(
+                     [*rows_for_split, *base_shape_rows_by_split.get(str(label), [])], stuff2_level_clean
+                 ))
                 if stuff2_split_is_per_pitcher
                 else command_global_by_type
             )
@@ -11908,7 +12182,7 @@ def _refresh_pro_daily_rollup(
                   count_00_n, count_behind_n, count_even_n, count_ahead_n, count_lt2k_n, count_2k_n,
                   xwoba_sum, xwoba_n, woba_sum, woba_n,
                   official_er_w_sum, official_outs_w_sum,
-                  plate_side_sum, plate_side_n, plate_height_sum, plate_height_n
+                  plate_side_sum, plate_side_n, plate_height_sum, plate_height_n, balls_sum, strikes_sum
                 )
                 SELECT
                   school_code, session_date, sport_id, level_bucket, pitch_type,
@@ -12101,7 +12375,9 @@ def _refresh_pro_daily_rollup(
                   COALESCE(SUM(plate_side), 0.0)::double precision AS plate_side_sum,
                   COUNT(plate_side)::int AS plate_side_n,
                   COALESCE(SUM(plate_height), 0.0)::double precision AS plate_height_sum,
-                  COUNT(plate_height)::int AS plate_height_n
+                  COUNT(plate_height)::int AS plate_height_n,
+                  COALESCE(SUM(balls_num), 0.0)::double precision AS balls_sum,
+                  COALESCE(SUM(strikes_num), 0.0)::double precision AS strikes_sum
                 FROM staged staged
                 GROUP BY
                   school_code, session_date, sport_id, level_bucket, pitch_type,
@@ -12488,7 +12764,7 @@ def _refresh_pro_daily_rollup(
                   count_00_n, count_behind_n, count_even_n, count_ahead_n, count_lt2k_n, count_2k_n,
                   xwoba_sum, xwoba_n, woba_sum, woba_n,
                   official_er_w_sum, official_outs_w_sum,
-                  plate_side_sum, plate_side_n, plate_height_sum, plate_height_n
+                  plate_side_sum, plate_side_n, plate_height_sum, plate_height_n, balls_sum, strikes_sum
                 )
                 SELECT
                   school_code, session_date, sport_id, level_bucket, split_group, split_value,
@@ -12640,7 +12916,9 @@ def _refresh_pro_daily_rollup(
                   COALESCE(SUM(plate_side), 0.0)::double precision AS plate_side_sum,
                   COUNT(plate_side)::int AS plate_side_n,
                   COALESCE(SUM(plate_height), 0.0)::double precision AS plate_height_sum,
-                  COUNT(plate_height)::int AS plate_height_n
+                  COUNT(plate_height)::int AS plate_height_n,
+                  COALESCE(SUM(CASE WHEN split_group IN ('After Count', 'Game') THEN -1 ELSE balls_num END), 0.0)::double precision AS balls_sum,
+                  COALESCE(SUM(CASE WHEN split_group IN ('After Count', 'Game') THEN -1 ELSE strikes_num END), 0.0)::double precision AS strikes_sum
                 FROM expanded e
                 GROUP BY
                   school_code, session_date, sport_id, level_bucket, split_group, split_value,
@@ -13126,6 +13404,27 @@ def _try_pro_pitching_overview_rollup(
         alias="fps_swing_num",
         fallback_column="fps_num",
     )
+    # Command+ location/count sums only exist on the two daily rollup
+    # tables (not pro_pitcher_leaderboard_daily_rollup, which this function
+    # can also resolve rollup_source to for split_by=Pitcher) -- select
+    # zeros there instead of a hard "column does not exist" SQL error.
+    if {"plate_side_sum", "plate_side_n", "plate_height_sum", "plate_height_n", "balls_sum", "strikes_sum"} <= _table_columns_cached(rollup_source):
+        command_plus_select = (
+            "SUM(plate_side_sum)::double precision AS plate_side_sum, "
+            "SUM(plate_side_n)::int AS plate_side_n, "
+            "SUM(plate_height_sum)::double precision AS plate_height_sum, "
+            "SUM(plate_height_n)::int AS plate_height_n, "
+            "SUM(balls_sum)::double precision AS balls_sum, "
+            "SUM(strikes_sum)::double precision AS strikes_sum, "
+            "SUM(pitches) FILTER (WHERE balls_num >= 0 AND strikes_num >= 0)::int AS command_count_n"
+        )
+    else:
+        command_plus_select = (
+            "0.0::double precision AS plate_side_sum, 0::int AS plate_side_n, "
+            "0.0::double precision AS plate_height_sum, 0::int AS plate_height_n, "
+            "0.0::double precision AS balls_sum, 0.0::double precision AS strikes_sum, "
+            "0::int AS command_count_n"
+        )
 
     # Critical fast-path for PRO leaderboard on localhost/render:
     # avoid expensive per-pitch-type rollup aggregation when the page only needs
@@ -13384,7 +13683,8 @@ def _try_pro_pitching_overview_rollup(
                   SUM(woba_sum)::double precision AS woba_sum,
                   SUM(woba_n)::int AS woba_n,
                   SUM(official_er_w_sum)::double precision AS official_er_w_sum,
-                  SUM(official_outs_w_sum)::double precision AS official_outs_w_sum
+                  SUM(official_outs_w_sum)::double precision AS official_outs_w_sum,
+                  {command_plus_select}
                 FROM {rollup_source}
                 WHERE {where_sql}
                 GROUP BY {split_expr}, pitch_type
@@ -13624,6 +13924,26 @@ def _try_pro_pitching_overview_rollup(
     command_global_by_type = (
         {} if stuff2_split_is_per_pitcher
         else _command_by_type_from_rollup_rows([*grouped_rows, *base_shape_rows], stuff2_level_clean)
+    )
+    # Per-pitcher Command+: the pooled-sums approach (_command_by_type_from_rollup_rows)
+    # scores one averaged "pitch" per pitcher x pitch_type, which is measurably
+    # biased for this spatially non-linear model -- use a dedicated, finely
+    # bucketed live query instead (still fast: single-digit ms per pitcher via
+    # the pitcher_norm_date index, ~4s worst case for an unfiltered whole-
+    # history request). See _command_by_pitcher_pro_live's docstring.
+    command_by_pitcher_live: Dict[str, Dict[str, float]] = (
+        _command_by_pitcher_pro_live(
+            start_date=start_date,
+            end_date=end_date,
+            level_filter=level_filter,
+            selected_pitcher_keys=selected_pitcher_keys,
+            team_type=team_type,
+            hand=hand,
+            batter_side=batter_side,
+            level=stuff2_level_clean,
+        )
+        if stuff2_split_is_per_pitcher
+        else {}
     )
 
     # Per-pitcher base_shape_rows, keyed by split_value, merged into each
@@ -13887,15 +14207,27 @@ def _try_pro_pitching_overview_rollup(
                     stuff2_den += pt_pitches
             stuff2_avg_local = (stuff2_num / stuff2_den) if stuff2_den > 0 else None
 
-        # Command+: identical lookup pattern to Stuff+ immediately above.
+        # Command+: identical lookup pattern to Stuff+ immediately above,
+        # except per-pitcher splits use command_by_pitcher_live (fine-grained
+        # live query, keyed by normalized pitcher name) instead of
+        # _command_by_type_from_rollup_rows (biased pooled-sums approach) --
+        # see command_by_pitcher_live's construction above for why.
         command_avg_local: Optional[float] = None
         if split_clean == "Pitch Types" and str(label) != "All":
             command_avg_local = command_global_by_type.get(str(label), None)
         else:
             command_lookup = (
-                _command_by_type_from_rollup_rows(
-                    [*rows_for_split, *base_shape_rows_by_split.get(str(label), [])], stuff2_level_clean
-                )
+                # split_clean == "Pitcher": accurate per-pitcher live map.
+                # split_clean == "Pitcher Team" (or a name that didn't match,
+                # e.g. a synthetic "All"/pinned row): command_by_pitcher_live
+                # has no entry for a team code, so fall back to the pooled-
+                # sums approximation scoped to this row's own rows_for_split
+                # -- same known bias as before, but still a value instead of
+                # blank, matching how Stuff+ handles this same split.
+                (command_by_pitcher_live.get(_normalize_name_key(str(label)))
+                 or _command_by_type_from_rollup_rows(
+                     [*rows_for_split, *base_shape_rows_by_split.get(str(label), [])], stuff2_level_clean
+                 ))
                 if stuff2_split_is_per_pitcher
                 else command_global_by_type
             )
@@ -22004,7 +22336,20 @@ def pitching_overview(
             and (not team_type or str(team_type).strip().lower() == "all")
         )
 
-        include_row_pitches = False
+        # include_row_pitches is force-disabled below for non-PRO schools by
+        # default (a broad LEAGUE-wide "All" query with per-pitch payloads
+        # attached would be huge/slow) -- but Game Log's "click # to play
+        # all videos for this game" feature needs it, and that request is
+        # already narrowly scoped (a specific team/pitcher, split_by=Game),
+        # nothing like the broad leaderboard queries this guard protects
+        # against. Only respect an explicit caller request in that narrow
+        # case; every other non-PRO request keeps the original guard.
+        allow_narrow_row_pitches = (
+            include_row_pitches
+            and split_by == "Game"
+            and not league_all_selection
+        )
+        include_row_pitches = allow_narrow_row_pitches
         include_trend_rows = False
         # Leaderboard requests should prefer rollup-first regardless of date span.
         league_leaderboard_has_narrowing_filters = bool(

@@ -101,6 +101,7 @@ const BIOMECH_TABLE_COLUMNS = [
   'Lead Leg Peak Fz (lb)',
   'Lead Leg Peak Fy (lb)',
   'Lead Leg Clawback (s)',
+  'Lead Leg FFC to Peak Y (s)',
   'Lead Leg YZ Transfer (s)',
   'Y Transfer (s)',
   'Z Transfer (s)',
@@ -259,12 +260,14 @@ function formatBiomechTableValue(column: string, value: string | number | null, 
     column.includes('Back Leg Impulse Time') ||
     column.includes('Back Leg YZ Transfer') ||
     column.includes('Lead Leg YZ Transfer') ||
+    column.includes('Lead Leg FFC to Peak Y') ||
     column === 'Y Transfer (s)' ||
     column === 'Z Transfer (s)';
   const isForceColumn = column.includes('Peak Fz') || column.includes('Peak Fy') || column.includes('Peak De-Weighting') || column.includes('Z-Force Gain');
   const isImpulseColumn = column.includes('Impulse');
   const isMoundConnectionColumn = column.includes('Mound Connection');
-  const isBwPercentColumn = isMoundConnectionColumn || (forceMode === 'bw' && (isForceColumn || isImpulseColumn));
+  const isRawBwPercentPassthroughColumn = forceMode === 'bw' && (isForceColumn || isImpulseColumn);
+  const isBwPercentColumn = isMoundConnectionColumn || isRawBwPercentPassthroughColumn;
   const useThreeDecimals =
     isBwPercentColumn
     ||
@@ -273,22 +276,24 @@ function formatBiomechTableValue(column: string, value: string | number | null, 
     || column.includes('Y Transfer')
     || column.includes('Z Transfer');
   const digits = useThreeDecimals ? 3 : 1;
-  const formatBwPercent = (raw: number): string => {
-    // Some rows are ratio-form (0.52 => 52%), others may already be percent-form (52 => 52%).
-    // Normalize display to avoid accidental double scaling.
-    const abs = Math.abs(raw);
-    const percentValue = abs > 3 ? raw : raw * 100;
-    return `${percentValue.toFixed(1)}%`;
-  };
+  // Mound Connection always arrives from lib/biomechanics-db.ts as a plain 0-1
+  // ratio (see moundConnectionRatio there) — multiply by 100 to display as %.
+  // Every other force/impulse column in BW% mode arrives already in raw
+  // BW%-style units (e.g. 52 meaning 52% of body weight, via applyForceMode's
+  // passthrough) — append % directly, no scaling, no guessing.
+  const formatMoundConnectionRatio = (ratio: number): string => `${(ratio * 100).toFixed(1)}%`;
+  const formatRawBwPercent = (raw: number): string => `${raw.toFixed(1)}%`;
   if (typeof value === 'number' && Number.isFinite(value)) {
     if (isMsTransferColumn) return (value * 1000).toFixed(1);
-    if (isBwPercentColumn) return formatBwPercent(value);
+    if (isMoundConnectionColumn) return formatMoundConnectionRatio(value);
+    if (isRawBwPercentPassthroughColumn) return formatRawBwPercent(value);
     return value.toFixed(digits);
   }
   const parsed = Number(value);
   if (Number.isFinite(parsed) && String(value).trim() !== '') {
     if (isMsTransferColumn) return (parsed * 1000).toFixed(1);
-    if (isBwPercentColumn) return formatBwPercent(parsed);
+    if (isMoundConnectionColumn) return formatMoundConnectionRatio(parsed);
+    if (isRawBwPercentPassthroughColumn) return formatRawBwPercent(parsed);
     return parsed.toFixed(digits);
   }
   return String(value);
@@ -748,6 +753,10 @@ function LineChart({
       if (recover) clawbackTime = Math.max(0, recover.t - delivery[landingIdx].t);
     }
 
+    // FFC (front foot contact / landing) to Peak Y: time from lead leg landing
+    // (same landing point used for clawback) to the lead leg's peak Fy.
+    const ffcToPeakY = landingIdx >= 0 && leadPeakFy ? Math.max(0, leadPeakFy.t - delivery[landingIdx].t) : null;
+
     const yzTransferBack = backPeakFy && backPeakFz ? Math.abs(backPeakFy.t - backPeakFz.t) : null;
     const yzTransferFront = leadPeakFy && leadPeakFz ? Math.abs(leadPeakFy.t - leadPeakFz.t) : null;
     const yTransfer = backPeakFy && leadPeakFy ? Math.abs(leadPeakFy.t - backPeakFy.t) : null;
@@ -766,6 +775,7 @@ function LineChart({
       leadPeakFz: leadPeakFz?.v ?? null,
       leadPeakFy: leadPeakFy?.v ?? null,
       clawbackTime,
+      ffcToPeakY,
       yzTransferFront,
       yTransfer,
       zTransfer,
@@ -966,6 +976,7 @@ function LineChart({
           <span style={{ color: '#cbd5e1' }}>Peak Fz ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.leadPeakFz, 1)}</strong></span>
           <span style={{ color: '#cbd5e1' }}>Peak Fy ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.leadPeakFy, 1)}</strong></span>
           <span style={{ color: '#cbd5e1' }}>Clawback Time (s): <strong style={{ color: '#f8fafc' }}>{fmt(keyMetrics.clawbackTime, 3)}</strong></span>
+          <span style={{ color: '#cbd5e1' }}>FFC to Peak Y (s): <strong style={{ color: '#f8fafc' }}>{fmt(keyMetrics.ffcToPeakY, 3)}</strong></span>
           <span style={{ color: '#cbd5e1' }}>YZ Transfer Front (ms): <strong style={{ color: '#f8fafc' }}>{fmtMs(keyMetrics.yzTransferFront)}</strong></span>
         </div>
         </div>
@@ -1010,7 +1021,6 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
   const [pageTab, setPageTab] = useState<BiomechPageTab>('summary');
   const [leaderboardViewMode, setLeaderboardViewMode] = useState<LeaderboardViewMode>('individual');
   const [showAllSessions, setShowAllSessions] = useState<boolean>(true);
-  const [isUploading, setIsUploading] = useState<boolean>(false);
   const [isExportingSummaryPdf, setIsExportingSummaryPdf] = useState<boolean>(false);
   const [isExportingComparePdf, setIsExportingComparePdf] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
@@ -1069,13 +1079,7 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
     matchedAllPitchRows: 0,
     unmatchedAllPitchRows: 0,
   });
-  const [uploadMessage, setUploadMessage] = useState<string>('');
   const [debugInfo, setDebugInfo] = useState<string>('');
-  const [uploadFilesDone, setUploadFilesDone] = useState<number>(0);
-  const [uploadFilesTotal, setUploadFilesTotal] = useState<number>(0);
-  const [uploadPhase, setUploadPhase] = useState<'idle' | 'uploading' | 'processing'>('idle');
-  const [allPitchInputKey, setAllPitchInputKey] = useState<number>(0);
-  const [singlePitchInputKey, setSinglePitchInputKey] = useState<number>(0);
   const summaryCardRef = useRef<HTMLDivElement | null>(null);
   const compareCardRef = useRef<HTMLDivElement | null>(null);
   const summaryTableCardRef = useRef<HTMLDivElement | null>(null);
@@ -1523,67 +1527,6 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
     [tagsOptions]
   );
 
-  const uploadFiles = async (uploadKind: 'all_pitches' | 'single_pitch', files: FileList | null) => {
-    if (!files?.length) return;
-    setIsUploading(true);
-    setError('');
-    setUploadMessage('');
-    setUploadFilesDone(0);
-    setUploadFilesTotal(files.length);
-    setUploadPhase('uploading');
-    try {
-      const uploadBatch = (batch: File[]) => new Promise<{ error?: string; filesProcessed?: number; rowsInserted?: number }>((resolve, reject) => {
-        const formData = new FormData();
-        formData.set('uploadKind', uploadKind);
-        batch.forEach((file) => formData.append('files', file));
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', '/api/dashboard/biomechanics');
-        xhr.onerror = () => reject(new Error('Upload failed.'));
-        xhr.onload = () => {
-          const json = (() => {
-            try {
-              return JSON.parse(xhr.responseText || '{}') as { error?: string; filesProcessed?: number; rowsInserted?: number };
-            } catch {
-              return {} as { error?: string; filesProcessed?: number; rowsInserted?: number };
-            }
-          })();
-          if (xhr.status < 200 || xhr.status >= 300) {
-            reject(new Error(json.error || 'Upload failed.'));
-            return;
-          }
-          resolve(json);
-        };
-        xhr.send(formData);
-      });
-
-      const picked = Array.from(files);
-      let totalFilesProcessed = 0;
-      let totalRowsInserted = 0;
-      const batches = picked.map((file) => [file]);
-
-      for (let i = 0; i < batches.length; i += 1) {
-        const batch = batches[i] ?? [];
-        setUploadPhase('uploading');
-        const payload = await uploadBatch(batch);
-        totalFilesProcessed += Number(payload.filesProcessed ?? batch.length);
-        totalRowsInserted += Number(payload.rowsInserted ?? 0);
-        setUploadFilesDone(i + 1);
-      }
-      setUploadPhase('processing');
-      setUploadMessage(`Upload complete: ${totalFilesProcessed} file(s), ${totalRowsInserted} row(s) processed.`);
-      if (uploadKind === 'all_pitches') setAllPitchInputKey((value) => value + 1);
-      if (uploadKind === 'single_pitch') setSinglePitchInputKey((value) => value + 1);
-      await loadData();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Upload failed.');
-    } finally {
-      setIsUploading(false);
-      setUploadPhase('idle');
-      setUploadFilesDone(0);
-      setUploadFilesTotal(0);
-    }
-  };
-
   const deleteSelectedPitch = async () => {
     const pitchKey = String(selectedPitchKey ?? '').trim();
     if (!pitchKey) return;
@@ -1594,7 +1537,6 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
     }
     setIsDeleting(true);
     setError('');
-    setUploadMessage('');
     try {
       const response = await fetch('/api/dashboard/biomechanics', {
         method: 'DELETE',
@@ -1929,7 +1871,7 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
             placeholder="e.g. 95"
           />
         </label>
-        <button type="button" className="btn btn-ghost" onClick={applyFilters} disabled={isLoading || isUploading}>
+        <button type="button" className="btn btn-ghost" onClick={applyFilters} disabled={isLoading}>
           {isLoading ? 'Loading...' : 'Apply Filters'}
         </button>
       </div>
@@ -1939,47 +1881,7 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
         </div>
       ) : null}
 
-      {pageTab === 'summary' ? (
-      <div style={{ display: 'grid', gap: 12 }}>
-        <div style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 12, display: 'grid', gap: 8 }}>
-          <h3 style={{ margin: 0, fontSize: 16 }}>Upload All-Pitches CSVs</h3>
-          <p style={{ margin: 0, color: '#94a3b8', fontSize: 13 }}>Use files with one row per pitch and metric columns.</p>
-          {role === 'player' ? <p style={{ margin: 0, color: '#fca5a5', fontSize: 12 }}>Upload disabled for player role.</p> : null}
-          <input
-            key={allPitchInputKey}
-            type="file"
-            className="biomechanics-file-input"
-            accept=".csv,text/csv"
-            multiple
-            onChange={(e) => void uploadFiles('all_pitches', e.currentTarget.files)}
-            disabled={isUploading || role === 'player'}
-          />
-        </div>
-        <div style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 12, display: 'grid', gap: 8 }}>
-          <h3 style={{ margin: 0, fontSize: 16 }}>Upload Single-Pitch CSVs</h3>
-          <p style={{ margin: 0, color: '#94a3b8', fontSize: 13 }}>Use files with time-series points for one pitch each.</p>
-          <input
-            key={singlePitchInputKey}
-            type="file"
-            className="biomechanics-file-input"
-            accept=".csv,text/csv"
-            multiple
-            onChange={(e) => void uploadFiles('single_pitch', e.currentTarget.files)}
-            disabled={isUploading || role === 'player'}
-          />
-        </div>
-      </div>
-      ) : null}
-
       {error ? <p className="auth-error" style={{ margin: 0 }}>{error}</p> : null}
-      {!error && uploadMessage ? <p style={{ margin: 0, color: '#86efac' }}>{uploadMessage}</p> : null}
-      {isUploading ? (
-        <p style={{ margin: 0, color: '#93c5fd' }}>
-          {uploadPhase === 'processing'
-            ? `Processing on server... ${uploadFilesTotal}/${uploadFilesTotal}`
-            : `Uploading CSV files... ${uploadFilesDone}/${uploadFilesTotal}`}
-        </p>
-      ) : null}
       <p style={{ margin: 0, color: '#cbd5e1', fontSize: 13 }}>
         Match Quality: {matchSummary.matchedAllPitchRows}/{matchSummary.totalAllPitchRows} pitches matched ({matchSummary.unmatchedAllPitchRows} unmatched all-pitch rows). Single-pitch files uploaded: {matchSummary.totalSinglePitchFiles} ({matchSummary.matchedSinglePitchFiles} currently paired).
       </p>
@@ -2108,7 +2010,10 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
             </button>
           ) : null}
         </div>
-        <div className="portal-table-wrap" style={{ maxHeight: '52vh', overflow: 'auto', position: 'relative' }}>
+        <div
+          className="portal-table-wrap"
+          style={{ maxHeight: '52vh', overflowY: 'auto', overflowX: 'hidden', position: 'relative' }}
+        >
           <div
             style={{
               position: 'sticky',
@@ -2119,6 +2024,10 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
               pointerEvents: 'none',
             }}
           />
+          <div
+            className="portal-table-hscroll"
+            style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch', overscrollBehaviorX: 'contain' }}
+          >
           <table className="portal-table" style={{ borderCollapse: 'separate', borderSpacing: 0 }}>
             <thead>
               <tr>
@@ -2159,7 +2068,7 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
                       >
                         {(forceMode === 'bw' && (column.includes('Peak Fz') || column.includes('Peak Fy') || column.includes('Peak De-Weighting') || column.includes('Z-Force Gain') || column.includes('Impulse')))
                           ? column.replace('(lb·s)', '(BW%·s)').replace('(lb)', '(BW%)')
-                          : (column.includes('Back Leg Impulse Time') || column.includes('Back Leg YZ Transfer') || column.includes('Lead Leg YZ Transfer') || column === 'Y Transfer (s)' || column === 'Z Transfer (s)')
+                          : (column.includes('Back Leg Impulse Time') || column.includes('Back Leg YZ Transfer') || column.includes('Lead Leg YZ Transfer') || column.includes('Lead Leg FFC to Peak Y') || column === 'Y Transfer (s)' || column === 'Z Transfer (s)')
                             ? column.replace('(s)', '(ms)')
                           : column}
                         {glyph ? ` ${glyph}` : ''}
@@ -2224,6 +2133,7 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
               )}
             </tbody>
           </table>
+          </div>
         </div>
       </div>}
       {pageTab === 'compare' ? (

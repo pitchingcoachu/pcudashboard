@@ -46,6 +46,7 @@ type BiomechComputedMetrics = {
   yzTransferFront: number | null;
   yTransfer: number | null;
   zTransfer: number | null;
+  ffcToPeakY: number | null;
 };
 
 type BiomechTableSummaryRow = {
@@ -66,6 +67,7 @@ type BiomechTableSummaryRow = {
   'Lead Leg Peak Fz (lb)': number | null;
   'Lead Leg Peak Fy (lb)': number | null;
   'Lead Leg Clawback (s)': number | null;
+  'Lead Leg FFC to Peak Y (s)': number | null;
   'Lead Leg YZ Transfer (s)': number | null;
   'Y Transfer (s)': number | null;
   'Z Transfer (s)': number | null;
@@ -179,6 +181,12 @@ function buildNameKeys(value: string | null | undefined): string[] {
   }
   return Array.from(keys);
 }
+
+// `pitch_events` column naming has varied historically (lowercase vs quoted
+// mixed-case). Once we learn which query variant actually matches the live
+// schema, remember it so every subsequent call skips straight to the working
+// query instead of firing all variants in parallel on every request.
+let cachedWorkingTrackmanAttemptIndex: number | null = null;
 
 async function getTrackmanVelocityByNameDate(args: {
   schoolCode: string;
@@ -350,16 +358,33 @@ async function getTrackmanVelocityByNameDate(args: {
     }
     return map;
   };
-  // Fire all schema variants in parallel — take the first that returns data.
+  type VeloRow = { pitcher_name: string | null; session_date: string | null; tm_time: string | null; velo: number | null; pitch_type: string | null };
+
+  // Once we know which variant matches the live schema, run only that one.
+  if (cachedWorkingTrackmanAttemptIndex !== null) {
+    try {
+      const r = await pool.query<VeloRow>(attempts[cachedWorkingTrackmanAttemptIndex], values);
+      return buildMap(r.rows);
+    } catch {
+      // Schema may have changed since we cached this; fall through to re-detect.
+      cachedWorkingTrackmanAttemptIndex = null;
+    }
+  }
+
+  // Fire all schema variants in parallel — take the first that returns data,
+  // and remember it for subsequent calls.
   const results = await Promise.all(
-    attempts.map((sql) =>
-      pool.query<{ pitcher_name: string | null; session_date: string | null; tm_time: string | null; velo: number | null; pitch_type: string | null }>(sql, values)
-        .then((r) => buildMap(r.rows))
-        .catch(() => new Map<string, Array<{ tSec: number | null; velo: number; pitchType: string | null }>>())
+    attempts.map((sql, index) =>
+      pool.query<VeloRow>(sql, values)
+        .then((r) => ({ index, map: buildMap(r.rows) }))
+        .catch(() => ({ index, map: new Map<string, Array<{ tSec: number | null; velo: number; pitchType: string | null }>>() }))
     )
   );
-  for (const map of results) {
-    if (map.size > 0) return map;
+  for (const { index, map } of results) {
+    if (map.size > 0) {
+      cachedWorkingTrackmanAttemptIndex = index;
+      return map;
+    }
   }
   return new Map();
 }
@@ -660,6 +685,7 @@ function computePitchMetrics(points: BiomechSinglePitchPoint[]): BiomechComputed
       yzTransferFront: null,
       yTransfer: null,
       zTransfer: null,
+      ffcToPeakY: null,
     };
   }
   const minRawTime = Math.min(...rawTimes);
@@ -788,6 +814,10 @@ function computePitchMetrics(points: BiomechSinglePitchPoint[]): BiomechComputed
     if (recover) clawbackTime = Math.max(0, recover.t - delivery[landingIdx].t);
   }
 
+  // FFC (front foot contact / landing) to Peak Y: time from lead leg landing
+  // (same landing point used for clawback) to the lead leg's peak Fy.
+  const ffcToPeakY = landingIdx >= 0 && leadPeakFy ? Math.max(0, leadPeakFy.t - delivery[landingIdx].t) : null;
+
   return {
     backPeakFz: backPeakFz?.v ?? null,
     peakDeWeighting,
@@ -803,6 +833,7 @@ function computePitchMetrics(points: BiomechSinglePitchPoint[]): BiomechComputed
     yzTransferFront: leadPeakFy && leadPeakFz ? Math.abs(leadPeakFy.t - leadPeakFz.t) : null,
     yTransfer: backPeakFy && leadPeakFy ? Math.abs(leadPeakFy.t - backPeakFy.t) : null,
     zTransfer: backPeakFz && leadPeakFz ? Math.abs(leadPeakFz.t - backPeakFz.t) : null,
+    ffcToPeakY,
   };
 }
 
@@ -818,6 +849,7 @@ async function ensureBiomechanicsTables(): Promise<void> {
       await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS impulse_time DOUBLE PRECISION;`);
       await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS peak_de_weighting DOUBLE PRECISION;`);
       await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS z_force_gain DOUBLE PRECISION;`);
+      await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS ffc_to_peak_y DOUBLE PRECISION;`);
       await client.query(`
         CREATE TABLE IF NOT EXISTS biomechanics_pitch_metrics (
           id BIGSERIAL PRIMARY KEY,
@@ -838,6 +870,7 @@ async function ensureBiomechanicsTables(): Promise<void> {
           yz_transfer_front DOUBLE PRECISION,
           y_transfer DOUBLE PRECISION,
           z_transfer DOUBLE PRECISION,
+          ffc_to_peak_y DOUBLE PRECISION,
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           UNIQUE (organization_id, school_code, source_file_hash)
         );
@@ -929,6 +962,7 @@ async function ensureBiomechanicsTables(): Promise<void> {
         yz_transfer_front DOUBLE PRECISION,
         y_transfer DOUBLE PRECISION,
         z_transfer DOUBLE PRECISION,
+        ffc_to_peak_y DOUBLE PRECISION,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (organization_id, school_code, source_file_hash)
       );
@@ -936,6 +970,7 @@ async function ensureBiomechanicsTables(): Promise<void> {
     await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS impulse_time DOUBLE PRECISION;`);
     await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS peak_de_weighting DOUBLE PRECISION;`);
     await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS z_force_gain DOUBLE PRECISION;`);
+    await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS ffc_to_peak_y DOUBLE PRECISION;`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_metrics_scope_hash ON biomechanics_pitch_metrics (organization_id, school_code, source_file_hash);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_rows_scope_date ON biomechanics_pitch_rows (organization_id, school_code, captured_at DESC);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_rows_scope_created_date ON biomechanics_pitch_rows (organization_id, school_code, created_at DESC);`);
@@ -1043,6 +1078,7 @@ async function ensureBiomechanicsMetricsTable(): Promise<void> {
       yz_transfer_front DOUBLE PRECISION,
       y_transfer DOUBLE PRECISION,
       z_transfer DOUBLE PRECISION,
+      ffc_to_peak_y DOUBLE PRECISION,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE (organization_id, school_code, source_file_hash)
     );
@@ -1050,6 +1086,7 @@ async function ensureBiomechanicsMetricsTable(): Promise<void> {
   await pool.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS impulse_time DOUBLE PRECISION;`);
   await pool.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS peak_de_weighting DOUBLE PRECISION;`);
   await pool.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS z_force_gain DOUBLE PRECISION;`);
+  await pool.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS ffc_to_peak_y DOUBLE PRECISION;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_metrics_scope_hash ON biomechanics_pitch_metrics (organization_id, school_code, source_file_hash);`);
 }
 
@@ -1350,8 +1387,8 @@ export async function saveSinglePitchPoints(args: {
       INSERT INTO biomechanics_pitch_metrics (
         organization_id, school_code, source_file_hash,
         back_peak_fz, peak_de_weighting, z_force_gain, back_peak_fy, mound_connection, impulse, impulse_time, yz_transfer_back,
-        lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+        lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer, ffc_to_peak_y
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
       ON CONFLICT (organization_id, school_code, source_file_hash)
       DO UPDATE SET
         back_peak_fz = EXCLUDED.back_peak_fz,
@@ -1367,7 +1404,8 @@ export async function saveSinglePitchPoints(args: {
         clawback_time = EXCLUDED.clawback_time,
         yz_transfer_front = EXCLUDED.yz_transfer_front,
         y_transfer = EXCLUDED.y_transfer,
-        z_transfer = EXCLUDED.z_transfer
+        z_transfer = EXCLUDED.z_transfer,
+        ffc_to_peak_y = EXCLUDED.ffc_to_peak_y
       `,
       [
         args.organizationId,
@@ -1387,6 +1425,7 @@ export async function saveSinglePitchPoints(args: {
         computed.yzTransferFront,
         computed.yTransfer,
         computed.zTransfer,
+        computed.ffcToPeakY,
       ]
     );
     await client.query('COMMIT');
@@ -1985,10 +2024,11 @@ export async function getBiomechanicsSnapshot(args: {
     impulse: number | null; impulse_time: number | null; yz_transfer_back: number | null;
     lead_peak_fz: number | null; lead_peak_fy: number | null; clawback_time: number | null;
     yz_transfer_front: number | null; y_transfer: number | null; z_transfer: number | null;
+    ffc_to_peak_y: number | null;
   }>(
     'biomechanics metrics lookup (parallel)',
     `SELECT source_file_hash, back_peak_fz, peak_de_weighting, z_force_gain, back_peak_fy, mound_connection, impulse, impulse_time,
-            yz_transfer_back, lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer
+            yz_transfer_back, lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer, ffc_to_peak_y
      FROM biomechanics_pitch_metrics
      WHERE organization_id = $1 AND school_code = $2 AND source_file_hash = ANY($3::text[])`,
     [args.organizationId, schoolCode, metricKeys]
@@ -2027,6 +2067,7 @@ export async function getBiomechanicsSnapshot(args: {
       yz_transfer_front: number | null;
       y_transfer: number | null;
       z_transfer: number | null;
+      ffc_to_peak_y: number | null;
     }>(
       'biomechanics metrics lookup',
       `
@@ -2045,7 +2086,8 @@ export async function getBiomechanicsSnapshot(args: {
         clawback_time,
         yz_transfer_front,
         y_transfer,
-        z_transfer
+        z_transfer,
+        ffc_to_peak_y
       FROM biomechanics_pitch_metrics
       WHERE organization_id = $1
         AND school_code = $2
@@ -2055,7 +2097,7 @@ export async function getBiomechanicsSnapshot(args: {
     ).catch(async (error) => {
       const code = String((error as { code?: unknown } | null)?.code ?? '');
       const message = String((error as { message?: unknown } | null)?.message ?? '').toLowerCase();
-      const missingMetricsShape = code === '42P01' || code === '42703' || message.includes('biomechanics_pitch_metrics') || message.includes('impulse_time') || message.includes('peak_de_weighting') || message.includes('z_force_gain');
+      const missingMetricsShape = code === '42P01' || code === '42703' || message.includes('biomechanics_pitch_metrics') || message.includes('impulse_time') || message.includes('peak_de_weighting') || message.includes('z_force_gain') || message.includes('ffc_to_peak_y');
       if (!missingMetricsShape) throw error;
       await ensureBiomechanicsMetricsTable();
       return runSnapshotQuery<{
@@ -2074,6 +2116,7 @@ export async function getBiomechanicsSnapshot(args: {
         yz_transfer_front: number | null;
         y_transfer: number | null;
         z_transfer: number | null;
+        ffc_to_peak_y: number | null;
       }>(
         'biomechanics metrics lookup after schema refresh',
         `
@@ -2092,7 +2135,8 @@ export async function getBiomechanicsSnapshot(args: {
           clawback_time,
           yz_transfer_front,
           y_transfer,
-          z_transfer
+          z_transfer,
+          ffc_to_peak_y
         FROM biomechanics_pitch_metrics
         WHERE organization_id = $1
           AND school_code = $2
@@ -2117,11 +2161,12 @@ export async function getBiomechanicsSnapshot(args: {
         yzTransferFront: toFinite(row.yz_transfer_front),
         yTransfer: toFinite(row.y_transfer),
         zTransfer: toFinite(row.z_transfer),
+        ffcToPeakY: toFinite(row.ffc_to_peak_y),
       });
     }
     const missingMetricKeys = metricKeys.filter((key) => {
       const metrics = pitchMetricsMap.get(key);
-      return !metrics || metrics.peakDeWeighting === null || metrics.zForceGain === null;
+      return !metrics || metrics.peakDeWeighting === null || metrics.zForceGain === null || metrics.ffcToPeakY === null;
     });
     if (missingMetricKeys.length) {
       const pointsAgg = await runSnapshotQuery<BiomechSinglePitchPoint & { source_file_hash: string }>(
@@ -2154,16 +2199,65 @@ export async function getBiomechanicsSnapshot(args: {
         arr.push(point);
         grouped.set(row.source_file_hash, arr);
       }
+      // Batch every recomputed pitch's metrics into a single multi-row upsert
+      // instead of one round trip per pitch — a wide date range can easily
+      // have hundreds of cache misses, and serialized round trips there was
+      // the main source of "wide range gets slow" beyond a few dozen misses.
+      const pitchKeys: string[] = [];
+      const col = {
+        backPeakFz: [] as (number | null)[],
+        peakDeWeighting: [] as (number | null)[],
+        zForceGain: [] as (number | null)[],
+        backPeakFy: [] as (number | null)[],
+        moundConnection: [] as (number | null)[],
+        impulse: [] as (number | null)[],
+        impulseTime: [] as (number | null)[],
+        yzTransferBack: [] as (number | null)[],
+        leadPeakFz: [] as (number | null)[],
+        leadPeakFy: [] as (number | null)[],
+        clawbackTime: [] as (number | null)[],
+        yzTransferFront: [] as (number | null)[],
+        yTransfer: [] as (number | null)[],
+        zTransfer: [] as (number | null)[],
+        ffcToPeakY: [] as (number | null)[],
+      };
       for (const [pitchKey, points] of grouped.entries()) {
         const computed = computePitchMetrics(points);
         pitchMetricsMap.set(pitchKey, computed);
+        pitchKeys.push(pitchKey);
+        col.backPeakFz.push(computed.backPeakFz);
+        col.peakDeWeighting.push(computed.peakDeWeighting);
+        col.zForceGain.push(computed.zForceGain);
+        col.backPeakFy.push(computed.backPeakFy);
+        col.moundConnection.push(computed.moundConnection);
+        col.impulse.push(computed.impulse);
+        col.impulseTime.push(computed.impulseTime);
+        col.yzTransferBack.push(computed.yzTransferBack);
+        col.leadPeakFz.push(computed.leadPeakFz);
+        col.leadPeakFy.push(computed.leadPeakFy);
+        col.clawbackTime.push(computed.clawbackTime);
+        col.yzTransferFront.push(computed.yzTransferFront);
+        col.yTransfer.push(computed.yTransfer);
+        col.zTransfer.push(computed.zTransfer);
+        col.ffcToPeakY.push(computed.ffcToPeakY);
+      }
+      if (pitchKeys.length) {
         await pool.query(
           `
       INSERT INTO biomechanics_pitch_metrics (
         organization_id, school_code, source_file_hash,
         back_peak_fz, peak_de_weighting, z_force_gain, back_peak_fy, mound_connection, impulse, impulse_time, yz_transfer_back,
-        lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+        lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer, ffc_to_peak_y
+      )
+      SELECT $1, $2, key, back_peak_fz, peak_de_weighting, z_force_gain, back_peak_fy, mound_connection, impulse, impulse_time, yz_transfer_back,
+        lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer, ffc_to_peak_y
+      FROM unnest(
+        $3::text[], $4::double precision[], $5::double precision[], $6::double precision[], $7::double precision[],
+        $8::double precision[], $9::double precision[], $10::double precision[], $11::double precision[],
+        $12::double precision[], $13::double precision[], $14::double precision[], $15::double precision[],
+        $16::double precision[], $17::double precision[], $18::double precision[]
+      ) AS t(key, back_peak_fz, peak_de_weighting, z_force_gain, back_peak_fy, mound_connection, impulse, impulse_time, yz_transfer_back,
+        lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer, ffc_to_peak_y)
       ON CONFLICT (organization_id, school_code, source_file_hash)
       DO UPDATE SET
         back_peak_fz = EXCLUDED.back_peak_fz,
@@ -2174,31 +2268,33 @@ export async function getBiomechanicsSnapshot(args: {
         impulse = EXCLUDED.impulse,
         impulse_time = EXCLUDED.impulse_time,
         yz_transfer_back = EXCLUDED.yz_transfer_back,
-            lead_peak_fz = EXCLUDED.lead_peak_fz,
-            lead_peak_fy = EXCLUDED.lead_peak_fy,
-            clawback_time = EXCLUDED.clawback_time,
-            yz_transfer_front = EXCLUDED.yz_transfer_front,
-            y_transfer = EXCLUDED.y_transfer,
-            z_transfer = EXCLUDED.z_transfer
+        lead_peak_fz = EXCLUDED.lead_peak_fz,
+        lead_peak_fy = EXCLUDED.lead_peak_fy,
+        clawback_time = EXCLUDED.clawback_time,
+        yz_transfer_front = EXCLUDED.yz_transfer_front,
+        y_transfer = EXCLUDED.y_transfer,
+        z_transfer = EXCLUDED.z_transfer,
+        ffc_to_peak_y = EXCLUDED.ffc_to_peak_y
           `,
           [
             args.organizationId,
             schoolCode,
-            pitchKey,
-        computed.backPeakFz,
-        computed.peakDeWeighting,
-        computed.zForceGain,
-        computed.backPeakFy,
-        computed.moundConnection,
-        computed.impulse,
-        computed.impulseTime,
-        computed.yzTransferBack,
-        computed.leadPeakFz,
-        computed.leadPeakFy,
-            computed.clawbackTime,
-            computed.yzTransferFront,
-            computed.yTransfer,
-            computed.zTransfer,
+            pitchKeys,
+            col.backPeakFz,
+            col.peakDeWeighting,
+            col.zForceGain,
+            col.backPeakFy,
+            col.moundConnection,
+            col.impulse,
+            col.impulseTime,
+            col.yzTransferBack,
+            col.leadPeakFz,
+            col.leadPeakFy,
+            col.clawbackTime,
+            col.yzTransferFront,
+            col.yTransfer,
+            col.zTransfer,
+            col.ffcToPeakY,
           ]
         );
       }
@@ -2223,6 +2319,7 @@ export async function getBiomechanicsSnapshot(args: {
     'Lead Leg Peak Fz (lb)',
     'Lead Leg Peak Fy (lb)',
     'Lead Leg Clawback (s)',
+    'Lead Leg FFC to Peak Y (s)',
     'Lead Leg YZ Transfer (s)',
     'Y Transfer (s)',
     'Z Transfer (s)',
@@ -2243,6 +2340,14 @@ export async function getBiomechanicsSnapshot(args: {
     const bwIsPlausible = bwNum !== null && bwNum >= 80 && bwNum <= 400;
     if (!bwIsPlausible) return null;
     return (bwPercentValue / 100) * bwNum;
+  };
+  // Mound Connection is always shown as a body-weight-percent ratio (its column
+  // header never switches to "(lb)" the way the other force columns do), so it
+  // must never be run through applyForceMode's to-pounds conversion. It always
+  // resolves to a plain 0-1 ratio here; the display layer multiplies by 100.
+  const moundConnectionRatio = (bwPercentValue: number | null): number | null => {
+    if (bwPercentValue === null || !Number.isFinite(bwPercentValue)) return null;
+    return bwPercentValue / 100;
   };
 
   const leaderboardPitchCountByNameDate = new Map<string, number>();
@@ -2284,7 +2389,7 @@ export async function getBiomechanicsSnapshot(args: {
         if (v !== null && Number.isFinite(v)) curr.sums[k] = (curr.sums[k] ?? 0) + v;
       };
       add('backPeakFz'); add('peakDeWeighting'); add('zForceGain'); add('backPeakFy'); add('moundConnection'); add('impulse'); add('impulseTime'); add('yzTransferBack');
-      add('leadPeakFz'); add('leadPeakFy'); add('clawbackTime'); add('yzTransferFront');
+      add('leadPeakFz'); add('leadPeakFy'); add('clawbackTime'); add('ffcToPeakY'); add('yzTransferFront');
       add('yTransfer'); add('zTransfer');
       if (meta.strideLengthIn !== null && Number.isFinite(meta.strideLengthIn)) curr.strideLen.push(meta.strideLengthIn);
       if (meta.strideDirectionIn !== null && Number.isFinite(meta.strideDirectionIn)) curr.strideDir.push(meta.strideDirectionIn);
@@ -2307,13 +2412,14 @@ export async function getBiomechanicsSnapshot(args: {
       'Peak De-Weighting (lb)': applyForceMode(metrics.peakDeWeighting, bwForPitch),
       'Z-Force Gain (lb)': applyForceMode(metrics.zForceGain, bwForPitch),
       'Back Leg Peak Fy (lb)': applyForceMode(metrics.backPeakFy, bwForPitch),
-      'Mound Connection (BW%)': applyForceMode(metrics.moundConnection, bwForPitch),
+      'Mound Connection (BW%)': moundConnectionRatio(metrics.moundConnection),
       'Back Leg Impulse (lb·s)': applyForceMode(metrics.impulse, bwForPitch),
       'Back Leg Impulse Time (s)': metrics.impulseTime,
       'Back Leg YZ Transfer (s)': metrics.yzTransferBack,
       'Lead Leg Peak Fz (lb)': applyForceMode(metrics.leadPeakFz, bwForPitch),
       'Lead Leg Peak Fy (lb)': applyForceMode(metrics.leadPeakFy, bwForPitch),
       'Lead Leg Clawback (s)': metrics.clawbackTime,
+      'Lead Leg FFC to Peak Y (s)': metrics.ffcToPeakY,
       'Lead Leg YZ Transfer (s)': metrics.yzTransferFront,
       'Y Transfer (s)': metrics.yTransfer,
       'Z Transfer (s)': metrics.zTransfer,
@@ -2334,6 +2440,19 @@ export async function getBiomechanicsSnapshot(args: {
       const bw = mapping.get(pitchKey)?.bodyWeightLb;
       const metricValue = metrics ? pickMetric(metrics) : null;
       const converted = applyForceMode(metricValue, bw ?? null);
+      if (converted === null) continue;
+      sum += converted;
+      count += 1;
+    }
+    return count > 0 ? sum / count : null;
+  };
+  const avgMoundConnectionRatio = (groupKey: string) => {
+    const keys = groupPitches.get(groupKey) ?? [];
+    let sum = 0;
+    let count = 0;
+    for (const pitchKey of keys) {
+      const metrics = pitchMetricsMap.get(pitchKey);
+      const converted = moundConnectionRatio(metrics?.moundConnection ?? null);
       if (converted === null) continue;
       sum += converted;
       count += 1;
@@ -2364,13 +2483,14 @@ export async function getBiomechanicsSnapshot(args: {
       'Peak De-Weighting (lb)': avgBwMetric(`${r.name}|${r.tags}`, (m) => m.peakDeWeighting),
       'Z-Force Gain (lb)': avgBwMetric(`${r.name}|${r.tags}`, (m) => m.zForceGain),
       'Back Leg Peak Fy (lb)': avgBwMetric(`${r.name}|${r.tags}`, (m) => m.backPeakFy),
-      'Mound Connection (BW%)': avgBwMetric(`${r.name}|${r.tags}`, (m) => m.moundConnection),
+      'Mound Connection (BW%)': avgMoundConnectionRatio(`${r.name}|${r.tags}`),
       'Back Leg Impulse (lb·s)': avgBwMetric(`${r.name}|${r.tags}`, (m) => m.impulse),
       'Back Leg Impulse Time (s)': avg(r.sums.impulseTime, r.count),
       'Back Leg YZ Transfer (s)': avg(r.sums.yzTransferBack, r.count),
       'Lead Leg Peak Fz (lb)': avgBwMetric(`${r.name}|${r.tags}`, (m) => m.leadPeakFz),
       'Lead Leg Peak Fy (lb)': avgBwMetric(`${r.name}|${r.tags}`, (m) => m.leadPeakFy),
       'Lead Leg Clawback (s)': avg(r.sums.clawbackTime, r.count),
+      'Lead Leg FFC to Peak Y (s)': avg(r.sums.ffcToPeakY, r.count),
       'Lead Leg YZ Transfer (s)': avg(r.sums.yzTransferFront, r.count),
       'Y Transfer (s)': avg(r.sums.yTransfer, r.count),
       'Z Transfer (s)': avg(r.sums.zTransfer, r.count),
@@ -2416,6 +2536,7 @@ export async function getBiomechanicsSnapshot(args: {
     addNum('Lead Leg Peak Fz (lb)', curr.sums);
     addNum('Lead Leg Peak Fy (lb)', curr.sums);
     addNum('Lead Leg Clawback (s)', curr.sums);
+    addNum('Lead Leg FFC to Peak Y (s)', curr.sums);
     addNum('Lead Leg YZ Transfer (s)', curr.sums);
     addNum('Y Transfer (s)', curr.sums);
     addNum('Z Transfer (s)', curr.sums);
@@ -2458,6 +2579,7 @@ export async function getBiomechanicsSnapshot(args: {
       'Lead Leg Peak Fz (lb)': avg(r.sums['Lead Leg Peak Fz (lb)'], r.count),
       'Lead Leg Peak Fy (lb)': avg(r.sums['Lead Leg Peak Fy (lb)'], r.count),
       'Lead Leg Clawback (s)': avg(r.sums['Lead Leg Clawback (s)'], r.count),
+      'Lead Leg FFC to Peak Y (s)': avg(r.sums['Lead Leg FFC to Peak Y (s)'], r.count),
       'Lead Leg YZ Transfer (s)': avg(r.sums['Lead Leg YZ Transfer (s)'], r.count),
       'Y Transfer (s)': avg(r.sums['Y Transfer (s)'], r.count),
       'Z Transfer (s)': avg(r.sums['Z Transfer (s)'], r.count),

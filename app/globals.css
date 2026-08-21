@@ -10945,26 +10945,6 @@ body.theme-light .portal-force-plate-chart-legend-text {
   color: #000000 !important;
 }
 
-.biomechanics-file-input {
-  color: #e2e8f0;
-  font-size: 0.95rem;
-}
-
-.biomechanics-file-input::file-selector-button {
-  background: rgba(15, 23, 42, 0.95);
-  color: #e2e8f0;
-  border: 1px solid rgba(148, 163, 184, 0.5);
-  border-radius: 8px;
-  padding: 0.32rem 0.7rem;
-  margin-right: 0.55rem;
-  cursor: pointer;
-}
-
-.biomechanics-file-input:disabled::file-selector-button {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
 body.biomechanics-suite-active .portal-header {
   grid-template-columns: minmax(210px, 1fr) auto minmax(280px, 1fr) !important;
 }

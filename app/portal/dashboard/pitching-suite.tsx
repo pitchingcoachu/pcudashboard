@@ -297,6 +297,28 @@ type HeatCell = { x: number; y: number; w: number; h: number; value: number; den
 type ChartHover = { x: number; y: number; text: string; bg?: string } | null;
 type CellColors = { bg: string; text: string };
 type PitchActionPoint = OverviewPayload['chart_points'][number];
+// Pitch rows/chart_points arrive newest-first (Date desc) for on-screen
+// table display, but "play all" video queues should play chronologically
+// (earliest pitch first) -- used wherever a video queue array is built,
+// rather than changing any table's own display order.
+function sortPitchesChronologically(pitches: PitchActionPoint[]): PitchActionPoint[] {
+  return [...pitches].sort((a, b) => {
+    const dateA = a.session_date ?? '';
+    const dateB = b.session_date ?? '';
+    if (dateA !== dateB) return dateA < dateB ? -1 : 1;
+    // Same-day pitches (the common single-bullpen case) can't be ordered by
+    // date alone -- pitch_number isn't reliably populated on every source,
+    // but pitch_event_id is the raw DB primary key, always present and
+    // monotonically increasing with insertion order, so it's a solid
+    // chronological tiebreaker (and primary key when dates are equal/blank).
+    const idA = Number(a.pitch_event_id ?? NaN);
+    const idB = Number(b.pitch_event_id ?? NaN);
+    if (Number.isFinite(idA) && Number.isFinite(idB) && idA !== idB) return idA - idB;
+    const numA = a.pitch_number ?? 0;
+    const numB = b.pitch_number ?? 0;
+    return numA - numB;
+  });
+}
 type PitchEditSelectMode = 'single' | 'lasso';
 type PlotLasso = { startX: number; startY: number; endX: number; endY: number; dragging: boolean } | null;
 type BreakdownTool = 'line' | 'arrow' | 'circle' | 'pen' | 'text' | 'angle' | 'erase';
@@ -5102,6 +5124,7 @@ export default function PitchingSuite({
   const [pinnedLeaderboardKeys, setPinnedLeaderboardKeys] = useState<Set<string>>(new Set());
   const [gameLogRows, setGameLogRows] = useState<Array<Record<string, unknown>>>([]);
   const [gameLogColumns, setGameLogColumns] = useState<string[]>([]);
+  const [gameLogRowPitches, setGameLogRowPitches] = useState<Record<string, PitchActionPoint[]>>({});
   const [loadingGameLog, setLoadingGameLog] = useState(false);
   const [gameLogError, setGameLogError] = useState('');
   const [gameLogSortColumn, setGameLogSortColumn] = useState('Date');
@@ -7348,9 +7371,10 @@ export default function PitchingSuite({
   }, [sortedPitchLogRows, pinnedPitchLogRows, pinnedPitchLogKeys, pitchLogColumns]);
   const pitchLogVideoQueue = useMemo(() => {
     const sourceRows = pinnedPitchLogRows.length ? pinnedPitchLogRows : pitchLogRowsWithPins;
-    return sourceRows
+    const pitches = sourceRows
       .map((row) => row._pitch_action_point)
       .filter((pitch): pitch is PitchActionPoint => Boolean(pitch && typeof pitch === 'object'));
+    return sortPitchesChronologically(pitches);
   }, [pinnedPitchLogRows, pitchLogRowsWithPins]);
   const pitchLogDisplayColumns = useMemo(() => {
     if (!pitchLogColumns.length) return pitchLogColumns;
@@ -7367,6 +7391,7 @@ export default function PitchingSuite({
     if (!canRunGameLog) {
       setGameLogRows([]);
       setGameLogColumns([]);
+      setGameLogRowPitches({});
       setGameLogError('');
       setLoadingGameLog(false);
       return;
@@ -7433,7 +7458,7 @@ export default function PitchingSuite({
       if (ipMax) params.set('ip_max', ipMax);
       params.set('include_chart_points', isPcuBullpenSelection ? '1' : '0');
       if (isPcuBullpenSelection) params.set('chart_points_limit', '9000');
-      params.set('include_row_pitches', '0');
+      params.set('include_row_pitches', '1');
       params.set('include_trend_rows', '0');
       if (isPcuBullpenSelection) params.set('force_raw', '1');
       const response = await fetch(`/api/dashboard/pitching/overview?${params.toString()}`, {
@@ -7508,6 +7533,13 @@ export default function PitchingSuite({
             ...(row as Record<string, unknown>),
             _game_pin_key: `${parsed.gameKey}|${parsed.date}|${rowIndex}`,
             _game_key: parsed.gameKey,
+            // The RAW, full split-column value (e.g.
+            // "2026-08-19||Unknown||Unknown||practice_...||?||?") -- this,
+            // not _game_key (just the 4th `||`-segment of it), is the exact
+            // string row_pitches_by_key is keyed by server-side, since
+            // metricColumns strips the literal "Game" column out of
+            // gameLogColumns entirely (see splitColumn exclusion above).
+            _game_split_key: String((row as Record<string, unknown>)[splitColumn] ?? ''),
             _game_venue_marker: parsed.pitcherMarker,
             Team: parsed.team || '-',
             Date: parsed.date || '-',
@@ -7678,6 +7710,7 @@ export default function PitchingSuite({
       if (!active) return;
       setGameLogColumns([...leadingColumns, ...metricColumns]);
       setGameLogRows(rowsResolved);
+      setGameLogRowPitches((payload.row_pitches_by_key ?? {}) as Record<string, PitchActionPoint[]>);
     };
     run()
       .catch((requestError) => {
@@ -10484,13 +10517,22 @@ export default function PitchingSuite({
     [overview?.heatmap_points]
   );
   const summaryPoints = useMemo(
-    () => pitchLevelSummaryPoints,
+    // Source chart_points arrive newest-first (Date desc); every "play all
+    // videos" queue on this page (Summary/Bullpen "#" clicks, expected-
+    // movement, location plots, etc.) is built by filtering this array
+    // directly, so sort it chronologically once here rather than at each
+    // of those many call sites.
+    () => sortPitchesChronologically(pitchLevelSummaryPoints),
     [pitchLevelSummaryPoints]
   );
   const resolveEditablePitchesForRow = useCallback(
     (row: Record<string, string | number | null>, rowKey: string): PitchActionPoint[] => {
       const mapped = (overview?.row_pitches_by_key?.[rowKey] ?? []) as PitchActionPoint[];
-      if (mapped.length) return mapped;
+      // row_pitches_by_key comes straight from the API, newest-first (Date
+      // desc) same as summaryPoints's raw source -- sort chronologically so
+      // "play all" video queues start at the earliest pitch, same as the
+      // summaryPoints-derived branches below.
+      if (mapped.length) return sortPitchesChronologically(mapped);
 
       const splitColumn = String(overview?.table_columns?.[0] ?? '').trim();
       const rawSplitValue = String(row[splitColumn] ?? rowKey ?? '').trim();
@@ -10570,11 +10612,11 @@ export default function PitchingSuite({
 
         const response = await fetch(req.toString(), { cache: 'no-store' });
         const payload = (await response.json().catch(() => ({}))) as { chart_points?: PitchActionPoint[]; error?: string };
-        if (!response.ok || payload.error) return currentPitches;
+        if (!response.ok || payload.error) return sortPitchesChronologically(currentPitches);
         const fetched = Array.isArray(payload.chart_points) ? payload.chart_points : [];
-        return fetched.length ? fetched : currentPitches;
+        return sortPitchesChronologically(fetched.length ? fetched : currentPitches);
       } catch {
-        return currentPitches;
+        return sortPitchesChronologically(currentPitches);
       }
     },
     [overview?.table_columns]
@@ -16465,6 +16507,18 @@ export default function PitchingSuite({
                             const displayValue = column === 'Date' ? formatShortDate(String(rawValue ?? '')) : formatPitchingTableDisplayValue(column, rawValue);
                             const rowKind = String(row._game_row_kind ?? '');
                             const isSummaryRow = rowKind === 'all' || rowKind === 'all_pinned';
+                            // row_pitches_by_key is keyed by the raw "Game" split
+                            // value, stashed on each row as _game_split_key --
+                            // NOT the frontend-only _game_key field (just one
+                            // `||`-segment of that value, parsed out for the
+                            // pin/opponent-inference features and not a valid
+                            // row_pitches_by_key lookup on its own), and NOT
+                            // gameLogColumns[0] (that's always 'Team', a
+                            // hardcoded display-order lead column, not the raw
+                            // API split column).
+                            const gameRowKey = String(row._game_split_key ?? '');
+                            const gameRowPitches = gameRowKey ? (gameLogRowPitches[gameRowKey] ?? []) : [];
+                            const canOpenGameVideo = column === '#' && !isSummaryRow && gameRowPitches.length > 0;
                             const percentileValue = getCellPercentile(
                               row as Record<string, string | number | null>,
                               column,
@@ -16499,7 +16553,10 @@ export default function PitchingSuite({
                                   textAlign: 'center',
                                   background: gameLogSortColumn === column ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : undefined,
                                   color: gameLogSortColumn === column ? '#fff' : undefined,
+                                  cursor: canOpenGameVideo ? 'pointer' : undefined,
+                                  textDecoration: canOpenGameVideo ? 'underline' : undefined,
                                 }}
+                                onClick={canOpenGameVideo ? () => void openActionModal(sortPitchesChronologically(gameRowPitches)) : undefined}
                               >
                                 {column === 'Team' && isPro && !isSummaryRow ? (
                                   (() => {

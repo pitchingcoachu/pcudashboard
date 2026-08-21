@@ -20,26 +20,26 @@ PRO_ROLLUP_TABLES = (
     "pro_pitch_events_game_rollup",
 )
 
-# PRO tables already GROUP BY balls_num/strikes_num, so each row's own
-# balls_num/strikes_num IS the exact count -- only location sums are needed.
-PRO_NEW_COLUMNS = (
+# Each row already groups by exact balls_num/strikes_num at the DAILY
+# rollup grain, but the PRO fast-path's per-pitcher/per-pitch-type read
+# query (_try_pro_pitching_overview_rollup) further GROUPs BY pitcher +
+# pitch_type only, summing everything else away -- so an average
+# balls/strikes per bucket is needed at read time too, same as LEAGUE.
+NEW_COLUMNS = (
     ("plate_side_sum", "DOUBLE PRECISION NOT NULL DEFAULT 0.0"),
     ("plate_side_n", "INT NOT NULL DEFAULT 0"),
     ("plate_height_sum", "DOUBLE PRECISION NOT NULL DEFAULT 0.0"),
     ("plate_height_n", "INT NOT NULL DEFAULT 0"),
+    ("balls_sum", "DOUBLE PRECISION NOT NULL DEFAULT 0.0"),
+    ("strikes_sum", "DOUBLE PRECISION NOT NULL DEFAULT 0.0"),
 )
+PRO_NEW_COLUMNS = NEW_COLUMNS
 
 LEAGUE_ROLLUP_TABLES = (
     "pitch_events_daily_rollup_league",
     "pitch_events_daily_rollup_league_split",
 )
-
-# LEAGUE tables do NOT group by count, so Command+ needs an average
-# balls/strikes per bucket in addition to the location sums.
-LEAGUE_NEW_COLUMNS = PRO_NEW_COLUMNS + (
-    ("balls_sum", "DOUBLE PRECISION NOT NULL DEFAULT 0.0"),
-    ("strikes_sum", "DOUBLE PRECISION NOT NULL DEFAULT 0.0"),
-)
+LEAGUE_NEW_COLUMNS = NEW_COLUMNS
 
 
 def main() -> int:
