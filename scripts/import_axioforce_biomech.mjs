@@ -29,7 +29,7 @@ function getR2Client() {
   return r2Client;
 }
 function getR2Bucket() {
-  return process.env.R2_BUCKET_NAME?.trim() || 'pcu-biomechanics-raw';
+  return process.env.R2_BUCKET_NAME?.trim() || 'pcu';
 }
 
 async function listCsvFilesRecursive(directory) {

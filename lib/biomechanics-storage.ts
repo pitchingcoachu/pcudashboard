@@ -24,7 +24,7 @@ export function getR2Client(): S3Client | null {
 }
 
 export function getR2Bucket(): string {
-  return process.env.R2_BUCKET_NAME?.trim() || 'pcu-biomechanics-raw';
+  return process.env.R2_BUCKET_NAME?.trim() || 'pcu';
 }
 
 export function isR2Configured(): boolean {
