@@ -33,6 +33,27 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
+      - name: TEMP debug R2 secret shape
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: |
+          node -e '
+          const v = (n) => (process.env[n] ?? "").trim();
+          const info = (n) => {
+            const s = v(n);
+            return { len: s.length, hasBracket: s.includes("["), hasSensitive: s.toUpperCase().includes("SENSITIVE"), firstChar: s.length ? s[0] : null };
+          };
+          console.log(JSON.stringify({
+            R2_ACCOUNT_ID: info("R2_ACCOUNT_ID"),
+            R2_ACCESS_KEY_ID: info("R2_ACCESS_KEY_ID"),
+            R2_SECRET_ACCESS_KEY: info("R2_SECRET_ACCESS_KEY"),
+            R2_BUCKET_NAME: info("R2_BUCKET_NAME"),
+          }, null, 2));
+          '
+
       - name: Authenticate to Google Cloud
         id: google-auth
         uses: google-github-actions/auth@v3
