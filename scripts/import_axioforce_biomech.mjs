@@ -74,11 +74,33 @@ function csvStemFromVideoFileName(videoFileName) {
   return videoFileName.replace(/\.mp4$/i, '').replace(/_1x$/i, '').toLowerCase();
 }
 
+async function importOrphanVideos(client, videosByStem, matchedStems) {
+  let imported = 0;
+  for (const [stem, videoPath] of videosByStem.entries()) {
+    if (matchedStems.has(stem)) continue;
+    const csvFileName = `${stem}.csv`;
+    const result = await client.query(
+      `SELECT source_file_hash FROM biomechanics_uploads
+       WHERE organization_id = $1 AND school_code = $2 AND upload_kind = 'single_pitch'
+         AND lower(source_file_name) LIKE lower('%' || $3)
+       ORDER BY created_at DESC LIMIT 1`,
+      [ORG_ID, SCHOOL_CODE, csvFileName]
+    );
+    const sourceFileHash = result.rows[0]?.source_file_hash;
+    if (!sourceFileHash) continue;
+    if (await uploadAndSaveVideo(client, videoPath, sourceFileHash)) imported += 1;
+  }
+  return imported;
+}
+
 async function importMatchingVideo(client, csvFilePath, sourceFileHash, videosByStem) {
   const csvStem = videoStemForCsv(path.basename(csvFilePath));
   const videoPath = videosByStem.get(csvStem);
   if (!videoPath) return false;
+  return uploadAndSaveVideo(client, videoPath, sourceFileHash);
+}
 
+async function uploadAndSaveVideo(client, videoPath, sourceFileHash) {
   const existing = await client.query(
     `SELECT 1 FROM biomechanics_pitch_videos WHERE organization_id = $1 AND school_code = $2 AND source_file_hash = $3`,
     [ORG_ID, SCHOOL_CODE, sourceFileHash]
@@ -685,13 +707,13 @@ async function main() {
 
   const allFiles = await listCsvFilesRecursive(ALL_PITCH_DIR);
   const singleFiles = await listCsvFilesRecursive(SINGLE_PITCH_DIR);
-  if (!allFiles.length && !singleFiles.length) throw new Error(`No Axioforce CSV files found under ${ROOT}.`);
+  const videoFiles = await listMp4FilesRecursive(SINGLE_PITCH_DIR);
+  if (!allFiles.length && !singleFiles.length && !videoFiles.length) throw new Error(`No Axioforce CSV or video files found under ${ROOT}.`);
   if (!Number.isInteger(ORG_ID) || ORG_ID <= 0) throw new Error('AXIOFORCE_ORGANIZATION_ID must be a positive integer.');
   if (IMPORT_MODE !== 'replace' && IMPORT_MODE !== 'incremental') {
     throw new Error('AXIOFORCE_IMPORT_MODE must be replace or incremental.');
   }
 
-  const videoFiles = await listMp4FilesRecursive(SINGLE_PITCH_DIR);
   const videosByStem = new Map(videoFiles.map((videoPath) => [csvStemFromVideoFileName(path.basename(videoPath)), videoPath]));
 
   const pool = new Pool({ connectionString: dbUrl });
@@ -723,8 +745,11 @@ async function main() {
 
     let singlePointsInserted = 0;
     let videosImported = 0;
+    const matchedVideoStems = new Set();
     for (let i = 0; i < singleFiles.length; i += 1) {
       const file = singleFiles[i];
+      const csvStem = videoStemForCsv(path.basename(file));
+      if (videosByStem.has(csvStem)) matchedVideoStems.add(csvStem);
       if (IMPORT_MODE === 'incremental' && await alreadyImported(client, 'single_pitch', file)) {
         skippedFiles += 1;
         const sourceFileHash = createHash('sha256').update(await fs.readFile(file, 'utf8')).digest('hex');
@@ -736,6 +761,10 @@ async function main() {
       const sourceFileHash = createHash('sha256').update(await fs.readFile(file, 'utf8')).digest('hex');
       if (await importMatchingVideo(client, file, sourceFileHash, videosByStem)) videosImported += 1;
     }
+
+    // Videos whose matching CSV isn't in this batch (e.g. imported in an earlier
+    // run/batch) are matched here against already-imported uploads by filename.
+    videosImported += await importOrphanVideos(client, videosByStem, matchedVideoStems);
 
     const verify = await client.query(
       `SELECT
