@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
+import dynamic from 'next/dynamic';
 import { formatTableDisplayValue, parseSortableNumber, sortTableRows, type SortDirection } from '../../../lib/table-sort';
 import { buildPinnedAllRow, pinKeyFromRow, sortRowsWithPins } from '../../../lib/leaderboard-pins';
 import { downloadLeaderboardTablePdf } from '../../../lib/leaderboard-pdf-export';
@@ -15,6 +16,10 @@ import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../lib/league-team-name-map';
 import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
 import { dashboardActivityPath, dispatchPortalActivity } from './activity-events';
 import { calculateExpectedMovement, magnusAngleDegrees, measuredTiltDegrees } from '../../../lib/expected-movement';
+
+const BallFlightPanel = dynamic(() => import('./ball-flight-panel'), {
+  loading: () => <p className="portal-muted-text">Loading Flight Lab…</p>,
+});
 
 type FiltersPayload = {
   school_code: string;
@@ -5040,7 +5045,7 @@ export default function PitchingSuite({
   const isPlayerRole = role === 'player';
   const initialSchoolCode = String(selectedSchoolCode ?? '').trim().toUpperCase();
   const shouldUsePcuDefaults = initialSchoolCode === 'PCU';
-  const [dashboardPage, setDashboardPage] = useState<'Summary' | 'Leaderboard' | 'Game Log' | 'Pitch Log' | 'AB Report' | 'Velocity' | 'HeatMaps' | 'QP Locations' | 'Trend' | 'Velo Manual Entry' | 'Pitcher DNA'>('Summary');
+  const [dashboardPage, setDashboardPage] = useState<'Summary' | 'Leaderboard' | 'Game Log' | 'Pitch Log' | 'AB Report' | 'Velocity' | 'HeatMaps' | 'QP Locations' | 'Trend' | 'Velo Manual Entry' | 'Pitcher DNA' | 'Ball Flight'>('Summary');
   const [isSidebarHidden, setIsSidebarHidden] = useState(false);
   const [isMobileView, setIsMobileView] = useState(false);
   const [filters, setFilters] = useState<FiltersPayload | null>(null);
@@ -5656,6 +5661,12 @@ export default function PitchingSuite({
     ipMin,
     ipMax,
   ]);
+  const ballFlightQueryString = useMemo(() => {
+    const params = new URLSearchParams(dnaSharedFilterParams);
+    if (startDate) params.set('start_date', startDate);
+    if (endDate) params.set('end_date', endDate);
+    return params.toString();
+  }, [dnaSharedFilterParams, endDate, startDate]);
   const collegeLevelPercentileOptions = useMemo(() => {
     const seen = new Set<string>();
     const options: string[] = [];
@@ -15077,7 +15088,14 @@ export default function PitchingSuite({
           </article>
         ) : null}
 
-        <article className="portal-admin-card" style={{ alignContent: 'start' }}>
+        <article
+          className="portal-admin-card"
+          style={{
+            alignContent: 'start',
+            minWidth: 0,
+            maxWidth: isMobileView || isSidebarHidden ? '100%' : 'calc(100vw - 435px)',
+          }}
+        >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
             {isMobileView ? (
               <label className="portal-mobile-control-row">
@@ -15098,6 +15116,7 @@ export default function PitchingSuite({
                   {canShowQpLocationsTab ? <option value="QP Locations">QP Locations</option> : null}
                   {canShowVeloManualEntry ? <option value="Velo Manual Entry">Velo Manual Entry</option> : null}
                   <option value="Pitcher DNA">Pitcher DNA</option>
+                  <option value="Ball Flight">Ball Flight</option>
                 </select>
               </label>
             ) : (
@@ -15186,6 +15205,13 @@ export default function PitchingSuite({
                   onClick={() => setDashboardPage('Pitcher DNA')}
                 >
                   Pitcher DNA
+                </button>
+                <button
+                  type="button"
+                  className={dashboardPage === 'Ball Flight' ? 'btn btn-primary' : 'btn btn-ghost'}
+                  onClick={() => setDashboardPage('Ball Flight')}
+                >
+                  Ball Flight
                 </button>
               </div>
             )}
@@ -18220,6 +18246,8 @@ export default function PitchingSuite({
                 </div>
               )}
             </>
+          ) : dashboardPage === 'Ball Flight' ? (
+            <BallFlightPanel queryString={ballFlightQueryString} />
           ) : dashboardPage === 'Pitcher DNA' ? (
             <PitcherDnaPanel
               filters={filters}

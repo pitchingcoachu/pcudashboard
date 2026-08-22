@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import pg from 'pg';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 
 const { Pool } = pg;
 
@@ -12,6 +13,24 @@ const ALL_PITCH_DIR = path.join(ROOT, 'All pitch CSVs');
 const SINGLE_PITCH_DIR = path.join(ROOT, 'Single Pitch CSVs');
 const IMPORT_MODE = String(process.env.AXIOFORCE_IMPORT_MODE ?? 'replace').trim().toLowerCase();
 const GRAPH_CACHE_TARGET_POINTS = 600;
+
+let r2Client = null;
+function getR2Client() {
+  if (r2Client) return r2Client;
+  const accountId = process.env.R2_ACCOUNT_ID?.trim();
+  const accessKeyId = process.env.R2_ACCESS_KEY_ID?.trim();
+  const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY?.trim();
+  if (!accountId || !accessKeyId || !secretAccessKey) return null;
+  r2Client = new S3Client({
+    region: 'auto',
+    endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+    credentials: { accessKeyId, secretAccessKey },
+  });
+  return r2Client;
+}
+function getR2Bucket() {
+  return process.env.R2_BUCKET_NAME?.trim() || 'pcu-biomechanics-raw';
+}
 
 async function listCsvFilesRecursive(directory) {
   const files = [];
@@ -28,6 +47,69 @@ async function listCsvFilesRecursive(directory) {
     else if (entry.isFile() && entry.name.toLowerCase().endsWith('.csv')) files.push(fullPath);
   }
   return files.sort((a, b) => a.localeCompare(b));
+}
+
+async function listMp4FilesRecursive(directory) {
+  const files = [];
+  let entries;
+  try {
+    entries = await fs.readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') return files;
+    throw error;
+  }
+  for (const entry of entries) {
+    const fullPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) files.push(...await listMp4FilesRecursive(fullPath));
+    else if (entry.isFile() && entry.name.toLowerCase().endsWith('.mp4')) files.push(fullPath);
+  }
+  return files;
+}
+
+// CSV: 20260703_110831_PITCH_BB.csv  Video: 20260703_110831_PITCH_BB_1x.mp4
+function videoStemForCsv(csvFileName) {
+  return csvFileName.replace(/\.csv$/i, '').toLowerCase();
+}
+function csvStemFromVideoFileName(videoFileName) {
+  return videoFileName.replace(/\.mp4$/i, '').replace(/_1x$/i, '').toLowerCase();
+}
+
+async function importMatchingVideo(client, csvFilePath, sourceFileHash, videosByStem) {
+  const csvStem = videoStemForCsv(path.basename(csvFilePath));
+  const videoPath = videosByStem.get(csvStem);
+  if (!videoPath) return false;
+
+  const existing = await client.query(
+    `SELECT 1 FROM biomechanics_pitch_videos WHERE organization_id = $1 AND school_code = $2 AND source_file_hash = $3`,
+    [ORG_ID, SCHOOL_CODE, sourceFileHash]
+  );
+  if (existing.rows.length) return false;
+
+  const body = await fs.readFile(videoPath);
+  const fileName = path.basename(videoPath);
+  const key = `biomechanics-video/org-${ORG_ID}/school-${SCHOOL_CODE}/${sourceFileHash}/${fileName}`;
+  const r2 = getR2Client();
+  if (!r2) {
+    console.warn(`R2 not configured; skipping video upload for ${fileName}`);
+    return false;
+  }
+  await r2.send(new PutObjectCommand({
+    Bucket: getR2Bucket(),
+    Key: key,
+    Body: body,
+    ContentType: 'video/mp4',
+    Metadata: { organization_id: String(ORG_ID), school_code: SCHOOL_CODE, pitch_key: sourceFileHash, source_file_name: fileName },
+  }));
+  await client.query(
+    `INSERT INTO biomechanics_pitch_videos
+       (organization_id, school_code, source_file_hash, r2_key, source_file_name, content_type, file_size)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     ON CONFLICT (organization_id, school_code, source_file_hash) DO UPDATE SET
+       r2_key = EXCLUDED.r2_key, source_file_name = EXCLUDED.source_file_name,
+       content_type = EXCLUDED.content_type, file_size = EXCLUDED.file_size`,
+    [ORG_ID, SCHOOL_CODE, sourceFileHash, key, fileName, 'video/mp4', body.length]
+  );
+  return true;
 }
 
 async function fileSha256(filePath) {
@@ -414,6 +496,25 @@ async function upsertUpload(client, { uploadKind, sourceFileName, sourceFileHash
   return Number(inserted.rows[0].id);
 }
 
+async function ensurePitchVideosTable(client) {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS biomechanics_pitch_videos (
+      id BIGSERIAL PRIMARY KEY,
+      organization_id BIGINT NOT NULL,
+      school_code TEXT NOT NULL,
+      source_file_hash TEXT NOT NULL,
+      r2_key TEXT NOT NULL,
+      source_file_name TEXT,
+      content_type TEXT,
+      file_size BIGINT,
+      drive_file_id TEXT,
+      offset_seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (organization_id, school_code, source_file_hash)
+    );
+  `);
+}
+
 async function clearBiomech(client) {
   await client.query(`DELETE FROM biomechanics_pitch_metrics WHERE organization_id = $1 AND school_code = $2`, [ORG_ID, SCHOOL_CODE]);
   await client.query(`DELETE FROM biomechanics_graph_cache WHERE organization_id = $1 AND school_code = $2`, [ORG_ID, SCHOOL_CODE]);
@@ -590,12 +691,17 @@ async function main() {
     throw new Error('AXIOFORCE_IMPORT_MODE must be replace or incremental.');
   }
 
+  const videoFiles = await listMp4FilesRecursive(SINGLE_PITCH_DIR);
+  const videosByStem = new Map(videoFiles.map((videoPath) => [csvStemFromVideoFileName(path.basename(videoPath)), videoPath]));
+
   const pool = new Pool({ connectionString: dbUrl });
   const client = await pool.connect();
   try {
     console.log(`scope: organization=${ORG_ID} school=${SCHOOL_CODE} mode=${IMPORT_MODE}`);
     console.log(`found all-pitch files: ${allFiles.length}`);
     console.log(`found single-pitch files: ${singleFiles.length}`);
+    console.log(`found single-pitch videos: ${videoFiles.length}`);
+    await ensurePitchVideosTable(client);
     if (IMPORT_MODE === 'replace') {
       await client.query('BEGIN');
       await clearBiomech(client);
@@ -616,13 +722,19 @@ async function main() {
     }
 
     let singlePointsInserted = 0;
+    let videosImported = 0;
     for (let i = 0; i < singleFiles.length; i += 1) {
-      if (IMPORT_MODE === 'incremental' && await alreadyImported(client, 'single_pitch', singleFiles[i])) {
+      const file = singleFiles[i];
+      if (IMPORT_MODE === 'incremental' && await alreadyImported(client, 'single_pitch', file)) {
         skippedFiles += 1;
+        const sourceFileHash = createHash('sha256').update(await fs.readFile(file, 'utf8')).digest('hex');
+        if (await importMatchingVideo(client, file, sourceFileHash, videosByStem)) videosImported += 1;
         continue;
       }
-      const count = await importSinglePitchFile(client, singleFiles[i], i + 1, singleFiles.length);
+      const count = await importSinglePitchFile(client, file, i + 1, singleFiles.length);
       singlePointsInserted += count;
+      const sourceFileHash = createHash('sha256').update(await fs.readFile(file, 'utf8')).digest('hex');
+      if (await importMatchingVideo(client, file, sourceFileHash, videosByStem)) videosImported += 1;
     }
 
     const verify = await client.query(
@@ -631,11 +743,12 @@ async function main() {
         (SELECT COUNT(DISTINCT source_file_hash) FROM biomechanics_single_pitch_points WHERE organization_id = $1 AND school_code = $2)::int AS single_files,
         (SELECT COUNT(DISTINCT source_file_hash) FROM biomechanics_graph_cache WHERE organization_id = $1 AND school_code = $2)::int AS graph_cache_files,
         (SELECT COUNT(*) FROM biomechanics_single_pitch_points WHERE organization_id = $1 AND school_code = $2)::bigint AS single_points,
-        (SELECT COUNT(*) FROM biomechanics_pitch_metrics WHERE organization_id = $1 AND school_code = $2)::int AS metrics_rows`,
+        (SELECT COUNT(*) FROM biomechanics_pitch_metrics WHERE organization_id = $1 AND school_code = $2)::int AS metrics_rows,
+        (SELECT COUNT(*) FROM biomechanics_pitch_videos WHERE organization_id = $1 AND school_code = $2)::int AS video_rows`,
       [ORG_ID, SCHOOL_CODE]
     );
     console.log(JSON.stringify({
-      imported: { allRowsInserted, singlePointsInserted, singleFileCount: singleFiles.length, skippedFiles },
+      imported: { allRowsInserted, singlePointsInserted, singleFileCount: singleFiles.length, skippedFiles, videosImported },
       verify: verify.rows[0],
     }, null, 2));
   } finally {

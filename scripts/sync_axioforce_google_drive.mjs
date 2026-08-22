@@ -116,9 +116,14 @@ async function walkDriveFolder(token, folderId) {
 }
 
 function classifyFile(file) {
-  if (!file.name.toLowerCase().endsWith('.csv') && file.mimeType !== 'text/csv') return null;
+  const name = file.name.toLowerCase();
   const folders = file.relativeParts.slice(0, -1).map((part) => part.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim());
-  if (folders.some((part) => part.includes('single pitch') || part.includes('individual pitch'))) return 'single_pitch';
+  const isSinglePitchFolder = folders.some((part) => part.includes('single pitch') || part.includes('individual pitch'));
+  if (name.endsWith('.mp4') || file.mimeType === 'video/mp4') {
+    return isSinglePitchFolder ? 'single_pitch_video' : null;
+  }
+  if (!name.endsWith('.csv') && file.mimeType !== 'text/csv') return null;
+  if (isSinglePitchFolder) return 'single_pitch';
   if (folders.some((part) => part.includes('all pitch'))) return 'all_pitches';
   return null;
 }
@@ -282,7 +287,7 @@ async function main() {
     const stagingRoot = path.join(tempRoot, 'staging');
     for (let index = 0; index < pending.length; index += 1) {
       const file = pending[index];
-      const base = file.uploadKind === 'all_pitches' ? 'All pitch CSVs' : 'Single Pitch CSVs';
+      const base = file.uploadKind === 'all_pitches' ? 'All pitch CSVs' : 'Single Pitch CSVs'; // single_pitch_video shares the Single Pitch CSVs tree
       const relative = file.relativeParts.map(safePathPart);
       const destination = path.join(stagingRoot, base, ...relative);
       file.localDestination = destination;
@@ -298,7 +303,7 @@ async function main() {
       const batch = pending.slice(start, start + batchSize);
       const batchRoot = path.join(tempRoot, `batch-${String(start / batchSize + 1).padStart(4, '0')}`);
       for (const file of batch) {
-        const base = file.uploadKind === 'all_pitches' ? 'All pitch CSVs' : 'Single Pitch CSVs';
+        const base = file.uploadKind === 'all_pitches' ? 'All pitch CSVs' : 'Single Pitch CSVs'; // single_pitch_video shares the Single Pitch CSVs tree
         const destination = path.join(batchRoot, base, ...file.relativeParts.map(safePathPart));
         await fs.mkdir(path.dirname(destination), { recursive: true });
         await fs.rename(file.localDestination, destination);

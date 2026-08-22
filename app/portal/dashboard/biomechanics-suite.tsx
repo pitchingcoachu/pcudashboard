@@ -25,6 +25,7 @@ type PitchOption = {
   bodyWeightLb?: number | null;
   strideLengthIn?: number | null;
   strideDirectionIn?: number | null;
+  hasVideo?: boolean;
 };
 
 type PitchPoint = {
@@ -332,6 +333,64 @@ function formatPitchOptionLabel(option: PitchOption, allOptions: PitchOption[], 
   return `${pitcher} | ${mm}/${dd}/${yy} | Pitch #${pitchNum} | ${pitchDetails}`;
 }
 
+function PitchVideoPanel({
+  pitchKey,
+  scrubTime,
+  onScrubTime,
+}: {
+  pitchKey: string;
+  scrubTime: number | null;
+  onScrubTime: (t: number) => void;
+}) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const seekingFromScrubRef = useRef(false);
+  const [videoError, setVideoError] = useState(false);
+
+  // External scrub (drag on graph) -> seek video, unless the video itself is the source of this update.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || scrubTime === null) return;
+    if (seekingFromScrubRef.current) {
+      seekingFromScrubRef.current = false;
+      return;
+    }
+    if (Math.abs(video.currentTime - scrubTime) > 0.05) {
+      video.currentTime = Math.max(0, scrubTime);
+    }
+  }, [scrubTime]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onTimeUpdate = () => {
+      seekingFromScrubRef.current = true;
+      onScrubTime(video.currentTime);
+    };
+    video.addEventListener('timeupdate', onTimeUpdate);
+    video.addEventListener('seeking', onTimeUpdate);
+    return () => {
+      video.removeEventListener('timeupdate', onTimeUpdate);
+      video.removeEventListener('seeking', onTimeUpdate);
+    };
+  }, [onScrubTime, pitchKey]);
+
+  if (videoError) return null;
+
+  return (
+    <div style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 8, background: 'rgba(2,6,23,0.4)' }}>
+      <video
+        ref={videoRef}
+        src={`/api/dashboard/biomechanics/pitch-video/${encodeURIComponent(pitchKey)}`}
+        controls
+        playsInline
+        preload="metadata"
+        onError={() => setVideoError(true)}
+        style={{ width: '100%', maxHeight: 360, borderRadius: 8, display: 'block', background: '#000' }}
+      />
+    </div>
+  );
+}
+
 function LineChart({
   points,
   mode,
@@ -341,6 +400,8 @@ function LineChart({
   bodyWeightLb,
   strideLengthIn,
   strideDirectionIn,
+  scrubTime,
+  onScrubTime,
 }: {
   points: PitchPoint[];
   mode: ViewMode;
@@ -350,6 +411,8 @@ function LineChart({
   bodyWeightLb: number | null;
   strideLengthIn: number | null;
   strideDirectionIn: number | null;
+  scrubTime?: number | null;
+  onScrubTime?: (t: number) => void;
 }) {
   const roundAxisBound = (value: number, direction: 'up' | 'down') => {
     const isBwForceView = mode === 'Force' && forceMode === 'bw';
@@ -365,6 +428,13 @@ function LineChart({
     return Math.floor(value / step) * step;
   };
   const [hoverClientX, setHoverClientX] = useState<number | null>(null);
+  const [isScrubbing, setIsScrubbing] = useState<boolean>(false);
+  useEffect(() => {
+    if (!isScrubbing) return;
+    const stop = () => setIsScrubbing(false);
+    window.addEventListener('mouseup', stop);
+    return () => window.removeEventListener('mouseup', stop);
+  }, [isScrubbing]);
   const metrics = mode === 'Force'
     ? [
         { key: 'fx', label: 'Fx' },
@@ -612,6 +682,43 @@ function LineChart({
       metrics: metricsAtPoint,
     };
   }, [chartPoints, domain, dx, hoverClientX, metrics, minX, plotW]);
+  const scrubPayload = useMemo(() => {
+    if (!domain || scrubTime === null || scrubTime === undefined || !chartPoints.length) return null;
+    let closest: PitchPoint | null = null;
+    let closestDelta = Number.POSITIVE_INFINITY;
+    for (const point of chartPoints) {
+      const t = toFinite(point.t);
+      if (t === null) continue;
+      const delta = Math.abs(t - scrubTime);
+      if (delta < closestDelta) {
+        closest = point;
+        closestDelta = delta;
+      }
+    }
+    if (!closest) return null;
+    const t = toFinite(closest.t);
+    if (t === null) return null;
+    const phase = normalizePhase(closest.phase_name);
+    const metricsAtPoint = metrics.map((metric) => {
+      const key = metric.key;
+      const value = toFinite((closest as Record<string, unknown>)[key]);
+      const color = phase ? (phaseStyles[phase][key] ?? '#e2e8f0') : '#e2e8f0';
+      return { key, label: metric.label, value, color };
+    });
+    return {
+      t,
+      xPx: x(t),
+      phase,
+      metrics: metricsAtPoint,
+    };
+  }, [chartPoints, domain, metrics, scrubTime]);
+  const timeToClientFraction = (event: { currentTarget: SVGSVGElement | HTMLDivElement; clientX: number }) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (!rect.width) return null;
+    const xPos = ((event.clientX - rect.left) / rect.width) * width;
+    const clamped = Math.max(pad.left, Math.min(width - pad.right, xPos));
+    return minX + ((clamped - pad.left) / plotW) * dx;
+  };
   const yTicks = useMemo(() => {
     if (!domain) return [] as number[];
     const tickStep = 100;
@@ -823,14 +930,29 @@ function LineChart({
       <div data-biomech-graph-panel="true" style={{ position: 'relative', marginTop: pad.top }}>
         <svg
         viewBox={`0 0 ${width} ${height}`}
-        style={{ width: '100%', maxWidth: '100%', background: 'linear-gradient(165deg, rgba(8,8,10,0.96), rgba(24,24,28,0.9))', border: '1px solid rgba(200,16,46,0.28)', borderRadius: 12, overflow: 'hidden', display: 'block' }}
-        onMouseLeave={() => setHoverClientX(null)}
+        style={{ width: '100%', maxWidth: '100%', background: 'linear-gradient(165deg, rgba(8,8,10,0.96), rgba(24,24,28,0.9))', border: '1px solid rgba(200,16,46,0.28)', borderRadius: 12, overflow: 'hidden', display: 'block', cursor: onScrubTime ? 'pointer' : 'default' }}
+        onMouseLeave={() => {
+          setHoverClientX(null);
+          if (isScrubbing) setIsScrubbing(false);
+        }}
+        onMouseDown={(event) => {
+          if (!onScrubTime) return;
+          const t = timeToClientFraction(event);
+          if (t === null) return;
+          setIsScrubbing(true);
+          onScrubTime(t);
+        }}
+        onMouseUp={() => setIsScrubbing(false)}
         onMouseMove={(event) => {
           const rect = event.currentTarget.getBoundingClientRect();
           if (!rect.width) return;
           const xPos = ((event.clientX - rect.left) / rect.width) * width;
           const clamped = Math.max(pad.left, Math.min(width - pad.right, xPos));
           setHoverClientX(clamped);
+          if (isScrubbing && onScrubTime) {
+            const t = minX + ((clamped - pad.left) / plotW) * dx;
+            onScrubTime(t);
+          }
         }}
       >
         <line x1={pad.left} y1={pad.top} x2={pad.left} y2={height - pad.bottom} stroke="rgba(148,163,184,0.5)" strokeWidth="1" />
@@ -915,6 +1037,16 @@ function LineChart({
               );
             })
           : null}
+        {scrubPayload ? (
+          <line
+            x1={scrubPayload.xPx}
+            y1={pad.top}
+            x2={scrubPayload.xPx}
+            y2={height - pad.bottom}
+            stroke="#c8102e"
+            strokeWidth="2"
+          />
+        ) : null}
         </svg>
         {hoverPayload ? (
         <div
@@ -1054,6 +1186,8 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
   const [selectedPitchBodyWeightLb, setSelectedPitchBodyWeightLb] = useState<number | null>(null);
   const [selectedPitchStrideLengthIn, setSelectedPitchStrideLengthIn] = useState<number | null>(null);
   const [selectedPitchStrideDirectionIn, setSelectedPitchStrideDirectionIn] = useState<number | null>(null);
+  const [selectedPitchHasVideo, setSelectedPitchHasVideo] = useState<boolean>(false);
+  const [scrubTime, setScrubTime] = useState<number | null>(null);
   const [selectedPitchers, setSelectedPitchers] = useState<string[]>(['All']);
   const [comparePitchKeyA, setComparePitchKeyA] = useState<string>('');
   const [comparePitchKeyB, setComparePitchKeyB] = useState<string>('');
@@ -1111,6 +1245,8 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
     setSelectedPitchBodyWeightLb(typeof meta?.bodyWeightLb === 'number' ? meta.bodyWeightLb : null);
     setSelectedPitchStrideLengthIn(typeof meta?.strideLengthIn === 'number' ? meta.strideLengthIn : null);
     setSelectedPitchStrideDirectionIn(typeof meta?.strideDirectionIn === 'number' ? meta.strideDirectionIn : null);
+    setSelectedPitchHasVideo(Boolean(meta?.hasVideo));
+    setScrubTime(null);
   };
 
   const loadPitchPoints = async (pitchKey: string, activeForceMode: ForceMode) => {
@@ -1960,6 +2096,14 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
             );
           })()}
         </div>
+        {selectedPitchHasVideo ? (
+          <PitchVideoPanel
+            key={selectedPitchKey}
+            pitchKey={selectedPitchKey}
+            scrubTime={scrubTime}
+            onScrubTime={setScrubTime}
+          />
+        ) : null}
         <LineChart
           points={selectedPitchPoints}
           mode={mode}
@@ -1969,6 +2113,8 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
           bodyWeightLb={selectedPitchBodyWeightLb}
           strideLengthIn={selectedPitchStrideLengthIn}
           strideDirectionIn={selectedPitchStrideDirectionIn}
+          scrubTime={scrubTime}
+          onScrubTime={setScrubTime}
         />
         {selectedPitchPointsError ? (
           <p style={{ color: '#fca5a5', margin: 0, fontSize: 13 }}>{selectedPitchPointsError}</p>

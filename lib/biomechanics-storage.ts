@@ -151,6 +151,48 @@ export async function uploadMotionCaptureVideoToR2(args: {
   }
 }
 
+export async function uploadBiomechanicsPitchVideoToR2(args: {
+  organizationId: number;
+  schoolCode: string;
+  pitchKey: string;
+  fileName: string;
+  contentType: string;
+  body: Buffer;
+}): Promise<string | null> {
+  const safeName = String(args.fileName ?? 'pitch.mp4').replace(/[^a-zA-Z0-9._-]+/g, '-');
+  const key = `biomechanics-video/org-${args.organizationId}/school-${args.schoolCode}/${args.pitchKey}/${safeName}`;
+  const client = getR2Client();
+  if (!client) {
+    if (!canUseLocalMotionCaptureStorage()) return null;
+    try {
+      const filePath = path.join(localMotionCaptureRoot(), key);
+      await mkdir(path.dirname(filePath), { recursive: true });
+      await writeFile(filePath, args.body);
+      return `local:${key}`;
+    } catch {
+      return null;
+    }
+  }
+  const bucket = getR2Bucket();
+  try {
+    await client.send(new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: args.body,
+      ContentType: args.contentType || inferVideoContentTypeFromKey(safeName),
+      Metadata: {
+        organization_id: String(args.organizationId),
+        school_code: args.schoolCode,
+        pitch_key: args.pitchKey,
+        source_file_name: safeName,
+      },
+    }));
+    return key;
+  } catch {
+    return null;
+  }
+}
+
 export async function uploadPlayerMediaToR2(args: {
   organizationId: number;
   playerId: number;

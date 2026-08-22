@@ -11,6 +11,10 @@
     {
       "path": "/api/cron/daily-player-notes",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/pitch-flight-sync",
+      "schedule": "20 */6 * * *"
     }
   ]
 }

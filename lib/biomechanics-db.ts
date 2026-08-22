@@ -16,6 +16,7 @@ export type BiomechPitchOption = {
   bodyWeightLb?: number | null;
   strideLengthIn?: number | null;
   strideDirectionIn?: number | null;
+  hasVideo?: boolean;
 };
 
 export type BiomechSinglePitchPoint = {
@@ -1022,6 +1023,23 @@ async function ensureBiomechanicsTables(): Promise<void> {
     await client.query(`ALTER TABLE biomechanics_graph_cache ADD COLUMN IF NOT EXISTS pitcher_name_norm TEXT;`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_graph_cache_scope ON biomechanics_graph_cache (organization_id, school_code, source_file_hash, point_index ASC);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_graph_cache_scope_date ON biomechanics_graph_cache (organization_id, school_code, captured_at DESC);`);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS biomechanics_pitch_videos (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id BIGINT NOT NULL,
+        school_code TEXT NOT NULL,
+        source_file_hash TEXT NOT NULL,
+        r2_key TEXT NOT NULL,
+        source_file_name TEXT,
+        content_type TEXT,
+        file_size BIGINT,
+        drive_file_id TEXT,
+        offset_seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (organization_id, school_code, source_file_hash)
+      );
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_videos_scope_hash ON biomechanics_pitch_videos (organization_id, school_code, source_file_hash);`);
     await client.query('COMMIT');
     global.__pcuBiomechanicsDbReady = true;
     global.__pcuBiomechanicsDbPatched = true;
@@ -1088,6 +1106,116 @@ async function ensureBiomechanicsMetricsTable(): Promise<void> {
   await pool.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS z_force_gain DOUBLE PRECISION;`);
   await pool.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS ffc_to_peak_y DOUBLE PRECISION;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_metrics_scope_hash ON biomechanics_pitch_metrics (organization_id, school_code, source_file_hash);`);
+}
+
+async function ensureBiomechanicsPitchVideosTable(): Promise<void> {
+  if (!isDatabaseConfigured()) return;
+  const pool = getDbPool();
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS biomechanics_pitch_videos (
+      id BIGSERIAL PRIMARY KEY,
+      organization_id BIGINT NOT NULL,
+      school_code TEXT NOT NULL,
+      source_file_hash TEXT NOT NULL,
+      r2_key TEXT NOT NULL,
+      source_file_name TEXT,
+      content_type TEXT,
+      file_size BIGINT,
+      drive_file_id TEXT,
+      offset_seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (organization_id, school_code, source_file_hash)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_videos_scope_hash ON biomechanics_pitch_videos (organization_id, school_code, source_file_hash);`);
+}
+
+export type BiomechPitchVideo = {
+  pitchKey: string;
+  r2Key: string;
+  sourceFileName: string | null;
+  contentType: string | null;
+  offsetSeconds: number;
+};
+
+export async function saveBiomechanicsPitchVideo(args: {
+  organizationId: number;
+  schoolCode: string;
+  pitchKey: string;
+  r2Key: string;
+  sourceFileName: string;
+  contentType: string;
+  fileSize: number;
+  driveFileId?: string | null;
+}): Promise<void> {
+  if (!isDatabaseConfigured()) throw new Error('DATABASE_URL is not configured.');
+  await ensureBiomechanicsPitchVideosTable();
+  const pool = getDbPool();
+  const schoolCode = normalizeSchoolCode(args.schoolCode);
+  await pool.query(
+    `
+    INSERT INTO biomechanics_pitch_videos
+      (organization_id, school_code, source_file_hash, r2_key, source_file_name, content_type, file_size, drive_file_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+    ON CONFLICT (organization_id, school_code, source_file_hash) DO UPDATE SET
+      r2_key = EXCLUDED.r2_key,
+      source_file_name = EXCLUDED.source_file_name,
+      content_type = EXCLUDED.content_type,
+      file_size = EXCLUDED.file_size,
+      drive_file_id = EXCLUDED.drive_file_id
+    `,
+    [args.organizationId, schoolCode, args.pitchKey, args.r2Key, args.sourceFileName, args.contentType, args.fileSize, args.driveFileId ?? null]
+  );
+}
+
+export async function getBiomechanicsPitchVideo(args: {
+  organizationId: number;
+  schoolCode: string;
+  pitchKey: string;
+}): Promise<BiomechPitchVideo | null> {
+  if (!isDatabaseConfigured()) return null;
+  await ensureBiomechanicsPitchVideosTable();
+  const pool = getDbPool();
+  const schoolCode = normalizeSchoolCode(args.schoolCode);
+  const result = await pool.query<{
+    source_file_hash: string;
+    r2_key: string;
+    source_file_name: string | null;
+    content_type: string | null;
+    offset_seconds: number | string | null;
+  }>(
+    `
+    SELECT source_file_hash, r2_key, source_file_name, content_type, offset_seconds
+    FROM biomechanics_pitch_videos
+    WHERE organization_id = $1 AND school_code = $2 AND source_file_hash = $3
+    LIMIT 1
+    `,
+    [args.organizationId, schoolCode, args.pitchKey]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    pitchKey: row.source_file_hash,
+    r2Key: row.r2_key,
+    sourceFileName: row.source_file_name,
+    contentType: row.content_type,
+    offsetSeconds: toFinite(row.offset_seconds) ?? 0,
+  };
+}
+
+export async function getBiomechanicsPitchVideoKeysForOrg(args: {
+  organizationId: number;
+  schoolCode: string;
+}): Promise<Set<string>> {
+  if (!isDatabaseConfigured()) return new Set();
+  await ensureBiomechanicsPitchVideosTable();
+  const pool = getDbPool();
+  const schoolCode = normalizeSchoolCode(args.schoolCode);
+  const result = await pool.query<{ source_file_hash: string }>(
+    `SELECT source_file_hash FROM biomechanics_pitch_videos WHERE organization_id = $1 AND school_code = $2`,
+    [args.organizationId, schoolCode]
+  );
+  return new Set(result.rows.map((row) => row.source_file_hash));
 }
 
 export async function saveAllPitchRows(args: {
@@ -1702,7 +1830,7 @@ export async function getBiomechanicsSnapshot(args: {
   const includeAllPitchValues = Boolean(args.includeAllPitchValues);
 
   // Run pitch rows + pitch options in parallel; TrackMan fires after with known timestamps
-  const [rowResult, pitchOptionsResult] = await Promise.all([
+  const [rowResult, pitchOptionsResult, pitchVideoKeys] = await Promise.all([
     runSnapshotQuery<{ row_json: Record<string, string | number | null>; captured_at: string | null; created_at: string | null }>(
       'biomechanics pitch rows',
       `
@@ -1747,6 +1875,7 @@ export async function getBiomechanicsSnapshot(args: {
       `,
       singlePitchValues
     ),
+    getBiomechanicsPitchVideoKeysForOrg({ organizationId: args.organizationId, schoolCode: normalizeSchoolCode(args.schoolCode) }),
   ]);
   // Derive single-file count from results instead of a separate query
   const summarySingleFilesResult = { rows: [{ total_files: String(pitchOptionsResult.rows.length) }] };
@@ -1990,6 +2119,7 @@ export async function getBiomechanicsSnapshot(args: {
       playerName: mappedName || fallback || null,
       pitchDate: meta?.pitchDateLabel ?? null,
       bodyWeightLb: meta?.bodyWeightLb ?? null,
+      hasVideo: pitchVideoKeys.has(row.pitchKey),
       strideLengthIn: meta?.strideLengthIn ?? null,
       strideDirectionIn: meta?.strideDirectionIn ?? null,
     };
