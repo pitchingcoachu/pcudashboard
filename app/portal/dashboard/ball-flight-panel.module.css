@@ -1,90 +1,67 @@
 .shell {
-  --flight-ink: #f4f7ed;
-  --flight-muted: #9eaa9b;
-  --flight-line: rgba(229, 238, 221, 0.16);
+  --flight-accent: rgb(var(--portal-accent-rgb, 200, 16, 46));
+  --flight-ink: var(--text-main, #f4f7ff);
+  --flight-muted: var(--text-muted, #c9c9c9);
+  --flight-line: var(--border, rgba(255, 255, 255, 0.15));
   display: grid;
   min-width: 0;
   gap: 14px;
   color: var(--flight-ink);
 }
 
-.hero {
-  position: relative;
-  overflow: hidden;
+
+.labTabs {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 18px;
-  align-items: end;
-  min-width: 0;
-  padding: 20px 22px;
-  border: 1px solid var(--flight-line);
-  border-radius: 16px;
-  background:
-    radial-gradient(circle at 82% 20%, rgba(212, 255, 78, 0.13), transparent 32%),
-    linear-gradient(115deg, #111b17 0%, #0a100e 70%);
-}
-
-.hero::after {
-  content: '';
-  position: absolute;
-  right: -45px;
-  bottom: -85px;
-  width: 230px;
-  height: 230px;
-  border: 1px solid rgba(212, 255, 78, 0.18);
-  border-radius: 50%;
-  box-shadow: 0 0 0 28px rgba(212, 255, 78, 0.025), 0 0 0 56px rgba(212, 255, 78, 0.02);
-  pointer-events: none;
-}
-
-.eyebrow {
-  margin: 0 0 5px;
-  color: #d4ff4e;
-  font-size: 0.7rem;
-  font-weight: 800;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-}
-
-.title {
-  margin: 0;
-  font-size: clamp(1.45rem, 3vw, 2.15rem);
-  line-height: 1;
-  letter-spacing: -0.045em;
-}
-
-.lede {
-  max-width: 650px;
-  margin: 9px 0 0;
-  color: var(--flight-muted);
-  font-size: 0.9rem;
-}
-
-.measuredBadge {
-  position: relative;
-  z-index: 1;
-  display: inline-flex;
-  align-items: center;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 7px;
-  white-space: nowrap;
-  padding: 8px 11px;
-  border: 1px solid rgba(212, 255, 78, 0.32);
+  padding: 5px;
+  border: 1px solid var(--flight-line);
+  border-radius: 13px;
+  background: rgba(9, 10, 11, 0.94);
+}
+
+.labTab {
+  display: inline-flex;
+  min-height: 42px;
+  justify-content: center;
+  gap: 9px;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 850;
+  letter-spacing: 0.025em;
+}
+
+.labTab span {
+  color: rgba(var(--portal-accent-rgb, 200, 16, 46), 0.72);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6rem;
+}
+
+.labTab em {
+  padding: 3px 5px;
+  border: 1px solid rgba(var(--portal-accent-rgb, 200, 16, 46), 0.3);
   border-radius: 999px;
-  background: rgba(212, 255, 78, 0.08);
-  color: #e4ff91;
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.06em;
+  color: var(--flight-accent);
+  font-size: 0.52rem;
+  font-style: normal;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
 }
 
-.measuredBadge::before {
-  content: '';
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #d4ff4e;
-  box-shadow: 0 0 12px rgba(212, 255, 78, 0.75);
+.labTabActive {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.07);
+  color: #fff;
+}
+
+.labTabActive span {
+  color: var(--flight-accent);
 }
 
 .stage {
@@ -93,7 +70,7 @@
   overflow: hidden;
   border: 1px solid var(--flight-line);
   border-radius: 16px;
-  background: #06100b;
+  background: #080a0b;
   box-shadow: inset 0 0 55px rgba(0, 0, 0, 0.42);
 }
 
@@ -101,7 +78,18 @@
   display: block;
   width: 100%;
   height: 520px;
-  touch-action: manipulation;
+  touch-action: none;
+  cursor: grab;
+  outline: none;
+  user-select: none;
+}
+
+.canvas:active {
+  cursor: grabbing;
+}
+
+.canvas:focus-visible {
+  box-shadow: inset 0 0 0 2px rgba(var(--portal-accent-rgb, 200, 16, 46), 0.78);
 }
 
 .stageHud {
@@ -119,7 +107,7 @@
   padding: 7px 10px;
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 9px;
-  background: rgba(2, 8, 5, 0.68);
+  background: rgba(4, 5, 6, 0.68);
   backdrop-filter: blur(9px);
   font-variant-numeric: tabular-nums;
   font-size: 0.78rem;
@@ -128,11 +116,27 @@
 }
 
 .viewLabel {
-  color: rgba(244, 247, 237, 0.74);
+  color: rgba(255, 255, 255, 0.74);
   font-size: 0.68rem;
   font-weight: 800;
   letter-spacing: 0.12em;
   text-transform: uppercase;
+}
+
+.orbitHint {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  z-index: 2;
+  padding: 6px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 8px;
+  background: rgba(4, 5, 6, 0.62);
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 0.63rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  pointer-events: none;
 }
 
 .empty {
@@ -143,7 +147,7 @@
   place-content: center;
   padding: 30px;
   text-align: center;
-  background: rgba(5, 13, 9, 0.76);
+  background: rgba(7, 8, 9, 0.76);
 }
 
 .empty strong {
@@ -166,7 +170,7 @@
   padding: 13px;
   border: 1px solid var(--flight-line);
   border-radius: 14px;
-  background: rgba(13, 20, 17, 0.9);
+  background: rgba(15, 16, 17, 0.9);
 }
 
 .pitchToggles {
@@ -185,7 +189,7 @@
   border: 1px solid rgba(255, 255, 255, 0.13);
   border-radius: 9px;
   background: rgba(255, 255, 255, 0.035);
-  color: rgba(244, 247, 237, 0.65);
+  color: rgba(255, 255, 255, 0.65);
   cursor: pointer;
   font: inherit;
   font-size: 0.74rem;
@@ -196,6 +200,79 @@
   color: #fff;
   border-color: color-mix(in srgb, var(--pitch-color) 66%, white 10%);
   background: color-mix(in srgb, var(--pitch-color) 18%, transparent);
+}
+
+.pitchToggleGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pitchInstancePicker {
+  position: relative;
+  max-width: 100%;
+}
+
+.pitchInstancePicker summary {
+  display: block;
+  overflow: hidden;
+  min-height: 26px;
+  padding: 0 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.28);
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  font-size: 0.62rem;
+  line-height: 26px;
+  list-style: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pitchInstancePicker summary::-webkit-details-marker {
+  display: none;
+}
+
+.pitchInstanceList {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 4px);
+  left: 0;
+  display: grid;
+  overflow-y: auto;
+  width: max-content;
+  max-width: 320px;
+  max-height: 260px;
+  padding: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 9px;
+  background: #101112;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+
+.pitchInstanceOption {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  padding: 5px 6px;
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.75);
+  cursor: pointer;
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.pitchInstanceOption:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.pitchInstanceOption:first-child {
+  margin-bottom: 4px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-weight: 750;
 }
 
 .swatch {
@@ -220,7 +297,7 @@
   border: 0;
   border-radius: 7px;
   background: transparent;
-  color: rgba(244, 247, 237, 0.62);
+  color: rgba(255, 255, 255, 0.62);
   cursor: pointer;
   font: inherit;
   font-size: 0.72rem;
@@ -249,9 +326,9 @@
 
 .play {
   min-width: 92px;
-  border: 1px solid #d4ff4e;
-  background: #d4ff4e;
-  color: #122006;
+  border: 1px solid var(--flight-accent);
+  background: var(--flight-accent);
+  color: var(--portal-accent-contrast, #fff);
 }
 
 .reset {
@@ -331,15 +408,6 @@
 }
 
 @media (max-width: 850px) {
-  .hero {
-    grid-template-columns: 1fr;
-    align-items: start;
-  }
-
-  .measuredBadge {
-    justify-self: start;
-  }
-
   .controlDeck {
     grid-template-columns: 1fr;
   }
@@ -356,8 +424,8 @@
 }
 
 @media (max-width: 620px) {
-  .hero {
-    padding: 17px;
+  .labTabs {
+    grid-template-columns: 1fr;
   }
 
   .stage,
@@ -368,6 +436,11 @@
 
   .metrics {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .orbitHint {
+    right: 10px;
+    bottom: 9px;
   }
 }
 

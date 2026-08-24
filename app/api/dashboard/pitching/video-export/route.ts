@@ -348,17 +348,19 @@ async function concatCameraGroup(
  * fractions of the full canvas so the same layout works at any tile size. */
 type TileSlot = { xFrac: number; yFrac: number; wFrac: number; hFrac: number };
 
-/** Fixed layouts for the "Combined" export mode, sized to however many real
- * clips THIS pitch actually has among the selected cameras (not how many
- * cameras were selected overall) -- a pitch missing one of the selected
- * cameras gets its remaining tile(s) resized to fill the space instead of
- * leaving a blank placeholder, per explicit request. 1 clip fills the whole
- * canvas (matches the single-video view in the live modal); 2 go side by
- * side (see leftWFrac below) UNLESS stacked is true (both clips landscape --
- * side by side would squeeze both down to portrait-shaped slots, so they
- * stack vertically full-width instead, per explicit request); 3 puts the
- * first tile (Edger, when present) on top spanning the full width with the
- * other two split evenly below it. */
+/** Fixed layouts for the "Combined" export mode, sized to how many cameras
+ * were SELECTED for the export overall -- not how many clips any individual
+ * pitch happens to have. Every pitch in the batch renders the same tile grid
+ * so the export doesn't visually reflow from pitch to pitch; a pitch missing
+ * one of the selected cameras just leaves that tile's slot as blank black
+ * canvas (see buildCombinedPitchClip, which skips overlaying a tile for a
+ * null clip) instead of resizing the remaining tile(s) to fill the gap. 1
+ * selected camera fills the whole canvas (matches the single-video view in
+ * the live modal); 2 go side by side (see leftWFrac below) UNLESS stacked is
+ * true (both clips landscape -- side by side would squeeze both down to
+ * portrait-shaped slots, so they stack vertically full-width instead, per
+ * explicit request); 3 puts the first tile (Edger, when present) on top
+ * spanning the full width with the other two split evenly below it. */
 function buildTileLayout(count: number, leftWFrac = 0.5, stacked = false): TileSlot[] {
   if (count <= 1) return count === 1 ? [{ xFrac: 0, yFrac: 0, wFrac: 1, hFrac: 1 }] : [];
   if (count === 2) {
@@ -406,20 +408,25 @@ function computeTwoTileWidthFrac(
  * already in final display order (see resolvePitchCombinedClips). */
 type ResolvedPitchClip = { url: string; isEdger: boolean };
 
-/** Resolves, for ONE pitch, the ordered list of real clips to composite --
- * dropping any selected camera this pitch has no footage for entirely
- * (buildTileLayout then sizes tiles to however many clips are actually left,
- * instead of rendering a blank gray placeholder in the gap). Order is fixed
- * regardless of which numbered slot (video_clip_1/2/3) each clip happens to
- * live in for this particular pitch:
- *   1. Edger (if selected and present)
+/** Resolves, for ONE pitch, the tile-ordered list of clips to composite --
+ * ALWAYS the same length as `selections` (one slot per selected camera), so
+ * every pitch in a batch renders an identically-sized tile grid; a selected
+ * camera this pitch has no footage for becomes a `null` in its slot instead
+ * of shrinking the array (buildCombinedPitchClip then leaves that slot as
+ * blank black canvas rather than resizing the other tiles to fill the gap).
+ * Slot order is fixed regardless of which numbered field (video_clip_1/2/3)
+ * each clip happens to live in for this particular pitch:
+ *   1. Edger (if selected)
  *   2. Back view (camera_target = "PitchersBack")
  *   3. Side view (camera_target = "PitchersOpenSide"/"PitchersFront")
  * iPhone clips whose camera_target is blank for this pitch (a real gap in
  * the source data, not a bug -- confirmed common) fall back to plain slot
  * order (video_clip_2 before video_clip_3) after the ones with a known view,
  * so ordering is still deterministic even without camera_target. */
-function resolvePitchCombinedClips(pitch: PitchVideoUrls, selections: CameraSelection[]): ResolvedPitchClip[] {
+function resolvePitchCombinedClips(
+  pitch: PitchVideoUrls,
+  selections: CameraSelection[]
+): Array<ResolvedPitchClip | null> {
   const selected = new Set(selections);
   const edger: ResolvedPitchClip[] = [];
   const back: ResolvedPitchClip[] = [];
@@ -444,7 +451,15 @@ function resolvePitchCombinedClips(pitch: PitchVideoUrls, selections: CameraSele
     else unknown.push({ url, isEdger: false });
   }
 
-  return [...edger, ...back, ...side, ...unknown];
+  // Same priority ordering as before (Edger, then Back, then Side, then
+  // unknown-view), but padded/truncated to exactly `selections.length`
+  // entries with `null` standing in for a selected camera this pitch has no
+  // footage for -- callers use the `null`s to leave that tile's slot as
+  // blank canvas instead of compacting the grid around the gap.
+  const ordered = [...edger, ...back, ...side, ...unknown];
+  const resolved: Array<ResolvedPitchClip | null> = [];
+  for (let i = 0; i < selections.length; i += 1) resolved.push(ordered[i] ?? null);
+  return resolved;
 }
 
 /** Downloads one clip, trims it to EXPORT_CLIP_SECONDS per exportTrimArgs
@@ -587,16 +602,20 @@ async function buildCombinedPitchClip(
   metricsPanelMode: 'side' | 'below' = 'side'
 ): Promise<string | null> {
   const clips = resolvePitchCombinedClips(pitch, selections);
-  if (!clips.length) return null;
-  const layout = buildTileLayout(clips.length, twoTileLeftWFrac, clips.length === 2 && twoTileStacked);
+  if (!clips.some((c) => c !== null)) return null;
+  const layout = buildTileLayout(selections.length, twoTileLeftWFrac, selections.length === 2 && twoTileStacked);
 
-  // A pitch's 2-3 tiles are independent clips (different source, different
+  // A pitch's tiles are independent clips (different source, different
   // output path) -- preparing them in parallel rather than one at a time
   // materially shortens wall-clock time for combined exports, where most of
   // each tile's cost is waiting on a Cloudinary download rather than CPU.
+  // Slots whose clip is null (this pitch has no footage for that selected
+  // camera) are skipped entirely -- they're never prepared or overlaid, so
+  // that region of the canvas just stays the black base color, matching
+  // every other pitch's tile grid instead of reflowing to fill the gap.
   const tilePlans = clips
     .map((clip, i) => ({ clip, slot: layout[i], index: i }))
-    .filter((plan): plan is { clip: ResolvedPitchClip; slot: TileSlot; index: number } => Boolean(plan.slot));
+    .filter((plan): plan is { clip: ResolvedPitchClip; slot: TileSlot; index: number } => Boolean(plan.clip) && Boolean(plan.slot));
   const preparedTiles = await Promise.all(
     tilePlans.map(async ({ clip, slot, index }) => {
       const tileWidth = Math.max(2, Math.round(tileCanvasWidth * slot.wFrac) - (Math.round(tileCanvasWidth * slot.wFrac) % 2));
@@ -611,7 +630,7 @@ async function buildCombinedPitchClip(
 
   const tileGridPath = path.join(workDir, `pitch${pitchIndex}-grid.mp4`);
   let videoPath: string;
-  if (tilePaths.length === 1) {
+  if (tilePaths.length === 1 && layout.length === 1) {
     // Nothing to composite -- the single tile already matches the full
     // tile canvas (buildTileLayout gives a lone selection wFrac/hFrac = 1).
     videoPath = tilePaths[0].path;
@@ -790,12 +809,16 @@ export async function POST(request: Request) {
   let twoTileCanvasHeight = canvasHeight;
   let twoTileStacked = false;
   let metricsPanelMode: 'side' | 'below' = 'side';
-  if (mode === 'combined') {
+  if (mode === 'combined' && camerasToExport.length === 2) {
     let widestDelta = 0;
     const comboCounts = { landscapePortrait: 0, bothLandscape: 0, bothPortrait: 0 };
     for (const pitch of orderedPitches) {
       const clips = resolvePitchCombinedClips(pitch, camerasToExport);
-      if (clips.length !== 2) continue;
+      // Both of this pitch's tiles need to actually have footage to inform
+      // the shared aspect-ratio split -- a pitch missing one of the two
+      // selected cameras contributes nothing here (its present tile still
+      // renders at whatever split the OTHER pitches settle on).
+      if (!clips[0] || !clips[1]) continue;
       const leftDims = dimensionsByUrl.get(clips[0].url) ?? null;
       const rightDims = dimensionsByUrl.get(clips[1].url) ?? null;
       const leftWFrac = computeTwoTileWidthFrac(leftDims, rightDims);

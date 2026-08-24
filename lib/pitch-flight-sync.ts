@@ -3,6 +3,11 @@ import { getDbPool } from './auth-db';
 
 const NUMBER_PATTERN = '[-+]?[0-9]*\\.?[0-9]+';
 
+// First-run floor for syncPitchEvents' incremental date filter -- see the
+// comment at its call site. Not meant to be moved forward over time; once
+// the sync has run once for a school, its own MAX(session_date) takes over.
+const PITCH_EVENTS_SYNC_FLOOR_DATE = '2026-05-01';
+
 function textNumber(column: string): string {
   return `(regexp_match(COALESCE(${column}::text, ''), '${NUMBER_PATTERN}'))[1]::double precision`;
 }
@@ -175,7 +180,96 @@ async function syncVmiV3(client: PoolClient, incremental: boolean): Promise<numb
   return result.rowCount ?? 0;
 }
 
-export async function syncPitchFlightBackfill(options: { incremental?: boolean } = {}): Promise<{ pitchDataRows: number; vmiRows: number }> {
+// pitch_data stopped receiving new rows for every school around Nov 2025;
+// the actively-written table since is pitch_events (lowercase columns, no
+// quoting needed -- unlike pitch_data's PascalCase quoted columns). Its
+// x0/y0/z0/vx0/vy0/vz0/ax0/ay0/az0 columns were only added once the source
+// ingestion pipeline (a separate repo per school) started capturing them;
+// schools without that fix will simply have those columns NULL here and
+// contribute no eligible rows, same as any other missing-data case. There's
+// no zone_time-equivalent column on pitch_events -- left NULL, matching
+// pitch_flight_backfill's existing nullable column; durationForPitch() in
+// the ball-flight API already falls back to solving flight time from
+// vy0/ay0 when flightTime is null.
+//
+// Looped per school_code rather than one cross-school query: pitch_events
+// holds 1M+ rows across all schools combined, and at that volume Postgres's
+// planner falls back to a sequential scan on the largest date partition
+// even with a matching index in place (confirmed via EXPLAIN -- partition
+// selectivity, not a missing index), which times out. Scoped to one
+// school's rows at a time this is fast and each iteration's failure (e.g.
+// one school's data briefly unavailable) doesn't block the others.
+async function syncPitchEvents(client: PoolClient, incremental: boolean): Promise<number> {
+  const type = pitchTypeSql('pe.taggedpitchtype', "''");
+  // On the true first run (no pitch_flight_backfill rows with
+  // source_file='pitch_events' yet), the MAX(session_date) subquery below is
+  // NULL -- falling back to 1900-01-01 would scan a school's entire
+  // pitch_events history. PITCH_EVENTS_SYNC_FLOOR_DATE bounds that first run
+  // instead; once any row exists the real MAX(session_date) takes over
+  // automatically and this floor stops mattering.
+  const floorDateSql = incremental
+    ? `COALESCE(
+        (SELECT MAX(session_date) FROM public.pitch_flight_backfill WHERE source_file = 'pitch_events' AND school_code = $1),
+        DATE '${PITCH_EVENTS_SYNC_FLOOR_DATE}'
+      )`
+    : `DATE '${PITCH_EVENTS_SYNC_FLOOR_DATE}'`;
+
+  const schoolRows = await client.query<{ school_code: string }>(`
+    SELECT DISTINCT school_code
+    FROM public.pitch_events
+    WHERE NULLIF(TRIM(school_code), '') IS NOT NULL
+      AND session_date >= DATE '${PITCH_EVENTS_SYNC_FLOOR_DATE}'
+  `);
+
+  let totalRows = 0;
+  for (const { school_code: schoolCode } of schoolRows.rows) {
+    const incrementalWhere = incremental
+      ? `AND NOT EXISTS (
+          SELECT 1 FROM public.pitch_flight_backfill bf
+          WHERE bf.school_code = pe.school_code AND bf.pitch_uid = TRIM(pe.pitchuid)
+        )`
+      : '';
+    const result = await client.query(`
+      WITH complete AS (
+        SELECT pe.*, pe.ctid AS source_ctid, ${type} AS pitch_type
+        FROM public.pitch_events pe
+        WHERE pe.school_code = $1
+          AND pe.session_date IS NOT NULL AND NULLIF(TRIM(pe.pitchuid), '') IS NOT NULL
+          AND pe.session_date >= ${floorDateSql}
+          AND ${textNumber('pe.x0')} IS NOT NULL AND ${textNumber('pe.y0')} IS NOT NULL AND ${textNumber('pe.z0')} IS NOT NULL
+          AND ${textNumber('pe.vx0')} IS NOT NULL AND ${textNumber('pe.vy0')} IS NOT NULL AND ${textNumber('pe.vz0')} IS NOT NULL
+          AND ${textNumber('pe.ax0')} IS NOT NULL AND ${textNumber('pe.ay0')} IS NOT NULL AND ${textNumber('pe.az0')} IS NOT NULL
+          ${incrementalWhere}
+      ), deduped AS (
+        SELECT DISTINCT ON (school_code, TRIM(pitchuid)) *
+        FROM complete
+        ORDER BY school_code, TRIM(pitchuid), session_date DESC, source_ctid DESC
+      ), eligible AS (
+        SELECT deduped.*,
+          MAX(session_date) OVER (PARTITION BY school_code, lower(TRIM(pitcher))) AS pitcher_latest
+        FROM deduped
+      )
+      INSERT INTO public.pitch_flight_backfill (${INSERT_COLUMNS})
+      SELECT school_code, session_date, TRIM(pitchuid), 'pitch_events', NULLIF(TRIM(pitcher), ''),
+        NULLIF(TRIM(pitcherthrows), ''), NULLIF(TRIM(pitcherteam), ''), NULLIF(TRIM(batter), ''),
+        NULLIF(TRIM(batterside), ''), pitch_type, NULLIF(TRIM(sessiontype), ''), 'Baseball',
+        NULLIF(TRIM(pitchcall), ''), ${textNumber('balls')}::int, ${textNumber('strikes')}::int,
+        ${textNumber('relspeed')}, ${textNumber('spinrate')}, ${textNumber('inducedvertbreak')},
+        ${textNumber('horzbreak')}, ${textNumber('relheight')}, ${textNumber('relside')},
+        ${textNumber('extension')}, ${textNumber('platelocheight')}, ${textNumber('platelocside')},
+        NULL, ${textNumber('x0')}, ${textNumber('y0')}, ${textNumber('z0')},
+        ${textNumber('vx0')}, ${textNumber('vy0')}, ${textNumber('vz0')},
+      ${textNumber('ax0')}, ${textNumber('ay0')}, ${textNumber('az0')}
+      FROM eligible
+      WHERE session_date >= pitcher_latest - 6
+      ON CONFLICT (school_code, pitch_uid) DO UPDATE SET ${UPSERT_UPDATE}
+    `, [schoolCode]);
+    totalRows += result.rowCount ?? 0;
+  }
+  return totalRows;
+}
+
+export async function syncPitchFlightBackfill(options: { incremental?: boolean } = {}): Promise<{ pitchDataRows: number; vmiRows: number; pitchEventsRows: number }> {
   const client = await getDbPool().connect();
   try {
     await client.query('BEGIN');
@@ -185,8 +279,9 @@ export async function syncPitchFlightBackfill(options: { incremental?: boolean }
     const incremental = options.incremental === true;
     const pitchDataRows = await syncPitchData(client, incremental);
     const vmiRows = await syncVmiV3(client, incremental);
+    const pitchEventsRows = await syncPitchEvents(client, incremental);
     await client.query('COMMIT');
-    return { pitchDataRows, vmiRows };
+    return { pitchDataRows, vmiRows, pitchEventsRows };
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
     throw error;

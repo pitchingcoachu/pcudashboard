@@ -13,7 +13,15 @@ import { config } from 'dotenv';
 import { resolve } from 'node:path';
 config({ path: resolve(process.cwd(), '.env.local') });
 
-import { createClientWithLogin, resolveOrganizationIdForSchool } from '../lib/training-db';
+// Dynamic import, not a static top-level one: lib/training-db.ts (via
+// lib/auth-db.ts) reads process.env.DATABASE_URL into a module-level const
+// at import time, and ESM hoists static imports before any top-level
+// statement in this file runs -- including the config() call above -- so a
+// static import here would capture DATABASE_URL as undefined regardless of
+// where the import statement appears in the source. Confirmed via a direct
+// repro: a static import reads undefined; a dynamic import after config()
+// reads the real value.
+const { createClientWithLogin, resolveOrganizationIdForSchool } = await import('../lib/training-db');
 
 const SCHOOL_CODE = 'UNM';
 const SHARED_PASSWORD = 'pitchingcoachu';

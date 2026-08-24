@@ -29,12 +29,14 @@
     "pptxgenjs": "^4.0.1",
     "react": "19.2.0",
     "react-dom": "19.2.0",
+    "three": "^0.185.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "24.10.0",
     "@types/pg": "^8.16.0",
     "@types/react": "19.2.2",
+    "@types/three": "^0.185.4",
     "dotenv": "^17.4.2",
     "eslint": "9.39.1",
     "eslint-config-next": "16.1.6",

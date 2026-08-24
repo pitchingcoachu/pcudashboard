@@ -44,8 +44,39 @@ type FlightRow = {
 
 type AvailabilityRow = { first_date: string | Date | null; last_date: string | Date | null };
 
+type SpinSampleRow = {
+  pitch_type: string;
+  pitch_uid: string | null;
+  sample_date: string | Date | null;
+  pitcher: string | null;
+  pitcher_throws: string | null;
+  spin_rate: number | string | null;
+  active_spin_rate: number | string | null;
+  spin_efficiency: number | string | null;
+  velocity: number | string | null;
+  extension: number | string | null;
+  ivb: number | string | null;
+  hb: number | string | null;
+  measured_tilt: string | null;
+  break_tilt: string | null;
+  transverse_angle: number | string | null;
+  longitudinal_angle: number | string | null;
+  axis_x: number | string | null;
+  axis_y: number | string | null;
+  axis_z: number | string | null;
+  rotation_x: number | string | null;
+  rotation_y: number | string | null;
+  rotation_z: number | string | null;
+};
+
 function csvValues(value: string): string[] {
-  return value.split(',').map((item) => item.trim()).filter((item) => item && item.toLowerCase() !== 'all');
+  return value.split(/[;,]/).map((item) => item.trim()).filter((item) => item && item.toLowerCase() !== 'all');
+}
+
+function personValues(value: string): string[] {
+  // Dashboard multi-selects use semicolons. Commas must remain intact because
+  // TrackMan commonly stores names as "Last, First".
+  return value.split(';').map((item) => item.trim()).filter((item) => item && item.toLowerCase() !== 'all');
 }
 
 function normalizedPerson(value: string): string {
@@ -144,7 +175,7 @@ function pitchResultPredicate(column: string, tokens: string[], params: QueryVal
 function rawPitchTypeSql(): string {
   const token = `regexp_replace(lower(COALESCE(NULLIF(TRIM(pd."TaggedPitchType"), ''), NULLIF(TRIM(pd."AutoPitchType"), ''), '')), '[^a-z0-9]', '', 'g')`;
   return `CASE
-    WHEN ${token} IN ('fastball','fourseam','fourseamfastball','4seamfastball','ff','fa') THEN 'Fastball'
+    WHEN ${token} IN ('fastball','fourseam','fourseamfastball','fourseamfourseamfastball','4seamfastball','ff','fa') THEN 'Fastball'
     WHEN ${token} IN ('sinker','oneseamfastball','twoseam','twoseamfastball','si','ft') THEN 'Sinker'
     WHEN ${token} IN ('cutter','fc') THEN 'Cutter'
     WHEN ${token} IN ('slider','sl') THEN 'Slider'
@@ -201,11 +232,75 @@ function serializeRows(rows: FlightRow[]) {
   }));
 }
 
+function serializeIndividualPitches(rows: IndividualPitchRow[]) {
+  return rows
+    .map((row) => ({
+      pitchType: String(row.pitch_type || 'Undefined'),
+      pitchUid: row.pitch_uid ? String(row.pitch_uid) : null,
+      sessionDate: isoDate(row.session_date),
+      pitcher: row.pitcher ? String(row.pitcher) : null,
+      velocity: finiteNumber(row.velo),
+      inducedVerticalBreak: finiteNumber(row.ivb),
+      horizontalBreak: finiteNumber(row.hb),
+      releaseHeight: finiteNumber(row.release_height),
+      releaseSide: finiteNumber(row.release_side),
+      extension: finiteNumber(row.extension),
+      plateHeight: finiteNumber(row.plate_height),
+      plateSide: finiteNumber(row.plate_side),
+      flightTime: finiteNumber(row.zone_time),
+      x0: finiteNumber(row.x0),
+      y0: finiteNumber(row.y0),
+      z0: finiteNumber(row.z0),
+      vx0: finiteNumber(row.vx0),
+      vy0: finiteNumber(row.vy0),
+      vz0: finiteNumber(row.vz0),
+      ax0: finiteNumber(row.ax0),
+      ay0: finiteNumber(row.ay0),
+      az0: finiteNumber(row.az0),
+    }))
+    .filter((row) => row.pitchUid !== null && row.pitchType.toLowerCase() !== 'undefined');
+}
+
 function labeledRows(rows: FlightRow[]): FlightRow[] {
   return rows.filter((row) => {
     const pitchType = String(row.pitch_type ?? '').trim();
     return pitchType.length > 0 && pitchType.toLowerCase() !== 'undefined';
   });
+}
+
+function serializeSpinSamples(rows: SpinSampleRow[]) {
+  return rows.map((row) => ({
+    pitchType: String(row.pitch_type || 'Undefined'),
+    pitchUid: row.pitch_uid ? String(row.pitch_uid) : null,
+    sampleDate: isoDate(row.sample_date),
+    pitcher: row.pitcher ? String(row.pitcher) : null,
+    pitcherThrows: row.pitcher_throws ? String(row.pitcher_throws) : null,
+    spinRate: finiteNumber(row.spin_rate),
+    activeSpinRate: finiteNumber(row.active_spin_rate),
+    spinEfficiency: finiteNumber(row.spin_efficiency),
+    velocity: finiteNumber(row.velocity),
+    extension: finiteNumber(row.extension),
+    inducedVerticalBreak: finiteNumber(row.ivb),
+    horizontalBreak: finiteNumber(row.hb),
+    measuredTilt: row.measured_tilt ? String(row.measured_tilt).trim() : null,
+    breakTilt: row.break_tilt ? String(row.break_tilt).trim() : null,
+    transverseAngle: finiteNumber(row.transverse_angle),
+    longitudinalAngle: finiteNumber(row.longitudinal_angle),
+    spinAxis: {
+      x: finiteNumber(row.axis_x),
+      y: finiteNumber(row.axis_y),
+      z: finiteNumber(row.axis_z),
+    },
+    seamRotation: {
+      x: finiteNumber(row.rotation_x),
+      y: finiteNumber(row.rotation_y),
+      z: finiteNumber(row.rotation_z),
+    },
+  })).filter((row) => (
+    row.spinRate !== null
+    && row.spinAxis.x !== null && row.spinAxis.y !== null && row.spinAxis.z !== null
+    && row.seamRotation.x !== null && row.seamRotation.y !== null && row.seamRotation.z !== null
+  ));
 }
 
 function mergeFlightRows(groups: FlightRow[][]): FlightRow[] {
@@ -250,13 +345,13 @@ function mergeFlightRows(groups: FlightRow[][]): FlightRow[] {
   });
 }
 
-async function collegeArsenal(args: {
+function collegeArsenalWhere(args: {
   schoolCode: string;
   search: URLSearchParams;
   scopedPitcher: string | null;
-}): Promise<FlightRow[]> {
-  const { schoolCode, search, scopedPitcher } = args;
-  const params: QueryValue[] = [];
+  params: QueryValue[];
+}): string[] {
+  const { schoolCode, search, scopedPitcher, params } = args;
   const schoolParam = addParam(params, schoolCode);
   const where = [
     `pd.school_code = ${schoolParam}`,
@@ -273,9 +368,9 @@ async function collegeArsenal(args: {
   if (startDate) where.push(`pd."Date" >= ${addParam(params, startDate)}::date`);
   if (endDate) where.push(`pd."Date" <= ${addParam(params, endDate)}::date`);
 
-  const pitchers = scopedPitcher ? [scopedPitcher] : csvValues(search.get('pitcher') ?? '');
+  const pitchers = scopedPitcher ? [scopedPitcher] : personValues(search.get('pitcher') ?? '');
   if (pitchers.length) where.push(`${normalizedPersonSql('pd."Pitcher"')} = ANY(${addParam(params, personParams(pitchers))}::text[])`);
-  const hitters = csvValues(search.get('opp_hitter') ?? '');
+  const hitters = personValues(search.get('opp_hitter') ?? '');
   if (hitters.length) where.push(`${normalizedPersonSql('pd."Batter"')} = ANY(${addParam(params, personParams(hitters))}::text[])`);
   const pitchTypes = csvValues(search.get('pitch_types') ?? '');
   if (pitchTypes.length) where.push(`${rawPitchTypeSql()} = ANY(${addParam(params, pitchTypes)}::text[])`);
@@ -310,6 +405,10 @@ async function collegeArsenal(args: {
     const value = finiteNumber(search.get(key));
     if (value !== null) where.push(`${expression} ${key.endsWith('_min') ? '>=' : '<='} ${addParam(params, value)}`);
   }
+  for (const [key, operator] of [['pc_min', '>='], ['pc_max', '<=']] as const) {
+    const value = finiteNumber(search.get(key));
+    if (value !== null) where.push(`${textNumber('pd."PitchNo"')} ${operator} ${addParam(params, value)}`);
+  }
 
   const countSql = countPredicate(textNumber('pd."Balls"'), textNumber('pd."Strikes"'), csvValues(search.get('count_filter') ?? ''), params);
   if (countSql) where.push(countSql);
@@ -333,6 +432,16 @@ async function collegeArsenal(args: {
   if (qpLocations === 'No') where.push(`NOT (${plateSide} BETWEEN -1.5 AND 1.5 AND ${plateHeight} BETWEEN 1.05 AND 4.05)`);
   const pitchResultSql = pitchResultPredicate('pd."PitchCall"', csvValues(search.get('pitch_results') ?? ''), params);
   if (pitchResultSql) where.push(pitchResultSql);
+  return where;
+}
+
+async function collegeArsenal(args: {
+  schoolCode: string;
+  search: URLSearchParams;
+  scopedPitcher: string | null;
+}): Promise<FlightRow[]> {
+  const params: QueryValue[] = [];
+  const where = collegeArsenalWhere({ ...args, params });
 
   const query = `
     WITH filtered AS (
@@ -375,13 +484,226 @@ async function collegeArsenal(args: {
   return result.rows;
 }
 
-async function backfillArsenal(args: { schoolCode: string; search: URLSearchParams; scopedPitcher: string | null }): Promise<FlightRow[]> {
+type IndividualPitchRow = {
+  pitch_type: string;
+  pitch_uid: string | null;
+  session_date: string | Date | null;
+  pitcher: string | null;
+  velo: number | string | null;
+  ivb: number | string | null;
+  hb: number | string | null;
+  release_height: number | string | null;
+  release_side: number | string | null;
+  extension: number | string | null;
+  plate_height: number | string | null;
+  plate_side: number | string | null;
+  zone_time: number | string | null;
+  x0: number | string | null;
+  y0: number | string | null;
+  z0: number | string | null;
+  vx0: number | string | null;
+  vy0: number | string | null;
+  vz0: number | string | null;
+  ax0: number | string | null;
+  ay0: number | string | null;
+  az0: number | string | null;
+};
+
+async function collegeArsenalPitches(args: {
+  schoolCode: string;
+  search: URLSearchParams;
+  scopedPitcher: string | null;
+}): Promise<IndividualPitchRow[]> {
+  const params: QueryValue[] = [];
+  const where = collegeArsenalWhere({ ...args, params });
+
+  const query = `
+    SELECT
+      ${rawPitchTypeSql()} AS pitch_type,
+      NULLIF(TRIM(pd."PitchUID"), '') AS pitch_uid,
+      pd."Date" AS session_date,
+      NULLIF(TRIM(pd."Pitcher"), '') AS pitcher,
+      ${textNumber('pd."RelSpeed"')} AS velo,
+      ${textNumber('pd."InducedVertBreak"')} AS ivb,
+      ${textNumber('pd."HorzBreak"')} AS hb,
+      ${textNumber('pd."RelHeight"')} AS release_height,
+      ${textNumber('pd."RelSide"')} AS release_side,
+      ${textNumber('pd."Extension"')} AS extension,
+      ${textNumber('pd."PlateLocHeight"')} AS plate_height,
+      ${textNumber('pd."PlateLocSide"')} AS plate_side,
+      ${textNumber('pd."ZoneTime"')} AS zone_time,
+      ${textNumber('pd."x0"')} AS x0,
+      ${textNumber('pd."y0"')} AS y0,
+      ${textNumber('pd."z0"')} AS z0,
+      ${textNumber('pd."vx0"')} AS vx0,
+      ${textNumber('pd."vy0"')} AS vy0,
+      ${textNumber('pd."vz0"')} AS vz0,
+      ${textNumber('pd."ax0"')} AS ax0,
+      ${textNumber('pd."ay0"')} AS ay0,
+      ${textNumber('pd."az0"')} AS az0
+    FROM public.pitch_data pd
+    WHERE ${where.join('\n      AND ')}
+    ORDER BY pd."Date" DESC, pd."PitchUID" DESC NULLS LAST
+  `;
+  const result = await getDbPool().query<IndividualPitchRow>(query, params);
+  return result.rows;
+}
+
+async function collegeSpinSamples(args: {
+  schoolCode: string;
+  search: URLSearchParams;
+  scopedPitcher: string | null;
+}): Promise<SpinSampleRow[]> {
   const { schoolCode, search, scopedPitcher } = args;
   const params: QueryValue[] = [];
+  const where = [
+    `pd.school_code = ${addParam(params, schoolCode)}`,
+    `pd."Date" IS NOT NULL`,
+    `${textNumber('pd."SpinRate"')} IS NOT NULL`,
+    ...['SpinAxis3dVectorX', 'SpinAxis3dVectorY', 'SpinAxis3dVectorZ',
+      'SpinAxis3dSeamOrientationRotationX', 'SpinAxis3dSeamOrientationRotationY', 'SpinAxis3dSeamOrientationRotationZ']
+      .map((column) => `${textNumber(`pd."${column}"`)} IS NOT NULL`),
+  ];
+
+  const startDate = search.get('start_date')?.trim();
+  const endDate = search.get('end_date')?.trim();
+  if (startDate) where.push(`pd."Date" >= ${addParam(params, startDate)}::date`);
+  if (endDate) where.push(`pd."Date" <= ${addParam(params, endDate)}::date`);
+
+  const pitchers = scopedPitcher ? [scopedPitcher] : personValues(search.get('pitcher') ?? '');
+  if (pitchers.length) where.push(`${normalizedPersonSql('pd."Pitcher"')} = ANY(${addParam(params, personParams(pitchers))}::text[])`);
+  const hitters = personValues(search.get('opp_hitter') ?? '');
+  if (hitters.length) where.push(`${normalizedPersonSql('pd."Batter"')} = ANY(${addParam(params, personParams(hitters))}::text[])`);
+  const pitchTypes = csvValues(search.get('pitch_types') ?? '');
+  if (pitchTypes.length) where.push(`${rawPitchTypeSql()} = ANY(${addParam(params, pitchTypes)}::text[])`);
+  const ballTypes = csvValues(search.get('ball_types') ?? '');
+  if (ballTypes.length && !ballTypes.includes('Baseball')) where.push('FALSE');
+  const hand = search.get('hand')?.trim();
+  if (hand === 'Left') where.push(`UPPER(LEFT(COALESCE(pd."PitcherThrows", ''), 1)) = 'L'`);
+  if (hand === 'Right') where.push(`UPPER(LEFT(COALESCE(pd."PitcherThrows", ''), 1)) = 'R'`);
+  const batterSide = search.get('batter_side')?.trim();
+  if (batterSide === 'Left') where.push(`UPPER(LEFT(COALESCE(pd."BatterSide", ''), 1)) = 'L'`);
+  if (batterSide === 'Right') where.push(`UPPER(LEFT(COALESCE(pd."BatterSide", ''), 1)) = 'R'`);
+  const teamType = search.get('team_type')?.trim();
+  if (teamType && !['All', 'Opponents', schoolCode].includes(teamType)) {
+    where.push(`UPPER(TRIM(COALESCE(pd."PitcherTeam", ''))) = ${addParam(params, teamType.toUpperCase())}`);
+  }
+  const sessionType = search.get('session_type')?.trim();
+  if (sessionType && sessionType !== 'All') where.push(`NULLIF(TRIM(pd."SessionType"), '') = ${addParam(params, sessionType)}`);
+
+  const numericFilters: Array<[string, string]> = [
+    ['velo_min', `COALESCE(${textNumber('pd."RelSpeed"')}, -9999)`],
+    ['velo_max', `COALESCE(${textNumber('pd."RelSpeed"')}, 9999)`],
+    ['ivb_min', `COALESCE(${textNumber('pd."InducedVertBreak"')}, -9999)`],
+    ['ivb_max', `COALESCE(${textNumber('pd."InducedVertBreak"')}, 9999)`],
+    ['hb_min', `COALESCE(${textNumber('pd."HorzBreak"')}, -9999)`],
+    ['hb_max', `COALESCE(${textNumber('pd."HorzBreak"')}, 9999)`],
+  ];
+  for (const [key, expression] of numericFilters) {
+    const value = finiteNumber(search.get(key));
+    if (value !== null) where.push(`${expression} ${key.endsWith('_min') ? '>=' : '<='} ${addParam(params, value)}`);
+  }
+
+  const countSql = countPredicate(textNumber('pd."Balls"'), textNumber('pd."Strikes"'), csvValues(search.get('count_filter') ?? ''), params);
+  if (countSql) where.push(countSql);
+  if (csvValues(search.get('after_count_filter') ?? '').length) where.push('FALSE');
+
+  const plateSide = textNumber('pd."PlateLocSide"');
+  const plateHeight = textNumber('pd."PlateLocHeight"');
+  const inZone = csvValues(search.get('in_zone') ?? '');
+  if (inZone.length) {
+    const predicates = inZone.map((token) => {
+      if (token === 'Yes') return `(${plateSide} BETWEEN -0.88 AND 0.88 AND ${plateHeight} BETWEEN 1.5 AND 3.6)`;
+      if (token === 'No') return `NOT (${plateSide} BETWEEN -0.88 AND 0.88 AND ${plateHeight} BETWEEN 1.5 AND 3.6)`;
+      return `(${plateSide} BETWEEN -1.5 AND 1.5 AND ${plateHeight} BETWEEN 1.05 AND 4.05)`;
+    });
+    where.push(`(${predicates.join(' OR ')})`);
+  }
+  where.push(...zoneLocationPredicates(plateSide, plateHeight, `UPPER(LEFT(COALESCE(pd."PitcherThrows", ''), 1)) = 'L'`, csvValues(search.get('zone_locations') ?? '')));
+  const qpLocations = search.get('qp_locations')?.trim();
+  if (qpLocations === 'Yes') where.push(`${plateSide} BETWEEN -1.5 AND 1.5 AND ${plateHeight} BETWEEN 1.05 AND 4.05`);
+  if (qpLocations === 'No') where.push(`NOT (${plateSide} BETWEEN -1.5 AND 1.5 AND ${plateHeight} BETWEEN 1.05 AND 4.05)`);
+  const pitchResultSql = pitchResultPredicate('pd."PitchCall"', csvValues(search.get('pitch_results') ?? ''), params);
+  if (pitchResultSql) where.push(pitchResultSql);
+
+  const withVideo = search.get('with_video')?.trim();
+  if (withVideo === 'Yes' || withVideo === 'No') {
+    const hasVideo = `COALESCE(
+      NULLIF(TRIM(to_jsonb(pd)->>'VideoClip'), ''),
+      NULLIF(TRIM(to_jsonb(pd)->>'VideoClip2'), ''),
+      NULLIF(TRIM(to_jsonb(pd)->>'VideoClip3'), ''),
+      NULLIF(TRIM(to_jsonb(pd)->>'videoclip'), ''),
+      NULLIF(TRIM(to_jsonb(pd)->>'videoclip2'), ''),
+      NULLIF(TRIM(to_jsonb(pd)->>'videoclip3'), '')
+    ) IS NOT NULL`;
+    where.push(withVideo === 'Yes' ? hasVideo : `NOT (${hasVideo})`);
+  }
+
+  const venue = search.get('venue')?.trim();
+  if (venue === 'Home' || venue === 'Away') {
+    const half = `LOWER(COALESCE(to_jsonb(pd)->>'InningTopBot', to_jsonb(pd)->>'inningtopbot', ''))`;
+    const pitcherTeam = `UPPER(TRIM(COALESCE(pd."PitcherTeam", '')))`;
+    const comparisonTeam = venue === 'Home'
+      ? `UPPER(TRIM(COALESCE(to_jsonb(pd)->>'HomeTeam', to_jsonb(pd)->>'hometeam', '')))`
+      : `UPPER(TRIM(COALESCE(to_jsonb(pd)->>'AwayTeam', to_jsonb(pd)->>'awayteam', '')))`;
+    const halfMatch = venue === 'Home' ? `${half} LIKE 'top%'` : `${half} LIKE 'bottom%'`;
+    where.push(`(${halfMatch} OR (${pitcherTeam} <> '' AND ${pitcherTeam} = ${comparisonTeam}))`);
+  }
+
+  const query = `
+    WITH filtered AS (
+      SELECT pd.*, ${rawPitchTypeSql()} AS pitch_type
+      FROM public.pitch_data pd
+      WHERE ${where.join('\n        AND ')}
+    )
+    SELECT
+      pitch_type,
+      NULLIF(TRIM("PitchUID"), '') AS pitch_uid,
+      "Date" AS sample_date,
+      NULLIF(TRIM("Pitcher"), '') AS pitcher,
+      NULLIF(TRIM("PitcherThrows"), '') AS pitcher_throws,
+      ${textNumber('"SpinRate"')} AS spin_rate,
+      ${textNumber('"SpinAxis3dActiveSpinRate"')} AS active_spin_rate,
+      ${textNumber('"SpinAxis3dSpinEfficiency"')} AS spin_efficiency,
+      ${textNumber('"RelSpeed"')} AS velocity,
+      ${textNumber('"Extension"')} AS extension,
+      ${textNumber('"InducedVertBreak"')} AS ivb,
+      ${textNumber('"HorzBreak"')} AS hb,
+      NULLIF(TRIM(COALESCE("SpinAxis3dTilt"::text, '')), '') AS measured_tilt,
+      NULLIF(TRIM(COALESCE("Tilt"::text, '')), '') AS break_tilt,
+      ${textNumber('"SpinAxis3dTransverseAngle"')} AS transverse_angle,
+      ${textNumber('"SpinAxis3dLongitudinalAngle"')} AS longitudinal_angle,
+      ${textNumber('"SpinAxis3dVectorX"')} AS axis_x,
+      ${textNumber('"SpinAxis3dVectorY"')} AS axis_y,
+      ${textNumber('"SpinAxis3dVectorZ"')} AS axis_z,
+      ${textNumber('"SpinAxis3dSeamOrientationRotationX"')} AS rotation_x,
+      ${textNumber('"SpinAxis3dSeamOrientationRotationY"')} AS rotation_y,
+      ${textNumber('"SpinAxis3dSeamOrientationRotationZ"')} AS rotation_z
+    FROM filtered
+    WHERE lower(COALESCE(pitch_type, '')) <> 'undefined'
+    ORDER BY pitch_type, "Date" DESC, "PitchUID" DESC NULLS LAST
+  `;
+  const result = await getDbPool().query<SpinSampleRow>(query, params);
+  return result.rows;
+}
+
+function backfillArsenalWhere(args: {
+  schoolCode: string;
+  search: URLSearchParams;
+  scopedPitcher: string | null;
+  params: QueryValue[];
+}): string[] {
+  const { schoolCode, search, scopedPitcher, params } = args;
   const schoolParam = addParam(params, schoolCode);
   const where = [
     `bf.school_code = ${schoolParam}`,
-    `bf.zone_time BETWEEN 0.2 AND 0.9`,
+    // zone_time has no source column on pitch_events (see syncPitchEvents in
+    // lib/pitch-flight-sync.ts, which always inserts it NULL), so rows synced
+    // from there would otherwise be silently excluded by a hard
+    // "BETWEEN 0.2 AND 0.9" check -- accept a NULL zone_time too, matching
+    // the frontend's own fallback (durationForPitch solves flight time from
+    // vy0/ay0 when flightTime is null instead of using this column).
+    `(bf.zone_time BETWEEN 0.2 AND 0.9 OR bf.zone_time IS NULL)`,
     `bf.x0 IS NOT NULL AND bf.y0 IS NOT NULL AND bf.z0 IS NOT NULL`,
     `bf.vx0 IS NOT NULL AND bf.vy0 IS NOT NULL AND bf.vz0 IS NOT NULL`,
     `bf.ax0 IS NOT NULL AND bf.ay0 IS NOT NULL AND bf.az0 IS NOT NULL`,
@@ -393,9 +715,9 @@ async function backfillArsenal(args: { schoolCode: string; search: URLSearchPara
   const endDate = search.get('end_date')?.trim();
   if (startDate) where.push(`bf.session_date >= ${addParam(params, startDate)}::date`);
   if (endDate) where.push(`bf.session_date <= ${addParam(params, endDate)}::date`);
-  const pitchers = scopedPitcher ? [scopedPitcher] : csvValues(search.get('pitcher') ?? '');
+  const pitchers = scopedPitcher ? [scopedPitcher] : personValues(search.get('pitcher') ?? '');
   if (pitchers.length) where.push(`${normalizedPersonSql('bf.pitcher')} = ANY(${addParam(params, personParams(pitchers))}::text[])`);
-  const hitters = csvValues(search.get('opp_hitter') ?? '');
+  const hitters = personValues(search.get('opp_hitter') ?? '');
   if (hitters.length) where.push(`${normalizedPersonSql('bf.batter')} = ANY(${addParam(params, personParams(hitters))}::text[])`);
   const pitchTypes = csvValues(search.get('pitch_types') ?? '');
   if (pitchTypes.length) where.push(`bf.pitch_type = ANY(${addParam(params, pitchTypes)}::text[])`);
@@ -433,6 +755,12 @@ async function backfillArsenal(args: { schoolCode: string; search: URLSearchPara
   if (qpLocations === 'No') where.push(`NOT (bf.plate_side BETWEEN -1.5 AND 1.5 AND bf.plate_height BETWEEN 1.05 AND 4.05)`);
   const pitchResultSql = pitchResultPredicate('bf.pitch_call', csvValues(search.get('pitch_results') ?? ''), params);
   if (pitchResultSql) where.push(pitchResultSql);
+  return where;
+}
+
+async function backfillArsenal(args: { schoolCode: string; search: URLSearchParams; scopedPitcher: string | null }): Promise<FlightRow[]> {
+  const params: QueryValue[] = [];
+  const where = backfillArsenalWhere({ ...args, params });
   const query = `
     SELECT pitch_type, COUNT(*)::int AS pitch_count, MIN(session_date) AS first_date, MAX(session_date) AS last_date,
       AVG(velocity) AS velo, AVG(spin_rate) AS spin, AVG(ivb) AS ivb, AVG(hb) AS hb,
@@ -448,6 +776,26 @@ async function backfillArsenal(args: { schoolCode: string; search: URLSearchPara
   return result.rows;
 }
 
+async function backfillArsenalPitches(args: {
+  schoolCode: string;
+  search: URLSearchParams;
+  scopedPitcher: string | null;
+}): Promise<IndividualPitchRow[]> {
+  const params: QueryValue[] = [];
+  const where = backfillArsenalWhere({ ...args, params });
+  const query = `
+    SELECT
+      pitch_type, pitch_uid, session_date, pitcher,
+      velocity AS velo, ivb, hb, release_height, release_side, extension,
+      plate_height, plate_side, zone_time, x0, y0, z0, vx0, vy0, vz0, ax0, ay0, az0
+    FROM public.pitch_flight_backfill bf
+    WHERE ${where.join('\n      AND ')}
+    ORDER BY session_date DESC, pitch_uid DESC NULLS LAST
+  `;
+  const result = await getDbPool().query<IndividualPitchRow>(query, params);
+  return result.rows;
+}
+
 async function proArsenal(search: URLSearchParams): Promise<FlightRow[]> {
   const params: QueryValue[] = [];
   const where = [
@@ -460,7 +808,7 @@ async function proArsenal(search: URLSearchParams): Promise<FlightRow[]> {
   const endDate = search.get('end_date')?.trim();
   if (startDate) where.push(`pe.session_date >= ${addParam(params, startDate)}::date`);
   if (endDate) where.push(`pe.session_date <= ${addParam(params, endDate)}::date`);
-  const pitchers = csvValues(search.get('pitcher') ?? '');
+  const pitchers = personValues(search.get('pitcher') ?? '');
   if (pitchers.length) where.push(`${normalizedPersonSql('pe.pitcher')} = ANY(${addParam(params, personParams(pitchers))}::text[])`);
   const pitchTypes = csvValues(search.get('pitch_types') ?? '');
   if (pitchTypes.length) where.push(`${proPitchTypeSql()} = ANY(${addParam(params, pitchTypes)}::text[])`);
@@ -549,14 +897,20 @@ export async function GET(request: Request) {
   try {
     let sourcePitchCounts: Record<string, number>;
     let rows: FlightRow[];
+    let spinSamples: SpinSampleRow[] = [];
+    let individualPitchRows: IndividualPitchRow[] = [];
     if (schoolCode === 'PRO') {
       rows = labeledRows(await proArsenal(url.searchParams));
       sourcePitchCounts = { measured: rows.reduce((sum, row) => sum + (finiteNumber(row.pitch_count) ?? 0), 0) };
     } else {
-      const [rawForwardRows, rawBackfillRows] = await Promise.all([
+      const [rawForwardRows, rawBackfillRows, rawSpinSamples, rawForwardPitches, rawBackfillPitches] = await Promise.all([
         collegeArsenal({ schoolCode, search: url.searchParams, scopedPitcher }),
         backfillArsenal({ schoolCode, search: url.searchParams, scopedPitcher }),
+        collegeSpinSamples({ schoolCode, search: url.searchParams, scopedPitcher }),
+        collegeArsenalPitches({ schoolCode, search: url.searchParams, scopedPitcher }),
+        backfillArsenalPitches({ schoolCode, search: url.searchParams, scopedPitcher }),
       ]);
+      spinSamples = rawSpinSamples;
       const forwardRows = labeledRows(rawForwardRows);
       const backfillRows = labeledRows(rawBackfillRows);
       sourcePitchCounts = {
@@ -564,6 +918,13 @@ export async function GET(request: Request) {
         backfill: backfillRows.reduce((sum, row) => sum + (finiteNumber(row.pitch_count) ?? 0), 0),
       };
       rows = mergeFlightRows([forwardRows, backfillRows]);
+      // Prefer the direct pitch_data row over its mirrored backfill copy when
+      // the same pitch_uid appears in both, matching mergeFlightRows' same
+      // dedupe intent for the grouped averages above.
+      const byUid = new Map<string, IndividualPitchRow>();
+      for (const row of rawBackfillPitches) if (row.pitch_uid) byUid.set(row.pitch_uid, row);
+      for (const row of rawForwardPitches) if (row.pitch_uid) byUid.set(row.pitch_uid, row);
+      individualPitchRows = Array.from(byUid.values());
     }
     let availableDateRange: { firstDate: string | null; lastDate: string | null } | null = null;
     if (!rows.length && schoolCode !== 'PRO') {
@@ -585,6 +946,8 @@ export async function GET(request: Request) {
       sourcePitchCounts,
       availableDateRange,
       pitches: serializeRows(rows),
+      spinSamples: serializeSpinSamples(spinSamples),
+      individualPitches: serializeIndividualPitches(individualPitchRows),
     }, { headers: { 'cache-control': 'private, max-age=30, stale-while-revalidate=120' } });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Unable to load ball-flight data.' }, { status: 500 });

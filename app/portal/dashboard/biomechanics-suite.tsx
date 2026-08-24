@@ -6,6 +6,13 @@ import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
 import NativeDateInput from '../components/native-date-input';
 import { resolveSchoolBrand } from '../../../lib/school-brand';
 
+const BIOMECH_RECORDING_MIME_OPTIONS = [
+  { mimeType: 'video/mp4;codecs=h264,aac', extension: 'mp4' },
+  { mimeType: 'video/mp4', extension: 'mp4' },
+  { mimeType: 'video/webm;codecs=vp9,opus', extension: 'webm' },
+  { mimeType: 'video/webm', extension: 'webm' },
+];
+
 type Role = 'admin' | 'coach' | 'player';
 type ViewMode = 'Force' | 'Moments';
 type ForceMode = 'force' | 'bw';
@@ -374,19 +381,130 @@ function PitchVideoPanel({
     };
   }, [onScrubTime, pitchKey]);
 
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isHovering, setIsHovering] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const [displayTime, setDisplayTime] = useState(0);
+  const barScrubbingRef = useRef(false);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onTimeUpdate = () => setDisplayTime(video.currentTime);
+    const onDuration = () => setDuration(video.duration || 0);
+    // preload="metadata" loads duration but not a decoded frame, so the video
+    // element renders black until something seeks it -- nudge to draw the first frame.
+    const onLoadedMetadata = () => {
+      onDuration();
+      if (video.currentTime === 0) video.currentTime = 0.001;
+    };
+    video.addEventListener('timeupdate', onTimeUpdate);
+    video.addEventListener('loadedmetadata', onLoadedMetadata);
+    video.addEventListener('durationchange', onDuration);
+    return () => {
+      video.removeEventListener('timeupdate', onTimeUpdate);
+      video.removeEventListener('loadedmetadata', onLoadedMetadata);
+      video.removeEventListener('durationchange', onDuration);
+    };
+  }, [pitchKey]);
+
+  const seekToFraction = (fraction: number) => {
+    const video = videoRef.current;
+    if (!video || !duration) return;
+    video.currentTime = Math.max(0, Math.min(duration, fraction * duration));
+  };
+
   if (videoError) return null;
 
+  const progress = duration > 0 ? Math.min(1, displayTime / duration) : 0;
+
   return (
-    <div style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 8, background: 'rgba(2,6,23,0.4)' }}>
+    <div
+      data-biomech-video-panel="true"
+      onMouseEnter={() => setIsHovering(true)}
+      onMouseLeave={() => setIsHovering(false)}
+      style={{ position: 'relative', border: '1px solid rgba(200,16,46,0.55)', borderRadius: 14, padding: 8, background: 'linear-gradient(165deg, rgba(8,8,10,0.96), rgba(24,24,28,0.9))', boxShadow: '0 0 0 1px rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', aspectRatio: '860 / 520', width: '100%', boxSizing: 'border-box' }}
+    >
       <video
         ref={videoRef}
         src={`/api/dashboard/biomechanics/pitch-video/${encodeURIComponent(pitchKey)}`}
-        controls
         playsInline
         preload="metadata"
         onError={() => setVideoError(true)}
-        style={{ width: '100%', maxHeight: 360, borderRadius: 8, display: 'block', background: '#000' }}
+        onPlay={() => setIsPlaying(true)}
+        onPause={() => setIsPlaying(false)}
+        onClick={() => {
+          const video = videoRef.current;
+          if (!video) return;
+          if (video.paused) void video.play().catch(() => {});
+          else video.pause();
+        }}
+        style={{ width: '100%', height: '100%', borderRadius: 8, display: 'block', background: '#000', objectFit: 'contain', cursor: 'pointer' }}
       />
+      <button
+        type="button"
+        aria-label={isPlaying ? 'Pause video' : 'Play video'}
+        onClick={() => {
+          const video = videoRef.current;
+          if (!video) return;
+          if (video.paused) void video.play().catch(() => {});
+          else video.pause();
+        }}
+        style={{
+          position: 'absolute',
+          bottom: 14,
+          left: 14,
+          width: 32,
+          height: 32,
+          borderRadius: '50%',
+          border: '1px solid rgba(255,255,255,0.35)',
+          background: 'rgba(0,0,0,0.6)',
+          color: '#fff',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: 'pointer',
+          padding: 0,
+          opacity: isHovering || !isPlaying ? 1 : 0,
+          transition: 'opacity 0.15s ease',
+        }}
+      >
+        {isPlaying ? (
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><rect x="3" y="2" width="4" height="12" /><rect x="9" y="2" width="4" height="12" /></svg>
+        ) : (
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M3 2l11 6-11 6V2z" /></svg>
+        )}
+      </button>
+      <div
+        onMouseDown={(event) => {
+          barScrubbingRef.current = true;
+          const rect = event.currentTarget.getBoundingClientRect();
+          seekToFraction((event.clientX - rect.left) / rect.width);
+        }}
+        onMouseMove={(event) => {
+          if (!barScrubbingRef.current) return;
+          const rect = event.currentTarget.getBoundingClientRect();
+          seekToFraction((event.clientX - rect.left) / rect.width);
+        }}
+        onMouseUp={() => { barScrubbingRef.current = false; }}
+        onMouseLeave={() => { barScrubbingRef.current = false; }}
+        style={{
+          position: 'absolute',
+          left: 14,
+          right: 14,
+          bottom: 6,
+          height: 14,
+          display: 'flex',
+          alignItems: 'center',
+          cursor: 'pointer',
+          opacity: isHovering ? 1 : 0,
+          transition: 'opacity 0.15s ease',
+        }}
+      >
+        <div style={{ position: 'relative', width: '100%', height: 4, borderRadius: 999, background: 'rgba(255,255,255,0.25)' }}>
+          <div style={{ position: 'absolute', top: 0, left: 0, height: '100%', width: `${progress * 100}%`, borderRadius: 999, background: '#c8102e' }} />
+        </div>
+      </div>
     </div>
   );
 }
@@ -402,6 +520,7 @@ function LineChart({
   strideDirectionIn,
   scrubTime,
   onScrubTime,
+  videoSlot,
 }: {
   points: PitchPoint[];
   mode: ViewMode;
@@ -413,6 +532,7 @@ function LineChart({
   strideDirectionIn: number | null;
   scrubTime?: number | null;
   onScrubTime?: (t: number) => void;
+  videoSlot?: React.ReactNode;
 }) {
   const roundAxisBound = (value: number, direction: 'up' | 'down') => {
     const isBwForceView = mode === 'Force' && forceMode === 'bw';
@@ -924,13 +1044,58 @@ function LineChart({
   if (!domain) {
     return <p style={{ color: '#9ca3af', margin: 0 }}>No single-pitch data for this selection.</p>;
   }
+  const metricsPanel = (
+    <aside data-biomech-metrics-panel="true" style={{ border: '1px solid rgba(200,16,46,0.36)', borderRadius: 14, padding: '8px 12px 12px', background: 'linear-gradient(165deg, rgba(8,8,10,0.96), rgba(24,24,28,0.9))', display: 'grid', gap: 10, height: videoSlot ? 'auto' : `calc(100% - ${pad.top}px)`, minHeight: 0, overflowY: videoSlot ? 'visible' : 'auto', marginTop: videoSlot ? 0 : pad.top, boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03)', boxSizing: 'border-box' }}>
+      <h4 style={{ margin: '-2px 0 0', textAlign: 'center', fontSize: 16, fontWeight: 700, color: '#e5e7eb' }}>Key Metrics</h4>
+      <div style={{ marginTop: -8, textAlign: 'center', color: '#cbd5e1', fontSize: 14, lineHeight: 1.1 }}>
+        {String(pitchType ?? '').trim() ? (
+          <>
+            <strong style={{ color: '#f8fafc' }}>{String(pitchType ?? '').trim()}</strong>
+            <span> | </span>
+          </>
+        ) : null}
+        <strong style={{ color: '#f8fafc' }}>
+          {pitchVelocityMph !== null && Number.isFinite(pitchVelocityMph) ? `${pitchVelocityMph.toFixed(1)} mph` : '— mph'}
+        </strong>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 10, alignItems: 'stretch' }}>
+      <div style={{ display: 'grid', alignContent: 'start', gap: 5, fontSize: 12, padding: 10, borderRadius: 10, background: 'rgba(17,17,20,0.88)', border: '1px solid rgba(200,16,46,0.3)', height: '100%' }}>
+        <strong style={{ textAlign: 'left', fontSize: 12, color: '#e2e8f0', letterSpacing: '0.02em' }}>Back Leg</strong>
+        <span style={{ color: '#cbd5e1' }}>Peak Fz ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.backPeakFz, 1)}</strong></span>
+        <span style={{ color: '#cbd5e1' }}>Peak De-Weighting ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.peakDeWeighting, 1)}</strong></span>
+        <span style={{ color: '#cbd5e1' }}>Z-Force Gain ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.zForceGain, 1)}</strong></span>
+        <span style={{ color: '#cbd5e1' }}>Peak Fy ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.backPeakFy, 1)}</strong></span>
+        <span style={{ color: '#cbd5e1' }}>Mound Connection (BW%): <strong style={{ color: '#f8fafc' }}>{fmtBwPercent(keyMetrics.moundConnection)}</strong></span>
+        <span style={{ color: '#cbd5e1' }}>Impulse ({mode === 'Force' && forceMode === 'bw' ? 'BW%·s' : 'lb·s'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.impulse, 1)}</strong></span>
+        <span style={{ color: '#cbd5e1' }}>Impulse Time (ms): <strong style={{ color: '#f8fafc' }}>{keyMetrics.impulseStartT !== null && keyMetrics.impulseEndT !== null ? fmtMs(Math.max(0, keyMetrics.impulseEndT - keyMetrics.impulseStartT)) : '—'}</strong></span>
+        <span style={{ color: '#cbd5e1' }}>YZ Transfer Back (ms): <strong style={{ color: '#f8fafc' }}>{fmtMs(keyMetrics.yzTransferBack)}</strong></span>
+      </div>
+      <div style={{ display: 'grid', alignContent: 'start', gap: 5, fontSize: 12, minWidth: 0, padding: 10, borderRadius: 10, background: 'rgba(17,17,20,0.88)', border: '1px solid rgba(200,16,46,0.3)', height: '100%' }}>
+        <strong style={{ textAlign: 'left', fontSize: 12, color: '#e2e8f0', letterSpacing: '0.02em' }}>Lead Leg</strong>
+        <span style={{ color: '#cbd5e1' }}>Peak Fz ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.leadPeakFz, 1)}</strong></span>
+        <span style={{ color: '#cbd5e1' }}>Peak Fy ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.leadPeakFy, 1)}</strong></span>
+        <span style={{ color: '#cbd5e1' }}>Clawback Time (s): <strong style={{ color: '#f8fafc' }}>{fmt(keyMetrics.clawbackTime, 3)}</strong></span>
+        <span style={{ color: '#cbd5e1' }}>FFC to Peak Y (s): <strong style={{ color: '#f8fafc' }}>{fmt(keyMetrics.ffcToPeakY, 3)}</strong></span>
+        <span style={{ color: '#cbd5e1' }}>YZ Transfer Front (ms): <strong style={{ color: '#f8fafc' }}>{fmtMs(keyMetrics.yzTransferFront)}</strong></span>
+      </div>
+      </div>
+      <div style={{ display: 'grid', gap: 5, fontSize: 12, justifyItems: 'center', textAlign: 'center', padding: 10, borderRadius: 10, background: 'rgba(12,12,14,0.86)', border: '1px solid rgba(200,16,46,0.26)' }}>
+        <strong style={{ color: '#e2e8f0', letterSpacing: '0.02em' }}>Other Metrics</strong>
+        <span style={{ color: '#cbd5e1' }}>Y Transfer (ms): <strong style={{ color: '#f8fafc' }}>{fmtMs(keyMetrics.yTransfer)}</strong></span>
+        <span style={{ color: '#cbd5e1' }}>Z Transfer (ms): <strong style={{ color: '#f8fafc' }}>{fmtMs(keyMetrics.zTransfer)}</strong></span>
+        <span style={{ color: '#cbd5e1' }}>Stride Length (in): <strong style={{ color: '#f8fafc' }}>{fmt(strideLengthIn, 1)}</strong></span>
+        <span style={{ color: '#cbd5e1' }}>Stride Direction (deg): <strong style={{ color: '#f8fafc' }}>{fmt(strideDirectionIn, 1)}</strong></span>
+      </div>
+    </aside>
+  );
   return (
     <>
-    <div data-biomech-chart-row="true" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 0.95fr) minmax(0, 1.05fr)', gap: 12, position: 'relative', zIndex: 0, overflow: 'hidden', alignItems: 'stretch' }}>
-      <div data-biomech-graph-panel="true" style={{ position: 'relative', marginTop: pad.top }}>
+    {videoSlot ? <div style={{ marginBottom: 12 }}>{metricsPanel}</div> : null}
+    <div data-biomech-chart-row="true" style={{ display: 'grid', gridTemplateColumns: videoSlot ? 'minmax(0, 1fr) minmax(0, 1fr)' : 'minmax(0, 0.95fr) minmax(0, 1.05fr)', gap: videoSlot ? 24 : 12, position: 'relative', zIndex: 0, overflow: 'hidden', alignItems: 'stretch' }}>
+      <div data-biomech-graph-panel="true" style={{ position: 'relative', marginTop: pad.top, ...(videoSlot ? { aspectRatio: `${width} / ${height}` } : {}) }}>
         <svg
         viewBox={`0 0 ${width} ${height}`}
-        style={{ width: '100%', maxWidth: '100%', background: 'linear-gradient(165deg, rgba(8,8,10,0.96), rgba(24,24,28,0.9))', border: '1px solid rgba(200,16,46,0.28)', borderRadius: 12, overflow: 'hidden', display: 'block', cursor: onScrubTime ? 'pointer' : 'default' }}
+        style={{ width: '100%', maxWidth: '100%', ...(videoSlot ? { height: '100%' } : {}), background: 'linear-gradient(165deg, rgba(8,8,10,0.96), rgba(24,24,28,0.9))', border: '1px solid rgba(200,16,46,0.28)', borderRadius: 12, overflow: 'hidden', display: 'block', cursor: onScrubTime ? 'pointer' : 'default' }}
         onMouseLeave={() => {
           setHoverClientX(null);
           if (isScrubbing) setIsScrubbing(false);
@@ -1039,6 +1204,7 @@ function LineChart({
           : null}
         {scrubPayload ? (
           <line
+            data-scrub-cursor="true"
             x1={scrubPayload.xPx}
             y1={pad.top}
             x2={scrubPayload.xPx}
@@ -1078,48 +1244,7 @@ function LineChart({
         </div>
         ) : null}
       </div>
-      <aside data-biomech-metrics-panel="true" style={{ border: '1px solid rgba(200,16,46,0.36)', borderRadius: 14, padding: '8px 12px 12px', background: 'linear-gradient(165deg, rgba(8,8,10,0.96), rgba(24,24,28,0.9))', display: 'grid', gap: 10, height: `calc(100% - ${pad.top}px)`, minHeight: 0, overflowY: 'auto', marginTop: pad.top, boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03)', boxSizing: 'border-box' }}>
-        <h4 style={{ margin: '-2px 0 0', textAlign: 'center', fontSize: 16, fontWeight: 700, color: '#e5e7eb' }}>Key Metrics</h4>
-        <div style={{ marginTop: -8, textAlign: 'center', color: '#cbd5e1', fontSize: 14, lineHeight: 1.1 }}>
-          {String(pitchType ?? '').trim() ? (
-            <>
-              <strong style={{ color: '#f8fafc' }}>{String(pitchType ?? '').trim()}</strong>
-              <span> | </span>
-            </>
-          ) : null}
-          <strong style={{ color: '#f8fafc' }}>
-            {pitchVelocityMph !== null && Number.isFinite(pitchVelocityMph) ? `${pitchVelocityMph.toFixed(1)} mph` : '— mph'}
-          </strong>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 10, alignItems: 'stretch' }}>
-        <div style={{ display: 'grid', alignContent: 'start', gap: 5, fontSize: 12, padding: 10, borderRadius: 10, background: 'rgba(17,17,20,0.88)', border: '1px solid rgba(200,16,46,0.3)', height: '100%' }}>
-          <strong style={{ textAlign: 'left', fontSize: 12, color: '#e2e8f0', letterSpacing: '0.02em' }}>Back Leg</strong>
-          <span style={{ color: '#cbd5e1' }}>Peak Fz ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.backPeakFz, 1)}</strong></span>
-          <span style={{ color: '#cbd5e1' }}>Peak De-Weighting ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.peakDeWeighting, 1)}</strong></span>
-          <span style={{ color: '#cbd5e1' }}>Z-Force Gain ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.zForceGain, 1)}</strong></span>
-          <span style={{ color: '#cbd5e1' }}>Peak Fy ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.backPeakFy, 1)}</strong></span>
-          <span style={{ color: '#cbd5e1' }}>Mound Connection (BW%): <strong style={{ color: '#f8fafc' }}>{fmtBwPercent(keyMetrics.moundConnection)}</strong></span>
-          <span style={{ color: '#cbd5e1' }}>Impulse ({mode === 'Force' && forceMode === 'bw' ? 'BW%·s' : 'lb·s'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.impulse, 1)}</strong></span>
-          <span style={{ color: '#cbd5e1' }}>Impulse Time (ms): <strong style={{ color: '#f8fafc' }}>{keyMetrics.impulseStartT !== null && keyMetrics.impulseEndT !== null ? fmtMs(Math.max(0, keyMetrics.impulseEndT - keyMetrics.impulseStartT)) : '—'}</strong></span>
-          <span style={{ color: '#cbd5e1' }}>YZ Transfer Back (ms): <strong style={{ color: '#f8fafc' }}>{fmtMs(keyMetrics.yzTransferBack)}</strong></span>
-        </div>
-        <div style={{ display: 'grid', alignContent: 'start', gap: 5, fontSize: 12, minWidth: 0, padding: 10, borderRadius: 10, background: 'rgba(17,17,20,0.88)', border: '1px solid rgba(200,16,46,0.3)', height: '100%' }}>
-          <strong style={{ textAlign: 'left', fontSize: 12, color: '#e2e8f0', letterSpacing: '0.02em' }}>Lead Leg</strong>
-          <span style={{ color: '#cbd5e1' }}>Peak Fz ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.leadPeakFz, 1)}</strong></span>
-          <span style={{ color: '#cbd5e1' }}>Peak Fy ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.leadPeakFy, 1)}</strong></span>
-          <span style={{ color: '#cbd5e1' }}>Clawback Time (s): <strong style={{ color: '#f8fafc' }}>{fmt(keyMetrics.clawbackTime, 3)}</strong></span>
-          <span style={{ color: '#cbd5e1' }}>FFC to Peak Y (s): <strong style={{ color: '#f8fafc' }}>{fmt(keyMetrics.ffcToPeakY, 3)}</strong></span>
-          <span style={{ color: '#cbd5e1' }}>YZ Transfer Front (ms): <strong style={{ color: '#f8fafc' }}>{fmtMs(keyMetrics.yzTransferFront)}</strong></span>
-        </div>
-        </div>
-        <div style={{ display: 'grid', gap: 5, fontSize: 12, justifyItems: 'center', textAlign: 'center', padding: 10, borderRadius: 10, background: 'rgba(12,12,14,0.86)', border: '1px solid rgba(200,16,46,0.26)' }}>
-          <strong style={{ color: '#e2e8f0', letterSpacing: '0.02em' }}>Other Metrics</strong>
-          <span style={{ color: '#cbd5e1' }}>Y Transfer (ms): <strong style={{ color: '#f8fafc' }}>{fmtMs(keyMetrics.yTransfer)}</strong></span>
-          <span style={{ color: '#cbd5e1' }}>Z Transfer (ms): <strong style={{ color: '#f8fafc' }}>{fmtMs(keyMetrics.zTransfer)}</strong></span>
-          <span style={{ color: '#cbd5e1' }}>Stride Length (in): <strong style={{ color: '#f8fafc' }}>{fmt(strideLengthIn, 1)}</strong></span>
-          <span style={{ color: '#cbd5e1' }}>Stride Direction (deg): <strong style={{ color: '#f8fafc' }}>{fmt(strideDirectionIn, 1)}</strong></span>
-        </div>
-      </aside>
+      {videoSlot ? <div style={{ marginTop: pad.top }}>{videoSlot}</div> : metricsPanel}
     </div>
     <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8 }}>
       {paths.map((metric) => (
@@ -1155,6 +1280,8 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
   const [showAllSessions, setShowAllSessions] = useState<boolean>(true);
   const [isExportingSummaryPdf, setIsExportingSummaryPdf] = useState<boolean>(false);
   const [isExportingComparePdf, setIsExportingComparePdf] = useState<boolean>(false);
+  const [isRecordingSummaryVideo, setIsRecordingSummaryVideo] = useState<boolean>(false);
+  const [isRecordingCompareVideo, setIsRecordingCompareVideo] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
   const [tableColumns, setTableColumns] = useState<string[]>([]);
   const [tableRows, setTableRows] = useState<Array<Record<string, string | number | null>>>([]);
@@ -1193,8 +1320,10 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
   const [comparePitchKeyB, setComparePitchKeyB] = useState<string>('');
   const [comparePitchPointsA, setComparePitchPointsA] = useState<PitchPoint[]>([]);
   const [comparePitchPointsB, setComparePitchPointsB] = useState<PitchPoint[]>([]);
-  const [comparePitchMetaA, setComparePitchMetaA] = useState<{ player: string; date: string; velocityMph: number | null; pitchType: string; bodyWeightLb: number | null; strideLengthIn: number | null; strideDirectionIn: number | null } | null>(null);
-  const [comparePitchMetaB, setComparePitchMetaB] = useState<{ player: string; date: string; velocityMph: number | null; pitchType: string; bodyWeightLb: number | null; strideLengthIn: number | null; strideDirectionIn: number | null } | null>(null);
+  const [comparePitchMetaA, setComparePitchMetaA] = useState<{ player: string; date: string; velocityMph: number | null; pitchType: string; bodyWeightLb: number | null; strideLengthIn: number | null; strideDirectionIn: number | null; hasVideo: boolean } | null>(null);
+  const [comparePitchMetaB, setComparePitchMetaB] = useState<{ player: string; date: string; velocityMph: number | null; pitchType: string; bodyWeightLb: number | null; strideLengthIn: number | null; strideDirectionIn: number | null; hasVideo: boolean } | null>(null);
+  const [compareScrubTimeA, setCompareScrubTimeA] = useState<number | null>(null);
+  const [compareScrubTimeB, setCompareScrubTimeB] = useState<number | null>(null);
   const [compareLoadingA, setCompareLoadingA] = useState<boolean>(false);
   const [compareLoadingB, setCompareLoadingB] = useState<boolean>(false);
 
@@ -1423,7 +1552,9 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
         bodyWeightLb: typeof meta?.bodyWeightLb === 'number' ? meta.bodyWeightLb : null,
         strideLengthIn: typeof meta?.strideLengthIn === 'number' ? meta.strideLengthIn : null,
         strideDirectionIn: typeof meta?.strideDirectionIn === 'number' ? meta.strideDirectionIn : null,
+        hasVideo: Boolean(meta?.hasVideo),
       });
+      (side === 'A' ? setCompareScrubTimeA : setCompareScrubTimeB)(null);
     } finally {
       setLoading(false);
     }
@@ -1742,6 +1873,18 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
       const metricsPanel = exportRoot.querySelector('[data-biomech-metrics-panel="true"]') as HTMLElement | null;
       const graphSvg = exportRoot.querySelector('[data-biomech-graph-panel="true"] svg') as SVGElement | null;
       const headerTitle = exportRoot.querySelector('p[style*="font-size: 18px"]') as HTMLParagraphElement | null;
+      // The video panel (when present) replaces the metrics panel's spot in chartRow, and
+      // metrics moves above chartRow instead -- the PDF should look exactly like it did
+      // before video existed, so strip the video and put metrics back into chartRow.
+      const videoPanel = exportRoot.querySelector('[data-biomech-video-panel="true"]');
+      const videoPanelWrapper = videoPanel?.parentElement;
+      videoPanel?.remove();
+      if (videoPanelWrapper && videoPanelWrapper !== chartRow && !videoPanelWrapper.hasChildNodes()) videoPanelWrapper.remove();
+      if (chartRow && metricsPanel && metricsPanel.parentElement !== chartRow) {
+        const oldWrapper = metricsPanel.parentElement;
+        chartRow.appendChild(metricsPanel);
+        oldWrapper?.remove();
+      }
       if (chartRow) {
         chartRow.style.gridTemplateColumns = 'minmax(0, 1fr)';
         chartRow.style.alignItems = 'start';
@@ -1827,6 +1970,274 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
     }
   };
 
+  // Records the on-screen card (video + animated graph line + key metrics) as a
+  // playable video file: a static html2canvas snapshot of everything except the
+  // live <video>/<svg> elements is drawn once, then each animation frame redraws
+  // that static layer and composites the live video + graph SVG on top of it in
+  // their exact on-screen positions, while MediaRecorder captures the canvas.
+  const recordBiomechanicsVideo = async (args: {
+    container: HTMLElement;
+    setIsRecording: (v: boolean) => void;
+    downloadNameBase: string;
+  }) => {
+    const { container, setIsRecording, downloadNameBase } = args;
+    if (typeof MediaRecorder === 'undefined') {
+      setError('Video recording is not supported in this browser.');
+      return;
+    }
+    const videos = Array.from(container.querySelectorAll('video'));
+    if (!videos.length) {
+      setError('No video is loaded for this pitch yet.');
+      return;
+    }
+    setError('');
+    setIsRecording(true);
+    let animationFrameId: number | null = null;
+    let recordingStream: MediaStream | null = null;
+    try {
+      const rect = container.getBoundingClientRect();
+      // Capping at 1.5x (rather than the PDF export's 2x) keeps per-frame canvas
+      // work light enough to record at a steady frame rate without stalling the
+      // live video decode running on the same thread.
+      const scale = Math.min(1.5, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(2, Math.round(rect.width * scale));
+      canvas.height = Math.max(2, Math.round(rect.height * scale));
+      const canvasScaleX = canvas.width / Math.max(1, rect.width);
+      const canvasScaleY = canvas.height / Math.max(1, rect.height);
+      const ctx = canvas.getContext('2d');
+      const captureStream = canvas.captureStream?.(24);
+      if (!ctx || !captureStream) {
+        setError('Canvas recording is not supported in this browser.');
+        return;
+      }
+      const { default: html2canvas } = await import('html2canvas');
+      const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
+      // The graph itself doesn't move during playback -- only the cursor line does
+      // -- so it's part of the one-time static snapshot along with everything else
+      // except the live <video>. The cursor line is drawn fresh each frame below
+      // as a plain canvas line read directly off the live SVG element's position,
+      // never by re-rasterizing the SVG (which was the source of the choppiness:
+      // decoding a fresh image 30x/sec on the same thread as the video decode).
+      const staticCanvas = await html2canvas(container, {
+        scale,
+        useCORS: true,
+        backgroundColor: isLightTheme ? '#f8fafc' : '#000000',
+        logging: false,
+        ignoreElements: (element) =>
+          element instanceof HTMLElement
+            ? element.tagName === 'VIDEO' || element.dataset.html2canvasIgnore === 'true'
+            : false,
+      }).catch(() => null);
+
+      // getBoundingClientRect() forces a synchronous layout reflow. The container's
+      // layout is static for the duration of the recording, so all rect lookups are
+      // done once here up front -- calling them from inside the per-frame draw
+      // functions below was forcing a reflow up to 60x/sec on the same thread as the
+      // video decode, which is what caused the recording to stutter/freeze then jump.
+      const scrubCursorLayouts = Array.from(container.querySelectorAll<SVGLineElement>('line[data-scrub-cursor="true"]'))
+        .map((line) => {
+          const svg = line.ownerSVGElement;
+          if (!svg) return null;
+          const svgRect = svg.getBoundingClientRect();
+          if (!svgRect.width || !svgRect.height) return null;
+          const viewBox = svg.viewBox.baseVal;
+          const viewBoxWidth = viewBox?.width || svgRect.width;
+          return {
+            line,
+            viewBoxWidth,
+            left: (svgRect.left - rect.left) * canvasScaleX,
+            width: svgRect.width * canvasScaleX,
+            y1: (svgRect.top - rect.top) * canvasScaleY,
+            y2: (svgRect.bottom - rect.top) * canvasScaleY,
+          };
+        })
+        .filter((v): v is NonNullable<typeof v> => v !== null);
+      const drawScrubCursors = () => {
+        scrubCursorLayouts.forEach(({ line, viewBoxWidth, left, width, y1, y2 }) => {
+          const x1Attr = Number(line.getAttribute('x1'));
+          if (!Number.isFinite(x1Attr)) return;
+          const fractionX = x1Attr / viewBoxWidth;
+          const canvasX = left + fractionX * width;
+          ctx.strokeStyle = '#c8102e';
+          ctx.lineWidth = 2 * Math.max(canvasScaleX, canvasScaleY);
+          ctx.beginPath();
+          ctx.moveTo(canvasX, y1);
+          ctx.lineTo(canvasX, y2);
+          ctx.stroke();
+        });
+      };
+      const videoBoxes = videos.map((video) => {
+        const videoRect = video.getBoundingClientRect();
+        return {
+          video,
+          x: (videoRect.left - rect.left) * canvasScaleX,
+          y: (videoRect.top - rect.top) * canvasScaleY,
+          w: videoRect.width * canvasScaleX,
+          h: videoRect.height * canvasScaleY,
+        };
+      });
+      const drawVideoToBox = ({ video, x, y, w, h }: (typeof videoBoxes)[number]) => {
+        if (!w || !h) return;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(x, y, w, h);
+        if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
+        const videoAspect = video.videoWidth / video.videoHeight;
+        const boxAspect = w / Math.max(1, h);
+        let drawW = w;
+        let drawH = h;
+        let drawX = x;
+        let drawY = y;
+        if (videoAspect > boxAspect) {
+          drawH = w / videoAspect;
+          drawY = y + (h - drawH) / 2;
+        } else {
+          drawW = h * videoAspect;
+          drawX = x + (w - drawW) / 2;
+        }
+        try {
+          ctx.drawImage(video, drawX, drawY, drawW, drawH);
+        } catch {
+          // Cross-origin frames can block canvas export; static layer still shows.
+        }
+      };
+
+      const audioTracks = videos.flatMap((video) => {
+        const capturedVideo = video as HTMLVideoElement & { captureStream?: () => MediaStream; mozCaptureStream?: () => MediaStream };
+        return capturedVideo.captureStream?.().getAudioTracks() ?? capturedVideo.mozCaptureStream?.().getAudioTracks() ?? [];
+      });
+      const stream = new MediaStream([...captureStream.getVideoTracks(), ...audioTracks]);
+      recordingStream = stream;
+      const recordingFormat = BIOMECH_RECORDING_MIME_OPTIONS.find((option) => MediaRecorder.isTypeSupported(option.mimeType)) ?? BIOMECH_RECORDING_MIME_OPTIONS[BIOMECH_RECORDING_MIME_OPTIONS.length - 1]!;
+      const recorder = new MediaRecorder(stream, { mimeType: recordingFormat.mimeType });
+      const chunks: BlobPart[] = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunks.push(event.data);
+      };
+      const stopped = new Promise<Blob>((resolve) => {
+        recorder.onstop = () => resolve(new Blob(chunks, { type: recordingFormat.mimeType }));
+      });
+
+      // Redrawing on every display refresh (usually 60Hz) does 2-3x more drawImage/
+      // canvas work than the 24fps captureStream will ever use, competing with the
+      // video decode for main-thread time between the frames that actually get
+      // captured. Gating to ~24fps here cuts that wasted work and was the remaining
+      // source of stutter after the getBoundingClientRect fix above.
+      const frameIntervalMs = 1000 / 24;
+      let lastFrameTime = 0;
+      const renderFrame = (time: number) => {
+        animationFrameId = requestAnimationFrame(renderFrame);
+        if (time - lastFrameTime < frameIntervalMs) return;
+        lastFrameTime = time;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (staticCanvas) {
+          ctx.drawImage(staticCanvas, 0, 0, canvas.width, canvas.height);
+        } else {
+          ctx.fillStyle = isLightTheme ? '#f8fafc' : '#000000';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+        drawScrubCursors();
+        videoBoxes.forEach(drawVideoToBox);
+      };
+      // Force full buffering before recording -- preload="metadata" only fetches
+      // duration/dimensions, and playing while still fetching the rest of the file
+      // can stall mid-clip waiting on the network, which desyncs the recording from
+      // the (unaffected) graph line since that keeps following currentTime updates.
+      videos.forEach((video) => { video.preload = 'auto'; });
+      await Promise.all(videos.map((video) => new Promise<void>((resolve) => {
+        if (video.readyState >= 4) {
+          resolve();
+          return;
+        }
+        let done = false;
+        const finishPreload = () => {
+          if (done) return;
+          done = true;
+          window.clearInterval(pollId);
+          resolve();
+        };
+        // Poll readyState instead of relying solely on canplaythrough, which some
+        // browsers skip firing for an already-cached or very short video.
+        const pollId = window.setInterval(() => {
+          if (video.readyState >= 4) finishPreload();
+        }, 100);
+        window.setTimeout(finishPreload, 5000);
+      })));
+
+      renderFrame(0);
+      recorder.start();
+      await Promise.all(videos.map((video) => {
+        video.currentTime = 0;
+        return video.play().catch(() => {});
+      }));
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          window.clearInterval(pollId);
+          resolve();
+        };
+        const longest = videos.reduce((max, video) => Math.max(max, video.duration || 0), 0);
+        videos.forEach((video) => video.addEventListener('ended', finish, { once: true }));
+        // Poll actual playback position rather than trusting only the `ended` event,
+        // which can fail to fire if playback stalls right at the end of the clip.
+        const pollId = window.setInterval(() => {
+          const allDone = videos.every((video) => video.ended || (video.duration > 0 && video.currentTime >= video.duration - 0.05));
+          if (allDone) finish();
+        }, 100);
+        // Safety timeout in case duration/currentTime never resolve as expected.
+        window.setTimeout(finish, (longest > 0 ? longest * 1000 : 8000) + 1500);
+      });
+      videos.forEach((video) => video.pause());
+      if (recorder.state !== 'inactive') recorder.stop();
+      const blob = await Promise.race([
+        stopped,
+        new Promise<Blob>((resolve) => {
+          window.setTimeout(() => resolve(new Blob(chunks, { type: recordingFormat.mimeType })), 4000);
+        }),
+      ]);
+      if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
+      animationFrameId = null;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${downloadNameBase}.${recordingFormat.extension}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to record video.');
+    } finally {
+      if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
+      recordingStream?.getTracks().forEach((track) => track.stop());
+      setIsRecording(false);
+    }
+  };
+
+  const downloadSummaryVideo = async () => {
+    if (!summaryCardRef.current || isRecordingSummaryVideo) return;
+    const player = String(selectedPitchPlayer ?? '').trim() || 'pitch';
+    const date = String(selectedPitchDate ?? '').trim() || 'date';
+    const safeName = `${player}_${date}`.replace(/[^a-z0-9_-]+/gi, '_');
+    await recordBiomechanicsVideo({
+      container: summaryCardRef.current,
+      setIsRecording: setIsRecordingSummaryVideo,
+      downloadNameBase: `biomechanics_summary_${safeName}`,
+    });
+  };
+
+  const downloadCompareVideo = async () => {
+    if (!compareCardRef.current || isRecordingCompareVideo) return;
+    await recordBiomechanicsVideo({
+      container: compareCardRef.current,
+      setIsRecording: setIsRecordingCompareVideo,
+      downloadNameBase: 'biomechanics_compare',
+    });
+  };
+
   const downloadComparePdf = async () => {
     if (!compareCardRef.current || isExportingComparePdf) return;
     setIsExportingComparePdf(true);
@@ -1878,8 +2289,28 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
       // Remove dropdowns from export
       exportRoot.querySelectorAll('label').forEach((el) => { (el as HTMLElement).style.display = 'none'; });
       exportRoot.querySelectorAll('[data-html2canvas-ignore]').forEach((el) => { (el as HTMLElement).style.display = 'none'; });
+      // Video panels (when present) replace the metrics panel's spot in chartRow, with
+      // metrics moved above chartRow instead -- restore the pre-video layout for export.
+      exportRoot.querySelectorAll('[data-biomech-video-panel="true"]').forEach((el) => {
+        const wrapper = el.parentElement;
+        el.remove();
+        if (wrapper && !wrapper.hasChildNodes() && !wrapper.hasAttribute('data-biomech-chart-row')) wrapper.remove();
+      });
+      exportRoot.querySelectorAll('[data-biomech-chart-row="true"]').forEach((chartRow) => {
+        const metricsPanel = chartRow.parentElement?.querySelector('[data-biomech-metrics-panel="true"]');
+        if (metricsPanel && metricsPanel.parentElement !== chartRow) {
+          const oldWrapper = metricsPanel.parentElement;
+          chartRow.appendChild(metricsPanel);
+          if (oldWrapper !== chartRow.parentElement) oldWrapper?.remove();
+        }
+        (chartRow as HTMLElement).style.gridTemplateColumns = 'minmax(0, 0.95fr) minmax(0, 1.05fr)';
+      });
       // Uncap SVG heights for export
-      exportRoot.querySelectorAll('svg').forEach((svg) => { (svg as SVGElement).style.height = '340px'; });
+      exportRoot.querySelectorAll('svg').forEach((svg) => {
+        (svg as SVGElement).style.height = '340px';
+        (svg as SVGElement).style.aspectRatio = '';
+      });
+      exportRoot.querySelectorAll('[data-biomech-graph-panel="true"]').forEach((el) => { (el as HTMLElement).style.aspectRatio = ''; });
       document.body.appendChild(exportRoot);
       await Promise.all(
         [leftLogo, rightLogo].map(async (logo) => {
@@ -2071,10 +2502,15 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
 
       {pageTab === 'summary' ? (
       <div ref={summaryCardRef} style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 12, display: 'grid', gap: 8, position: 'relative' }}>
-        <div data-html2canvas-ignore="true" style={{ position: 'absolute', top: 10, right: 10, zIndex: 2 }}>
+        <div data-html2canvas-ignore="true" style={{ position: 'absolute', top: 10, right: 10, zIndex: 2, display: 'flex', gap: 8 }}>
           <button type="button" className="btn btn-ghost" onClick={() => void downloadSummaryPdf()} disabled={isExportingSummaryPdf}>
             {isExportingSummaryPdf ? 'Downloading PDF...' : 'Download PDF'}
           </button>
+          {selectedPitchHasVideo ? (
+            <button type="button" className="btn btn-ghost" onClick={() => void downloadSummaryVideo()} disabled={isRecordingSummaryVideo}>
+              {isRecordingSummaryVideo ? 'Recording...' : 'Download MP4'}
+            </button>
+          ) : null}
         </div>
         <div style={{ display: 'grid', justifyItems: 'center', gap: 2, paddingTop: 2 }}>
           <p style={{ margin: 0, color: '#e2e8f0', fontSize: 22, fontWeight: 700, textAlign: 'center', lineHeight: 1.1 }}>
@@ -2096,14 +2532,6 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
             );
           })()}
         </div>
-        {selectedPitchHasVideo ? (
-          <PitchVideoPanel
-            key={selectedPitchKey}
-            pitchKey={selectedPitchKey}
-            scrubTime={scrubTime}
-            onScrubTime={setScrubTime}
-          />
-        ) : null}
         <LineChart
           points={selectedPitchPoints}
           mode={mode}
@@ -2115,6 +2543,14 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
           strideDirectionIn={selectedPitchStrideDirectionIn}
           scrubTime={scrubTime}
           onScrubTime={setScrubTime}
+          videoSlot={selectedPitchHasVideo ? (
+            <PitchVideoPanel
+              key={selectedPitchKey}
+              pitchKey={selectedPitchKey}
+              scrubTime={scrubTime}
+              onScrubTime={setScrubTime}
+            />
+          ) : undefined}
         />
         {selectedPitchPointsError ? (
           <p style={{ color: '#fca5a5', margin: 0, fontSize: 13 }}>{selectedPitchPointsError}</p>
@@ -2284,10 +2720,15 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
       </div>}
       {pageTab === 'compare' ? (
         <div ref={compareCardRef} style={{ display: 'grid', gap: 12, position: 'relative' }}>
-          <div data-html2canvas-ignore="true" style={{ position: 'absolute', top: 0, right: 0, zIndex: 2 }}>
+          <div data-html2canvas-ignore="true" style={{ position: 'absolute', top: 0, right: 0, zIndex: 2, display: 'flex', gap: 8 }}>
             <button type="button" className="btn btn-ghost" onClick={() => void downloadComparePdf()} disabled={isExportingComparePdf}>
               {isExportingComparePdf ? 'Downloading PDF...' : 'Download PDF'}
             </button>
+            {comparePitchMetaA?.hasVideo || comparePitchMetaB?.hasVideo ? (
+              <button type="button" className="btn btn-ghost" onClick={() => void downloadCompareVideo()} disabled={isRecordingCompareVideo}>
+                {isRecordingCompareVideo ? 'Recording...' : 'Download MP4'}
+              </button>
+            ) : null}
           </div>
           {(['A', 'B'] as const).map((side) => {
             const pitchKey = side === 'A' ? comparePitchKeyA : comparePitchKeyB;
@@ -2295,6 +2736,8 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
             const points = side === 'A' ? comparePitchPointsA : comparePitchPointsB;
             const meta = side === 'A' ? comparePitchMetaA : comparePitchMetaB;
             const loading = side === 'A' ? compareLoadingA : compareLoadingB;
+            const scrubTime = side === 'A' ? compareScrubTimeA : compareScrubTimeB;
+            const setScrubTimeForSide = side === 'A' ? setCompareScrubTimeA : setCompareScrubTimeB;
             return (
               <div key={side} style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 12, display: 'grid', gap: 8 }}>
                 <label style={{ display: 'grid', gap: 4, maxWidth: 460 }}>
@@ -2335,6 +2778,16 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
                     bodyWeightLb={meta?.bodyWeightLb ?? null}
                     strideLengthIn={meta?.strideLengthIn ?? null}
                     strideDirectionIn={meta?.strideDirectionIn ?? null}
+                    scrubTime={scrubTime}
+                    onScrubTime={setScrubTimeForSide}
+                    videoSlot={meta?.hasVideo ? (
+                      <PitchVideoPanel
+                        key={pitchKey}
+                        pitchKey={pitchKey}
+                        scrubTime={scrubTime}
+                        onScrubTime={setScrubTimeForSide}
+                      />
+                    ) : undefined}
                   />
                 ) : pitchKey && !loading ? (
                   <p style={{ margin: 0, color: '#94a3b8', fontSize: 13, textAlign: 'center', padding: '40px 0' }}>No data for this pitch.</p>
