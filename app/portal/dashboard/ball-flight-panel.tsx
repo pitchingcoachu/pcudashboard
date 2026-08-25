@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from 'react';
 import styles from './ball-flight-panel.module.css';
 import SpinDesignerPanel from './spin-designer-panel';
@@ -114,7 +115,10 @@ type Point3 = { x: number; y: number; z: number };
 type Point2 = { x: number; y: number; depth: number };
 
 const CAMERA_PRESETS: Record<CameraView, { camera: Point3; target: Point3; focalScale: number; defaultZoom: number }> = {
-  pitcher: { camera: { x: 0, y: 68, z: 8.2 }, target: { x: 0, y: 7, z: 2.8 }, focalScale: 1.02, defaultZoom: 1 },
+  // Keep the eye behind the release point and use a telephoto-style zoom.
+  // This enlarges the strike zone without moving through the release point
+  // and clipping the first portion of each trajectory.
+  pitcher: { camera: { x: 0, y: 68, z: 8.2 }, target: { x: 0, y: 17 / 12, z: 2.55 }, focalScale: 1.15, defaultZoom: 0.24 },
   // Catcher view sits at squatting eye height, a bit closer behind the
   // plate than a standing batter's-eye view.
   batter: { camera: { x: 0, y: -8, z: 3.4 }, target: { x: 0, y: 50, z: 3.5 }, focalScale: 1.0, defaultZoom: 1 },
@@ -227,7 +231,8 @@ function projector(orbit: CameraOrbit, width: number, height: number) {
   const basePitch = Math.atan2(baseOffset.z, Math.hypot(baseOffset.x, baseOffset.y));
   const yaw = baseYaw + orbit.yaw;
   const pitch = clamp(basePitch + orbit.pitch, -1.35, 1.35);
-  const radius = baseRadius * clamp(orbit.zoom, 0.5, 1.9);
+  const isPitcherPreset = orbit.preset === 'pitcher';
+  const radius = baseRadius * (isPitcherPreset ? 1 : clamp(orbit.zoom, 0.5, 1.9));
   const horizontalRadius = Math.cos(pitch) * radius;
   const target = preset.target;
   const camera = {
@@ -241,7 +246,8 @@ function projector(orbit: CameraOrbit, width: number, height: number) {
   // right from behind the mound and on the viewer's left from the batter box.
   const right = normalize(cross({ x: 0, y: 0, z: 1 }, forward));
   const up = normalize(cross(forward, right));
-  const focal = Math.min(width, height) * preset.focalScale;
+  const lensZoom = isPitcherPreset ? (1 / clamp(orbit.zoom, 0.12, 2.4)) : 1;
+  const focal = Math.min(width, height) * preset.focalScale * lensZoom;
   return (point: Point3): Point2 | null => {
     const relative = subtract(point, camera);
     const depth = dot(relative, forward);
@@ -269,6 +275,17 @@ function line3(ctx: CanvasRenderingContext2D, project: ReturnType<typeof project
   ctx.lineWidth = width;
   ctx.stroke();
   ctx.setLineDash([]);
+}
+
+function fill3(ctx: CanvasRenderingContext2D, project: ReturnType<typeof projector>, points: Point3[], fill: string) {
+  const projected = points.map(project).filter((point): point is Point2 => point !== null);
+  if (projected.length < 3) return;
+  ctx.beginPath();
+  ctx.moveTo(projected[0].x, projected[0].y);
+  for (const point of projected.slice(1)) ctx.lineTo(point.x, point.y);
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
 }
 
 function drawScene(canvas: HTMLCanvasElement, pitches: FlightPitch[], elapsed: number, camera: CameraOrbit) {
@@ -319,12 +336,13 @@ function drawScene(canvas: HTMLCanvasElement, pitches: FlightPitch[], elapsed: n
     { x: -0.88, y: 17 / 12, z: 1.5 }, { x: 0.88, y: 17 / 12, z: 1.5 },
     { x: 0.88, y: 17 / 12, z: 3.6 }, { x: -0.88, y: 17 / 12, z: 3.6 }, { x: -0.88, y: 17 / 12, z: 1.5 },
   ];
-  line3(ctx, project, zone, 'rgba(255,255,255,0.56)', 1.5);
+  fill3(ctx, project, zone.slice(0, -1), 'rgba(255,255,255,0.035)');
+  line3(ctx, project, zone, 'rgba(255,255,255,0.9)', 2.1);
   for (const fraction of [1 / 3, 2 / 3]) {
     const x = -0.88 + (1.76 * fraction);
     const z = 1.5 + (2.1 * fraction);
-    line3(ctx, project, [{ x, y: 17 / 12, z: 1.5 }, { x, y: 17 / 12, z: 3.6 }], 'rgba(255,255,255,0.18)', 1);
-    line3(ctx, project, [{ x: -0.88, y: 17 / 12, z }, { x: 0.88, y: 17 / 12, z }], 'rgba(255,255,255,0.18)', 1);
+    line3(ctx, project, [{ x, y: 17 / 12, z: 1.5 }, { x, y: 17 / 12, z: 3.6 }], 'rgba(255,255,255,0.34)', 1.15);
+    line3(ctx, project, [{ x: -0.88, y: 17 / 12, z }, { x: 0.88, y: 17 / 12, z }], 'rgba(255,255,255,0.34)', 1.15);
   }
 
   const sorted = [...pitches].sort((a, b) => {
@@ -345,7 +363,7 @@ function drawScene(canvas: HTMLCanvasElement, pitches: FlightPitch[], elapsed: n
     line3(ctx, project, allPath.slice(0, visibleSteps + 1), color, 2.5);
     const position = project(flightPoint(pitch, elapsed));
     if (!position) continue;
-    const radius = 9;
+    const radius = camera.preset === 'pitcher' ? 10 : 9;
     ctx.save();
     // A colored shadowColor glow reads as a different SIZE per pitch type --
     // a white glow (Fastball) bleeds much more visibly against the black
@@ -368,7 +386,14 @@ function drawScene(canvas: HTMLCanvasElement, pitches: FlightPitch[], elapsed: n
   }
 }
 
-export default function BallFlightPanel({ queryString }: { queryString: string }) {
+type BallFlightPanelProps = {
+  queryString: string;
+  playerName?: string;
+  logoUrl?: string;
+  logoAlt?: string;
+};
+
+export default function BallFlightPanel({ queryString, playerName = '', logoUrl = '', logoAlt = '' }: BallFlightPanelProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const cameraRef = useRef<CameraOrbit>(freshCamera('batter'));
   const dragRef = useRef<{ pointerId: number; x: number; y: number; yaw: number; pitch: number } | null>(null);
@@ -513,9 +538,11 @@ export default function BallFlightPanel({ queryString }: { queryString: string }
 
   const handleWheel = (event: ReactWheelEvent<HTMLCanvasElement>) => {
     event.preventDefault();
+    const zoomMin = cameraRef.current.preset === 'pitcher' ? 0.12 : 0.5;
+    const zoomMax = cameraRef.current.preset === 'pitcher' ? 2.4 : 1.9;
     cameraRef.current = {
       ...cameraRef.current,
-      zoom: clamp(cameraRef.current.zoom * Math.exp(event.deltaY * 0.0012), 0.5, 1.9),
+      zoom: clamp(cameraRef.current.zoom * Math.exp(event.deltaY * 0.0012), zoomMin, zoomMax),
     };
     markCameraCustom();
   };
@@ -528,11 +555,13 @@ export default function BallFlightPanel({ queryString }: { queryString: string }
       resetCamera(cameraRef.current.preset);
       return;
     }
+    const zoomMin = cameraRef.current.preset === 'pitcher' ? 0.12 : 0.5;
+    const zoomMax = cameraRef.current.preset === 'pitcher' ? 2.4 : 1.9;
     cameraRef.current = {
       ...cameraRef.current,
       yaw: cameraRef.current.yaw + (event.key === 'ArrowLeft' ? step : event.key === 'ArrowRight' ? -step : 0),
       pitch: clamp(cameraRef.current.pitch + (event.key === 'ArrowDown' ? step : event.key === 'ArrowUp' ? -step : 0), -1.2, 1.2),
-      zoom: clamp(cameraRef.current.zoom * (event.key === '+' || event.key === '=' ? 0.9 : event.key === '-' || event.key === '_' ? 1.1 : 1), 0.5, 1.9),
+      zoom: clamp(cameraRef.current.zoom * (event.key === '+' || event.key === '=' ? 0.9 : event.key === '-' || event.key === '_' ? 1.1 : 1), zoomMin, zoomMax),
     };
     markCameraCustom();
   };
@@ -650,6 +679,12 @@ export default function BallFlightPanel({ queryString }: { queryString: string }
           <span className={styles.clock}>{displayTime.toFixed(3)} s</span>
           <span className={styles.viewLabel}>{cameraMode === 'custom' ? 'custom 3D view' : `${cameraMode} view`} · simultaneous release</span>
         </div>
+        {playerName ? (
+          <div className={styles.playerIdentity} aria-label={`Flight paths for ${playerName}`}>
+            <span className={styles.playerIdentityName}>{playerName}</span>
+            {logoUrl ? <Image className={styles.playerIdentityLogo} src={logoUrl} alt={logoAlt || 'Team logo'} width={34} height={34} unoptimized /> : null}
+          </div>
+        ) : null}
         {!loading && !error && payload?.pitches.length ? <span className={styles.orbitHint}>Drag to orbit · scroll to zoom</span> : null}
         {loading || error || !payload?.pitches.length ? (
           <div className={styles.empty}>

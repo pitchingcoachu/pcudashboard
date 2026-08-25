@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
+    "export:x-coaches": "node --env-file=.env.local scripts/export-x-coach-followers.mjs",
     "migrate:training-data": "node scripts/migrate-training-data.mjs",
     "cap:sync": "npx cap sync ios",
     "ios:open": "npx cap open ios"

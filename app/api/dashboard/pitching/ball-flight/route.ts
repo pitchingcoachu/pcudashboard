@@ -107,6 +107,11 @@ function finiteNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function finiteLateral(value: unknown, multiplier: number): number | null {
+  const parsed = finiteNumber(value);
+  return parsed === null ? null : parsed * multiplier;
+}
+
 function isoDate(value: unknown): string | null {
   if (!value) return null;
   if (value instanceof Date) return value.toISOString().slice(0, 10);
@@ -204,7 +209,7 @@ function proPitchTypeSql(): string {
   END`;
 }
 
-function serializeRows(rows: FlightRow[]) {
+function serializeRows(rows: FlightRow[], lateralMultiplier = 1) {
   return rows.map((row) => ({
     pitchType: String(row.pitch_type || 'Undefined'),
     pitchCount: Math.max(0, Math.round(finiteNumber(row.pitch_count) ?? 0)),
@@ -215,12 +220,12 @@ function serializeRows(rows: FlightRow[]) {
     inducedVerticalBreak: finiteNumber(row.ivb),
     horizontalBreak: finiteNumber(row.hb),
     releaseHeight: finiteNumber(row.release_height),
-    releaseSide: finiteNumber(row.release_side),
+    releaseSide: finiteLateral(row.release_side, lateralMultiplier),
     extension: finiteNumber(row.extension),
     plateHeight: finiteNumber(row.plate_height),
-    plateSide: finiteNumber(row.plate_side),
+    plateSide: finiteLateral(row.plate_side, lateralMultiplier),
     flightTime: finiteNumber(row.zone_time),
-    x0: finiteNumber(row.x0),
+    x0: finiteLateral(row.x0, lateralMultiplier),
     y0: finiteNumber(row.y0),
     z0: finiteNumber(row.z0),
     vx0: finiteNumber(row.vx0),
@@ -232,7 +237,7 @@ function serializeRows(rows: FlightRow[]) {
   }));
 }
 
-function serializeIndividualPitches(rows: IndividualPitchRow[]) {
+function serializeIndividualPitches(rows: IndividualPitchRow[], lateralMultiplier = 1) {
   return rows
     .map((row) => ({
       pitchType: String(row.pitch_type || 'Undefined'),
@@ -243,12 +248,12 @@ function serializeIndividualPitches(rows: IndividualPitchRow[]) {
       inducedVerticalBreak: finiteNumber(row.ivb),
       horizontalBreak: finiteNumber(row.hb),
       releaseHeight: finiteNumber(row.release_height),
-      releaseSide: finiteNumber(row.release_side),
+      releaseSide: finiteLateral(row.release_side, lateralMultiplier),
       extension: finiteNumber(row.extension),
       plateHeight: finiteNumber(row.plate_height),
-      plateSide: finiteNumber(row.plate_side),
+      plateSide: finiteLateral(row.plate_side, lateralMultiplier),
       flightTime: finiteNumber(row.zone_time),
-      x0: finiteNumber(row.x0),
+      x0: finiteLateral(row.x0, lateralMultiplier),
       y0: finiteNumber(row.y0),
       z0: finiteNumber(row.z0),
       vx0: finiteNumber(row.vx0),
@@ -945,9 +950,14 @@ export async function GET(request: Request) {
       backfillWindowDays: 7,
       sourcePitchCounts,
       availableDateRange,
-      pitches: serializeRows(rows),
+      // Statcast/pro horizontal coordinates use the opposite sign from the
+      // dashboard's TrackMan-facing convention: raw pro RelSide averages are
+      // positive for LHP and negative for RHP. Normalize only pro lateral
+      // release/plate positions here so every camera view places the pitcher
+      // on the correct side without changing college data.
+      pitches: serializeRows(rows, schoolCode === 'PRO' ? -1 : 1),
       spinSamples: serializeSpinSamples(spinSamples),
-      individualPitches: serializeIndividualPitches(individualPitchRows),
+      individualPitches: serializeIndividualPitches(individualPitchRows, schoolCode === 'PRO' ? -1 : 1),
     }, { headers: { 'cache-control': 'private, max-age=30, stale-while-revalidate=120' } });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Unable to load ball-flight data.' }, { status: 500 });

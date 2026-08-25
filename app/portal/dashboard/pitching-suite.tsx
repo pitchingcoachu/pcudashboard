@@ -14548,6 +14548,42 @@ export default function PitchingSuite({
     if (!remoteLogoUrl) return '';
     return `/api/dashboard/image-proxy?url=${encodeURIComponent(remoteLogoUrl)}`;
   }, []);
+  const ballFlightIdentity = useMemo(() => {
+    if (!selectedSinglePitcher) return { playerName: '', logoUrl: '', logoAlt: '' };
+    const playerName = formatNameFirstLast(selectedSinglePitcher);
+    const normalizeName = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const formatted = formatNameFirstLast(selectedSinglePitcher);
+    const keys = [selectedSinglePitcher, formatted, normalizeName(selectedSinglePitcher), normalizeName(formatted)];
+    let teamCode = '';
+    for (const key of keys) {
+      teamCode = latestTeamByPitcher[key] ?? filterTeamByPitcher[key] ?? '';
+      if (teamCode) break;
+    }
+    if (!teamCode && teamType && teamType !== 'All') teamCode = isPro ? inferProTeamCode(teamType) : teamType;
+
+    if (isPro) {
+      return {
+        playerName,
+        logoUrl: proxiedProTeamLogoUrl(teamCode),
+        logoAlt: teamCode ? `${teamCode} logo` : 'Team logo',
+      };
+    }
+    if (isLeague) {
+      const brand = teamCode && isKnownSchoolBrand(teamCode.split('_')[0])
+        ? resolveSchoolBrand(teamCode.split('_')[0])
+        : null;
+      return {
+        playerName,
+        logoUrl: resolveSchoolLogoByCodeOrPrefix(teamCode) ?? '',
+        logoAlt: brand?.logoAlt ?? (teamCode ? `${teamCode} logo` : 'School logo'),
+      };
+    }
+    return {
+      playerName,
+      logoUrl: activeSchoolBrand.logoSrc ?? '',
+      logoAlt: activeSchoolBrand.logoAlt,
+    };
+  }, [activeSchoolBrand.logoAlt, activeSchoolBrand.logoSrc, filterTeamByPitcher, isLeague, isPro, latestTeamByPitcher, proxiedProTeamLogoUrl, selectedSinglePitcher, teamType]);
   const summaryTeamLogoUrl = useMemo(() => {
     if (!isPro || dashboardPage !== 'Summary') return '';
     const norm = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -18247,7 +18283,12 @@ export default function PitchingSuite({
               )}
             </>
           ) : dashboardPage === 'Ball Flight' ? (
-            <BallFlightPanel queryString={ballFlightQueryString} />
+            <BallFlightPanel
+              queryString={ballFlightQueryString}
+              playerName={ballFlightIdentity.playerName}
+              logoUrl={ballFlightIdentity.logoUrl}
+              logoAlt={ballFlightIdentity.logoAlt}
+            />
           ) : dashboardPage === 'Pitcher DNA' ? (
             <PitcherDnaPanel
               filters={filters}

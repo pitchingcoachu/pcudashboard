@@ -125,7 +125,7 @@
 
 .orbitHint {
   position: absolute;
-  right: 14px;
+  left: 14px;
   bottom: 12px;
   z-index: 2;
   padding: 6px 9px;
@@ -137,6 +137,41 @@
   font-weight: 750;
   letter-spacing: 0.04em;
   pointer-events: none;
+}
+
+.playerIdentity {
+  position: absolute;
+  right: 16px;
+  bottom: 14px;
+  z-index: 2;
+  display: flex;
+  max-width: min(54%, 420px);
+  align-items: center;
+  gap: 11px;
+  padding: 8px 10px 8px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 11px;
+  background: rgba(4, 5, 6, 0.76);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(10px);
+  pointer-events: none;
+}
+
+.playerIdentityName {
+  overflow: hidden;
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 850;
+  letter-spacing: 0.025em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.playerIdentityLogo {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  object-fit: contain;
 }
 
 .empty {
@@ -439,8 +474,20 @@
   }
 
   .orbitHint {
+    display: none;
+  }
+
+  .playerIdentity {
     right: 10px;
-    bottom: 9px;
+    bottom: 10px;
+    max-width: 68%;
+    padding: 6px 8px 6px 10px;
+  }
+
+  .playerIdentityLogo {
+    width: 28px;
+    height: 28px;
+    flex-basis: 28px;
   }
 }
 
