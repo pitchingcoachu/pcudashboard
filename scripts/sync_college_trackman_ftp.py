@@ -64,6 +64,21 @@ def normalize_team(value: str) -> str:
     return re.sub(r"[^A-Z0-9_]", "", str(value or "").strip().upper())
 
 
+def person_name_keys(value: str) -> set[str]:
+    value = re.sub(r"\s+", " ", str(value or "").strip())
+    if not value:
+        return set()
+    keys = {normalize_key(value)}
+    if "," in value:
+        last, first = value.split(",", 1)
+        keys.add(normalize_key(f"{first} {last}"))
+    else:
+        parts = value.split()
+        if len(parts) >= 2:
+            keys.add(normalize_key(f"{parts[-1]} {' '.join(parts[:-1])}"))
+    return {key for key in keys if key}
+
+
 def required_env(name: str) -> str:
     value = os.getenv(name, "").strip()
     if not value:
@@ -162,14 +177,36 @@ def find_value(row: dict[str, str], *candidates: str) -> str:
     return ""
 
 
-def filter_school_rows(rows: list[dict[str, str]], markers: set[str]) -> list[dict[str, str]]:
+def filter_school_rows(rows: list[dict[str, str]], markers: set[str], roster_keys: set[str]) -> list[dict[str, str]]:
     kept = []
     for row in rows:
         pitcher_team = normalize_team(find_value(row, "PitcherTeam", "pitcher_team", "Pitcher Team"))
         batter_team = normalize_team(find_value(row, "BatterTeam", "batter_team", "Batter Team"))
-        if pitcher_team in markers or batter_team in markers:
+        row_name_keys = {
+            normalize_key(find_value(row, "Pitcher")),
+            normalize_key(find_value(row, "Batter")),
+            normalize_key(find_value(row, "Catcher")),
+        }
+        row_name_keys.discard("")
+        if pitcher_team in markers or batter_team in markers or bool(row_name_keys & roster_keys):
             kept.append(row)
     return kept
+
+
+def load_roster_keys(database_url: str, school_code: str) -> set[str]:
+    with psycopg.connect(database_url) as conn:
+        rows = conn.execute(
+            """SELECT p.full_name
+               FROM public.players p
+               JOIN public.organizations o ON o.id = p.organization_id
+               WHERE UPPER(TRIM(o.name)) = %s
+                 AND LOWER(COALESCE(NULLIF(TRIM(p.status), ''), 'active')) <> 'inactive'""",
+            (school_code,),
+        ).fetchall()
+    keys: set[str] = set()
+    for row in rows:
+        keys.update(person_name_keys(row[0]))
+    return keys
 
 
 def session_date(row: dict[str, str], path: str) -> date | None:
@@ -222,7 +259,13 @@ def ensure_school(conn: psycopg.Connection, school_code: str) -> None:
     conn.execute("INSERT INTO public.schools (school_code) VALUES (%s) ON CONFLICT DO NOTHING", (school_code,))
 
 
-def sync_file(conn: psycopg.Connection, remote: RemoteCsv, school_code: str, markers: set[str]) -> tuple[int, bool]:
+def sync_file(
+    conn: psycopg.Connection,
+    remote: RemoteCsv,
+    school_code: str,
+    markers: set[str],
+    roster_keys: set[str],
+) -> tuple[int, bool]:
     stable_source = f"trackman://{remote.source}{remote.path}"
     checksum = hashlib.sha256(remote.payload).hexdigest()
     existing = conn.execute(
@@ -238,7 +281,7 @@ def sync_file(conn: psycopg.Connection, remote: RemoteCsv, school_code: str, mar
         if actual == (existing[2] or 0):
             return 0, True
 
-    rows = filter_school_rows(decode_csv(remote.payload), markers)
+    rows = filter_school_rows(decode_csv(remote.payload), markers, roster_keys)
     ensure_school(conn, school_code)
     file_id = conn.execute(
         """INSERT INTO public.pitch_data_files
@@ -306,7 +349,12 @@ def main() -> int:
     sources = args.source or ["practice", "v3"]
     markers = {normalize_team(school_code), *(normalize_team(value) for value in args.team_marker)}
     markers.discard("")
-    print(f"Syncing {school_code} from {start} through {end}; markers={sorted(markers)}")
+    database_url = os.getenv("DASHBOARD_DATABASE_URL", "").strip() or os.getenv("DATABASE_URL", "").strip()
+    roster_keys = load_roster_keys(database_url, school_code) if database_url else set()
+    print(
+        f"Syncing {school_code} from {start} through {end}; "
+        f"markers={sorted(markers)}, roster_name_keys={len(roster_keys)}"
+    )
     files_seen = files_skipped = rows_inserted = 0
     if args.dry_run:
         matched_files = matched_rows = failed_sources = 0
@@ -314,18 +362,27 @@ def main() -> int:
             try:
                 for remote in fetch_remote_csvs(source, start, end):
                     files_seen += 1
-                    rows = filter_school_rows(decode_csv(remote.payload), markers)
+                    rows = filter_school_rows(decode_csv(remote.payload), markers, roster_keys)
                     if rows:
                         matched_files += 1
                         matched_rows += len(rows)
-                        print(f"[{source}] {remote.path}: {len(rows)} matching rows")
+                        matched_names = sorted({
+                            name
+                            for row in rows
+                            for name in (find_value(row, "Pitcher"), find_value(row, "Batter"), find_value(row, "Catcher"))
+                            if normalize_key(name) in roster_keys
+                        })
+                        print(
+                            f"[{source}] {remote.path}: {len(rows)} matching rows; "
+                            f"roster_players={matched_names}"
+                        )
             except Exception as exc:
                 failed_sources += 1
                 print(f"[{source}] source unavailable: {exc}")
         print(f"Dry run complete: files_seen={files_seen}, matched_files={matched_files}, matched_rows={matched_rows}")
         return 1 if failed_sources == len(sources) else 0
 
-    database_url = os.getenv("DASHBOARD_DATABASE_URL", "").strip() or required_env("DATABASE_URL")
+    database_url = database_url or required_env("DATABASE_URL")
     failed_sources = 0
     with psycopg.connect(database_url) as conn:
         for source in sources:
@@ -333,7 +390,7 @@ def main() -> int:
                 for remote in fetch_remote_csvs(source, start, end):
                     files_seen += 1
                     try:
-                        inserted, skipped = sync_file(conn, remote, school_code, markers)
+                        inserted, skipped = sync_file(conn, remote, school_code, markers, roster_keys)
                         conn.commit()
                         rows_inserted += inserted
                         files_skipped += int(skipped)
