@@ -6539,8 +6539,11 @@ def _add_school_team_filter_keys(
     *,
     school_code: str,
     team_markers_norm: set[str],
+    roster_names: Optional[set[str]] = None,
 ) -> Dict[str, List[str]]:
-    if not by_team_code or not team_markers_norm or school_code in {"LEAGUE", "PRO"}:
+    if school_code in {"LEAGUE", "PRO"}:
+        return by_team_code
+    if not by_team_code and not roster_names:
         return by_team_code
     out = dict(by_team_code)
     school_names: set[str] = set()
@@ -6552,6 +6555,13 @@ def _add_school_team_filter_keys(
             cleaned = str(name or "").strip()
             if cleaned:
                 target.add(cleaned)
+    # Rows ingested with a blank team code (no marker at all) never show up
+    # under any team_code bucket above, even when the pitcher/batter is
+    # clearly on this school's own roster. Fold those names in directly so
+    # search/labeling doesn't silently drop players whose data hasn't been
+    # tagged with a team code yet.
+    if roster_names:
+        school_names |= roster_names
     if school_names:
         out[school_code] = sorted(school_names)
     if opponent_names:
@@ -22015,6 +22025,7 @@ def pitching_filters(
             pitchers_by_team_code,
             school_code=school_code,
             team_markers_norm=set(team_markers_norm or []),
+            roster_names=set(pitchers),
         )
         opp_hitters_by_team_code = _add_school_team_filter_keys(
             opp_hitters_by_team_code,
@@ -25885,6 +25896,7 @@ def hitting_filters(
             hitters_by_team_code,
             school_code=school_code,
             team_markers_norm=set(team_markers_norm or []),
+            roster_names=set(hitters),
         )
         opp_pitchers_by_team_code = _add_school_team_filter_keys(
             opp_pitchers_by_team_code,
@@ -27517,6 +27529,7 @@ def catching_filters(
             catchers_by_team_code,
             school_code=school_code,
             team_markers_norm=set(team_markers_norm or []),
+            roster_names=set(catchers),
         )
 
     response = {
