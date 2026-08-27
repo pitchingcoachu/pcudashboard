@@ -304,6 +304,7 @@ export const LEAGUE_TEAM_NAME_BY_CODE: Record<string, string> = {
     "UNI_BRI": "University of Bridgeport",
     "UMA_AMH": "University of Massachusetts Amherst",
     "UMBC_RET": "University of Maryland, Baltimore County",
+    "UNM": "University of New Mexico",
     "UNO_MAV": "University of Nebraska Omaha",
     "USC_BEA": "University of South Carolina Beaufort",
     "USC_PAC": "University of South Carolina Aiken",

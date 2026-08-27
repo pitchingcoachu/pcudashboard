@@ -155,9 +155,11 @@ export type PlayerProfileRow = {
 };
 
 export type BodyWeightLogRow = {
+  id: number;
   logDate: string;
   weightLbs: number;
   notes: string | null;
+  mediaId: number | null;
 };
 
 export type PlayerPlanGoalRow = {
@@ -655,6 +657,7 @@ export async function ensureTrainingDbReady(): Promise<void> {
     await pool.query(`ALTER TABLE player_media ADD COLUMN IF NOT EXISTS breakdown_annotations_json JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_media_player_created ON player_media (player_id, created_at DESC);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_media_org_player_category ON player_media (organization_id, player_id, lower(category));`);
+    await pool.query(`ALTER TABLE body_weight_logs ADD COLUMN IF NOT EXISTS media_id BIGINT REFERENCES player_media(id) ON DELETE SET NULL;`);
     await pool.query(`
     CREATE TABLE IF NOT EXISTS note_media (
       id BIGSERIAL PRIMARY KEY,
@@ -8053,9 +8056,9 @@ export async function listBodyWeightLogsForPlayer(input: { playerId: number; lim
   const pool = getDbPool();
   const limit = Math.max(1, Math.min(365, input.limit ?? 120));
 
-  const result = await pool.query<{ log_date: string; weight_lbs: string; notes: string | null }>(
+  const result = await pool.query<{ id: number; log_date: string; weight_lbs: string; notes: string | null; media_id: number | null }>(
     `
-      SELECT log_date::text, weight_lbs::text, notes
+      SELECT id, log_date::text, weight_lbs::text, notes, media_id
       FROM body_weight_logs
       WHERE player_id = $1
       ORDER BY log_date ASC
@@ -8065,9 +8068,11 @@ export async function listBodyWeightLogsForPlayer(input: { playerId: number; lim
   );
 
   return result.rows.map((row) => ({
+    id: row.id,
     logDate: row.log_date,
     weightLbs: Number(row.weight_lbs),
     notes: row.notes,
+    mediaId: row.media_id,
   }));
 }
 
@@ -9421,6 +9426,7 @@ export async function upsertBodyWeightLog(input: {
   logDate: string;
   weightLbs: number;
   notes?: string;
+  mediaId?: number | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureTrainingDbReady();
@@ -9428,18 +9434,21 @@ export async function upsertBodyWeightLog(input: {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.logDate.trim())) return { ok: false, error: 'Date must be YYYY-MM-DD.' };
   if (!Number.isFinite(input.weightLbs) || input.weightLbs <= 0) return { ok: false, error: 'Weight must be positive.' };
 
+  const mediaId = Number.isFinite(input.mediaId) && Number(input.mediaId) > 0 ? Number(input.mediaId) : null;
+
   await pool.query(
     `
-      INSERT INTO body_weight_logs (player_id, log_date, weight_lbs, notes, created_by_user_id)
-      VALUES ($1, $2::date, $3, $4, $5)
+      INSERT INTO body_weight_logs (player_id, log_date, weight_lbs, notes, media_id, created_by_user_id)
+      VALUES ($1, $2::date, $3, $4, $5, $6)
       ON CONFLICT (player_id, log_date)
       DO UPDATE SET
         weight_lbs = EXCLUDED.weight_lbs,
         notes = EXCLUDED.notes,
+        media_id = COALESCE(EXCLUDED.media_id, body_weight_logs.media_id),
         created_by_user_id = EXCLUDED.created_by_user_id,
         updated_at = NOW()
     `,
-    [input.playerId, input.logDate.trim(), input.weightLbs, (input.notes ?? '').trim() || null, input.loggedByUserId]
+    [input.playerId, input.logDate.trim(), input.weightLbs, (input.notes ?? '').trim() || null, mediaId, input.loggedByUserId]
   );
 
   return { ok: true };

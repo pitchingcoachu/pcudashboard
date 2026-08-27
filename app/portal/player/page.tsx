@@ -344,6 +344,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
       <ProfileDashboard
           key={player.id}
           playerId={player.id}
+          schoolCode={programmingSchoolCode}
           isAdminPreview={session.role === 'admin' || session.role === 'coach'}
           fullProgramHref={fullProgramHref}
           initialProfile={{

@@ -13,6 +13,7 @@ import type {
 import WorkoutLogModal from '../components/workout-log-modal';
 import PlayerNotesSuite from '../dashboard/player-notes-suite';
 import ProfilePlanGoalsPanel from './profile-plan-goals-panel';
+import { uploadPlayerMediaFile } from '../../../lib/upload-player-media';
 import PlayerProLinkPanel from './player-pro-link-panel';
 import PlayerMediaSection from './player-media-section';
 import PlayerOwnNotes from './player-own-notes';
@@ -64,6 +65,7 @@ type PhotoCropState = {
 
 type ProfileDashboardProps = {
   playerId: number;
+  schoolCode: string;
   sessionRole: 'admin' | 'coach' | 'player';
   sessionUserId: number | null;
   isAdminPreview: boolean;
@@ -425,6 +427,7 @@ function LineChart({
 
 export default function ProfileDashboard({
   playerId,
+  schoolCode,
   sessionRole,
   sessionUserId,
   isAdminPreview,
@@ -501,8 +504,10 @@ export default function ProfileDashboard({
   const [weightDate, setWeightDate] = useState(todayIsoDate());
   const [weightValue, setWeightValue] = useState('');
   const [weightNotes, setWeightNotes] = useState('');
+  const [weightPhoto, setWeightPhoto] = useState<File | null>(null);
   const [weightSaving, setWeightSaving] = useState(false);
   const [weightMessage, setWeightMessage] = useState('');
+  const weightPhotoRequired = schoolCode.trim().toUpperCase() === 'UNOH';
   const [weightLogs, setWeightLogs] = useState<BodyWeightLogRow[]>(initialWeightLogs);
   const [trackedExerciseOptions, setTrackedExerciseOptions] = useState<TrackedExercise[]>(trackedExercises);
 
@@ -633,9 +638,11 @@ export default function ProfileDashboard({
       const current = merged.get(key);
       if (!current || Number(log.weightLbs) > Number(current.weightLbs)) {
         merged.set(key, {
+          id: log.id,
           logDate: key,
           weightLbs: Number(log.weightLbs),
           notes: log.notes ?? null,
+          mediaId: log.mediaId ?? null,
         });
       }
     }
@@ -1644,9 +1651,27 @@ export default function ProfileDashboard({
             className="portal-form-grid"
             onSubmit={async (event) => {
               event.preventDefault();
+              if (weightPhotoRequired && !weightPhoto) {
+                setWeightMessage('A photo of the scale is required for weight entries.');
+                return;
+              }
               setWeightSaving(true);
               setWeightMessage('');
               try {
+                let mediaId: number | null = null;
+                if (weightPhoto) {
+                  const uploadResult = await uploadPlayerMediaFile({
+                    playerId,
+                    file: weightPhoto,
+                    title: `Weight log ${weightDate}`,
+                    category: 'Weight Log',
+                    sourceType: 'weight_log',
+                  });
+                  if (!uploadResult.ok) throw new Error(uploadResult.error);
+                  const created = uploadResult.createdMedia as { id?: number } | undefined;
+                  mediaId = typeof created?.id === 'number' ? created.id : null;
+                  if (weightPhotoRequired && !mediaId) throw new Error('Photo upload did not complete. Please try again.');
+                }
                 const response = await fetch('/api/player/weight-logs', {
                   method: 'POST',
                   headers: { 'content-type': 'application/json' },
@@ -1655,6 +1680,7 @@ export default function ProfileDashboard({
                     logDate: weightDate,
                     weightLbs: Number(weightValue),
                     notes: weightNotes,
+                    mediaId,
                   }),
                 });
                 const payload = (await response.json().catch(() => ({}))) as {
@@ -1665,6 +1691,7 @@ export default function ProfileDashboard({
                 setWeightLogs(Array.isArray(payload.logs) ? payload.logs : []);
                 setWeightValue('');
                 setWeightNotes('');
+                setWeightPhoto(null);
                 setWeightMessage('Body weight saved.');
               } catch (error) {
                 setWeightMessage(error instanceof Error ? error.message : 'Failed to save body weight entry.');
@@ -1691,6 +1718,15 @@ export default function ProfileDashboard({
             <label className="portal-form-span-2">
               Notes
               <input value={weightNotes} onChange={(event) => setWeightNotes(event.target.value)} />
+            </label>
+            <label className="portal-form-span-2">
+              {weightPhotoRequired ? 'Photo of scale (required)' : 'Photo of scale (optional)'}
+              <input
+                type="file"
+                accept="image/*"
+                required={weightPhotoRequired}
+                onChange={(event) => setWeightPhoto(event.target.files?.[0] ?? null)}
+              />
             </label>
             <div className="portal-choice-line-actions">
               <button type="submit" className="btn btn-primary" disabled={weightSaving}>
