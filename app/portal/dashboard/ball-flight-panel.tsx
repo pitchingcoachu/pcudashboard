@@ -403,6 +403,8 @@ export default function BallFlightPanel({ queryString, playerName = '', logoUrl 
   const [payload, setPayload] = useState<FlightPayload | null>(null);
   const [activeTab, setActiveTab] = useState<BallFlightTab>('flight');
   const [loading, setLoading] = useState(true);
+  const [spinLoading, setSpinLoading] = useState(false);
+  const [loadedSpinQuery, setLoadedSpinQuery] = useState('');
   const [error, setError] = useState('');
   const [cameraMode, setCameraMode] = useState<CameraMode>('batter');
   const [speed, setSpeed] = useState(1);
@@ -435,6 +437,27 @@ export default function BallFlightPanel({ queryString, playerName = '', logoUrl 
         elapsedRef.current = 0;
         setDisplayTime(0);
         setIsPlaying(false);
+        setSpinLoading(false);
+        setLoadedSpinQuery('');
+        if (data.schoolCode !== 'PRO') {
+          const detailParams = new URLSearchParams(queryString);
+          detailParams.set('detail', 'pitches');
+          void fetch(`/api/dashboard/pitching/ball-flight?${detailParams.toString()}`, { signal: controller.signal, cache: 'no-store' })
+            .then(async (response) => {
+              const detail = (await response.json().catch(() => ({}))) as FlightPayload;
+              if (!response.ok) throw new Error(detail.error || 'Unable to load individual pitch details.');
+              return detail;
+            })
+            .then((detail) => {
+              if (controller.signal.aborted) return;
+              setPayload((current) => current ? { ...current, individualPitches: detail.individualPitches ?? [] } : current);
+            })
+            .catch(() => {
+              // Individual pitch choices are an enhancement; the averaged
+              // flight path remains fully usable if this background request
+              // is interrupted or unavailable.
+            });
+        }
       })
       .catch((requestError) => {
         if (controller.signal.aborted) return;
@@ -445,6 +468,32 @@ export default function BallFlightPanel({ queryString, playerName = '', logoUrl 
       });
     return () => controller.abort();
   }, [queryString]);
+
+  useEffect(() => {
+    if (activeTab !== 'spin-test' || loading || loadedSpinQuery === queryString || payload?.schoolCode === 'PRO') return;
+    const controller = new AbortController();
+    const detailParams = new URLSearchParams(queryString);
+    detailParams.set('detail', 'spin');
+    queueMicrotask(() => {
+      if (!controller.signal.aborted) setSpinLoading(true);
+    });
+    fetch(`/api/dashboard/pitching/ball-flight?${detailParams.toString()}`, { signal: controller.signal, cache: 'no-store' })
+      .then(async (response) => {
+        const detail = (await response.json().catch(() => ({}))) as FlightPayload;
+        if (!response.ok) throw new Error(detail.error || 'Unable to load seam-orientation details.');
+        return detail;
+      })
+      .then((detail) => {
+        if (controller.signal.aborted) return;
+        setPayload((current) => current ? { ...current, spinSamples: detail.spinSamples ?? [] } : current);
+        setLoadedSpinQuery(queryString);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!controller.signal.aborted) setSpinLoading(false);
+      });
+    return () => controller.abort();
+  }, [activeTab, loadedSpinQuery, loading, payload?.schoolCode, queryString]);
 
   const individualPitchesByType = useMemo(() => {
     const map = new Map<string, IndividualPitch[]>();
@@ -785,7 +834,7 @@ export default function BallFlightPanel({ queryString, playerName = '', logoUrl 
         </div>
       ) : (
         <div role="tabpanel" aria-label="Arsenal Spin Visual">
-          <SpinVisualPanel samples={payload?.spinSamples ?? []} loading={loading} schoolCode={payload?.schoolCode ?? ''} />
+          <SpinVisualPanel samples={payload?.spinSamples ?? []} loading={loading || spinLoading} schoolCode={payload?.schoolCode ?? ''} />
         </div>
       )}
     </section>

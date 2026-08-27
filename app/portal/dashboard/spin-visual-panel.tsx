@@ -35,11 +35,16 @@ export type SpinSample = {
   longitudinalAngle: number | null;
   spinAxis: Vec3;
   seamRotation: Vec3;
+  source?: 'trackman_measured' | 'edger_video';
+  confidence?: number | null;
+  sourceUrl?: string | null;
+  coordinateFrame?: string | null;
 };
 
 const ROTATION_ORDERS: RotationOrder[] = ['XYZ', 'XZY', 'YXZ', 'YZX', 'ZXY', 'ZYX'];
 const CONVENTIONS: Convention[] = [true, false].flatMap((intrinsic) => ROTATION_ORDERS.map((order) => ({ order, intrinsic })));
 const DEFAULT_CONVENTION: Convention = { order: 'XYZ', intrinsic: true };
+const VIDEO_CONVENTION: Convention = { order: 'XYZ', intrinsic: false };
 const SPEEDS = [0.01, 0.025, 0.05, 0.1];
 const DEG = Math.PI / 180;
 const CAMERA_YAW: Record<SpinCameraPreset, number> = { pitcher: Math.PI / 2, catcher: -Math.PI / 2 };
@@ -89,10 +94,46 @@ function eulerQuaternion(rotation: Vec3, convention: Convention): Quaternion {
   return result;
 }
 
+function edgerAxisToScene(axis: 'X' | 'Y' | 'Z'): Vec3 {
+  // The video fitter projects camera X right, camera Y up, and camera Z toward
+  // the lens. From the renderer camera behind the pitcher, screen-right is
+  // negative field X, screen-up is scene Z, and toward-lens is scene Y. This
+  // is a proper basis change: camera XYZ -> scene (-X, Z, Y).
+  if (axis === 'X') return { x: -1, y: 0, z: 0 };
+  if (axis === 'Y') return { x: 0, y: 0, z: 1 };
+  return { x: 0, y: 1, z: 0 };
+}
+
+function edgerEulerQuaternion(rotation: Vec3): Quaternion {
+  const angles: Record<string, number> = { X: rotation.x * DEG, Y: rotation.y * DEG, Z: rotation.z * DEG };
+  let result: Quaternion = { w: 1, x: 0, y: 0, z: 0 };
+  for (const axis of VIDEO_CONVENTION.order) {
+    result = multiply(axisAngle(edgerAxisToScene(axis as 'X' | 'Y' | 'Z'), angles[axis]), result);
+  }
+  return result;
+}
+
+function sceneAxisFor(sample: SpinSample): Vec3 {
+  if (sample.source === 'edger_video') {
+    return normalize({ x: -sample.spinAxis.x, y: sample.spinAxis.z, z: sample.spinAxis.y });
+  }
+  return trackManSpinVectorToScene(sample.spinAxis);
+}
+
 function orientationFor(sample: SpinSample, convention: Convention, elapsed: number, direction: 1 | -1): Quaternion {
-  const initial = eulerQuaternion(sample.seamRotation, convention);
-  const spinRadians = direction * elapsed * sample.spinRate * Math.PI * 2 / 60;
-  return multiply(axisAngle(trackManSpinVectorToScene(sample.spinAxis), spinRadians), initial);
+  const initial = sample.source === 'edger_video'
+    ? edgerEulerQuaternion(sample.seamRotation)
+    : eulerQuaternion(sample.seamRotation, convention);
+  // Verified against every current video-derived sample's own measured IVB
+  // sign (backspin vs. topspin): the Edger camera's raw frames read out with
+  // the opposite rotational sense from the field-scene convention TrackMan
+  // data already uses, so video-derived spin runs backwards without this
+  // correction. This is an empirical camera-orientation fix, not a
+  // coordinate-math derivation -- revisit if the Edger rig or export pipeline
+  // changes.
+  const videoDirectionSign = sample.source === 'edger_video' ? -1 : 1;
+  const spinRadians = videoDirectionSign * direction * elapsed * sample.spinRate * Math.PI * 2 / 60;
+  return multiply(axisAngle(sceneAxisFor(sample), spinRadians), initial);
 }
 
 function displayDate(value: string | null): string {
@@ -108,16 +149,49 @@ function movement(value: number | null): string {
 
 function spinEfficiencyPercent(sample: SpinSample): number | null {
   if (sample.activeSpinRate !== null && sample.spinRate > 0) return clamp((sample.activeSpinRate / sample.spinRate) * 100, 0, 100);
-  if (sample.spinEfficiency === null) return null;
-  return clamp(sample.spinEfficiency <= 1.25 ? sample.spinEfficiency * 100 : sample.spinEfficiency, 0, 100);
+  if (sample.spinEfficiency !== null) return clamp(sample.spinEfficiency <= 1.25 ? sample.spinEfficiency * 100 : sample.spinEfficiency, 0, 100);
+  if (sample.source === 'edger_video') {
+    const axis = sceneAxisFor(sample);
+    return clamp(Math.hypot(axis.x, axis.z) * 100, 0, 100);
+  }
+  return null;
+}
+
+function degreesToClock(degrees: number): string {
+  const totalMinutes = Math.round((((degrees + 180) % 360 + 360) % 360) * 2);
+  const hour = Math.floor(totalMinutes / 60) % 12 || 12;
+  const minute = totalMinutes % 60;
+  return `${hour}:${String(minute).padStart(2, '0')}`;
+}
+
+function releaseTilt(sample: SpinSample): string | null {
+  if (sample.measuredTilt) return sample.measuredTilt;
+  if (sample.source !== 'edger_video') return null;
+  const axis = sceneAxisFor(sample);
+  const degrees = ((Math.atan2(axis.x, axis.z) * 180 / Math.PI) + 180 + 360) % 360;
+  return degreesToClock(degrees);
+}
+
+function visualReleaseTilt(sample: SpinSample, cameraMode: SpinCameraMode): string {
+  const axis = sceneAxisFor(sample);
+  // releaseTilt()'s atan2(axis.x, axis.z) convention (no flip) is the
+  // pitcher-view reference and matches TrackMan's own measured tilt for
+  // video-derived samples. The catcher camera looks from the opposite field-Y
+  // direction, so its screen-right is mirrored (+X instead of -X in the
+  // pitcher's frame) and needs the sign flip; custom orbit keeps the
+  // pitcher-reference label and convention.
+  const screenRight = cameraMode === 'catcher' ? -axis.x : axis.x;
+  const degrees = ((Math.atan2(screenRight, axis.z) * 180 / Math.PI) + 180 + 360) % 360;
+  return degreesToClock(degrees);
 }
 
 function movementBreakdown(sample: SpinSample): MovementBreakdown {
   const efficiency = spinEfficiencyPercent(sample);
-  if (sample.velocity === null || !sample.measuredTilt || efficiency === null) return { magnus: null, residual: null };
+  const tilt = releaseTilt(sample);
+  if (sample.velocity === null || !tilt || efficiency === null) return { magnus: null, residual: null };
   const model = calculateExpectedMovement({
     velocityMph: sample.velocity, spinRateRpm: sample.spinRate, activeSpinRpm: sample.activeSpinRate,
-    spinEfficiency: efficiency / 100, measuredTilt: sample.measuredTilt, extensionFeet: sample.extension ?? 6,
+    spinEfficiency: efficiency / 100, measuredTilt: tilt, extensionFeet: sample.extension ?? 6,
   });
   if (!model) return { magnus: null, residual: null };
   const magnus = { ivb: model.expectedIvb, hb: model.expectedHb };
@@ -136,6 +210,12 @@ function sampleLabel(sample: SpinSample): string {
   const pitcher = sample.pitcher ?? 'Unknown pitcher';
   const velo = sample.velocity !== null ? `${sample.velocity.toFixed(1)} mph` : '— mph';
   return `${date} · ${pitcher} · ${velo}`;
+}
+
+function displayTilt(value: string | null): string {
+  if (!value) return '—';
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? degreesToClock(numeric) : value;
 }
 
 export default function SpinVisualPanel({ samples, loading, schoolCode }: { samples: SpinSample[]; loading: boolean; schoolCode: string }) {
@@ -184,6 +264,7 @@ export default function SpinVisualPanel({ samples, loading, schoolCode }: { samp
   );
 
   const breakdowns = useMemo(() => displayedSamples.map(movementBreakdown), [displayedSamples]);
+  const hasMeasuredSamples = displayedSamples.some((sample) => sample.source !== 'edger_video');
 
   const selectSampleForType = (pitchType: string, key: string) => {
     setSelectedKeyByType((current) => {
@@ -214,7 +295,7 @@ export default function SpinVisualPanel({ samples, loading, schoolCode }: { samp
         const renderer = rendererRef.current;
         if (renderer) displayedSamples.forEach((sample, index) => {
           const canvas = canvasRefs.current[index];
-          const sceneAxis = trackManSpinVectorToScene(sample.spinAxis);
+          const sceneAxis = sceneAxisFor(sample);
           if (canvas) renderer.render(canvas, orientationFor(sample, selectedConvention, elapsedRef.current, direction), cameraRef.current, {
             axis: { visible: axisVisible, ...sceneAxis },
           });
@@ -267,19 +348,19 @@ export default function SpinVisualPanel({ samples, loading, schoolCode }: { samp
     markCameraCustom();
   };
 
-  if (loading) return <div className={styles.empty}>Loading measured seam orientations…</div>;
+  if (loading) return <div className={styles.empty}>Loading measured and video-derived seam orientations…</div>;
   if (!samples.length) return <div className={styles.empty}>
-    <strong>No measured TrackMan seam samples in the active filters</strong>
-    <span>{schoolCode === 'PRO' ? 'Public pro data does not contain TrackMan seam-orientation rotations.' : 'Adjust the dates, pitcher, pitch type, or other sidebar filters to include a seam-enabled pitch.'}</span>
+    <strong>No seam-enabled pitches in the active filters</strong>
+    <span>{schoolCode === 'PRO' ? 'Public pro data does not contain measured seam orientation or linked Edger video estimates.' : 'Adjust the dates, pitcher, pitch type, or other sidebar filters to include a measured or accepted video-derived pitch.'}</span>
   </div>;
 
-  return <section className={styles.shell} aria-label="Filtered TrackMan spin visual">
+  return <section className={styles.shell} aria-label="Filtered measured and video-derived spin visual">
     <div className={styles.toolbar}>
-      <label className={styles.conventionPicker}>Rotation convention
+      {hasMeasuredSamples ? <label className={styles.conventionPicker}>TrackMan rotation convention
         <select value={selectedConventionId} onChange={(event) => setSelectedConventionId(event.target.value)}>
           {CONVENTIONS.map((value) => <option key={conventionId(value)} value={conventionId(value)}>{value.intrinsic ? 'Intrinsic' : 'Extrinsic'} {value.order} · {value.intrinsic ? 'local axes' : 'fixed axes'}</option>)}
         </select>
-      </label>
+      </label> : <div className={styles.videoReference}><span>Orientation source</span><b>Edger camera fit · fixed XYZ</b></div>}
       <div className={styles.cameraPicker} aria-label="Spin camera view"><span>View</span>
         {(['pitcher', 'catcher'] as SpinCameraPreset[]).map((preset) => <button key={preset} type="button" className={cameraMode === preset ? styles.cameraActive : ''} aria-pressed={cameraMode === preset} onClick={() => resetCamera(preset)}>{preset === 'pitcher' ? 'Pitcher' : 'Catcher'}</button>)}
         <b>{cameraMode === 'custom' ? 'Custom 3D' : `${cameraMode} view`}</b>
@@ -287,7 +368,7 @@ export default function SpinVisualPanel({ samples, loading, schoolCode }: { samp
       <div className={styles.playback}>
         <button type="button" className={styles.playButton} aria-pressed={!playing} onClick={() => setPlaying((current) => !current)}>{playing ? '❚❚ Pause all' : '▶ Play all'}</button>
         <button type="button" onClick={reset}>Reset</button>
-        <button type="button" onClick={() => setDirection((current) => current === 1 ? -1 : 1)}>{direction === 1 ? 'Measured direction' : 'Reverse test'}</button>
+        <button type="button" onClick={() => setDirection((current) => current === 1 ? -1 : 1)}>{direction === 1 ? 'Observed direction' : 'Reverse test'}</button>
         <button type="button" className={axisVisible ? styles.axisActive : ''} aria-pressed={axisVisible} onClick={() => setAxisVisible((current) => !current)}>Axis rod {axisVisible ? 'on' : 'off'}</button>
         <label>Visual speed<select value={speedScale} onChange={(event) => setSpeedScale(Number(event.target.value))}>{SPEEDS.map((value) => <option key={value} value={value}>{value}×</option>)}</select></label>
       </div>
@@ -295,13 +376,13 @@ export default function SpinVisualPanel({ samples, loading, schoolCode }: { samp
 
     <div className={styles.grid}>
       {displayedSamples.map((sample, index) => {
-        const sceneAxis = trackManSpinVectorToScene(sample.spinAxis);
+        const sceneAxis = sceneAxisFor(sample);
         const breakdown = breakdowns[index];
         const efficiency = spinEfficiencyPercent(sample);
         const candidates = samplesByType.get(sample.pitchType) ?? [];
         const selectedKey = selectedKeyByType.get(sample.pitchType) ?? '';
         return <article key={sample.pitchType} className={styles.option} style={{ '--pitch-color': PITCH_COLORS[sample.pitchType] ?? PITCH_COLORS.Undefined } as CSSProperties}>
-          <div className={styles.pitchHeader}><div><span className={styles.pitchDot} /><h5>{sample.pitchType}</h5></div><span>{sample.pitcher ?? 'Unknown pitcher'} · {displayDate(sample.sampleDate)}</span></div>
+          <div className={styles.pitchHeader}><div><span className={styles.pitchDot} /><h5>{sample.pitchType}</h5><span className={`${styles.sourceBadge} ${sample.source === 'edger_video' ? styles.videoBadge : styles.measuredBadge}`}>{sample.source === 'edger_video' ? `Video-derived${sample.confidence !== null && sample.confidence !== undefined ? ` · ${Math.round(sample.confidence * 100)}%` : ''}` : 'TrackMan measured'}</span></div><span>{sample.pitcher ?? 'Unknown pitcher'} · {displayDate(sample.sampleDate)}</span></div>
           {candidates.length > 1 ? (
             <select
               className={styles.pitchInstanceSelect}
@@ -317,17 +398,17 @@ export default function SpinVisualPanel({ samples, loading, schoolCode }: { samp
           ) : null}
           <canvas ref={(node) => { canvasRefs.current[index] = node; }} className={styles.ballCanvas} role="img" tabIndex={0} aria-label={`${sample.pitchType} baseball using ${selectedConvention.intrinsic ? 'intrinsic' : 'extrinsic'} ${selectedConvention.order}`} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerEnd} onPointerCancel={handlePointerEnd} onWheel={handleWheel} onKeyDown={handleCameraKey} />
           <div className={styles.pitchFacts}>
-            <span>Velo <b>{sample.velocity?.toFixed(1) ?? '—'} mph</b></span><span>Spin <b>{Math.round(sample.spinRate).toLocaleString()} rpm</b></span><span>Efficiency <b>{efficiency?.toFixed(1) ?? '—'}%</b></span><span>rTilt <b>{sample.measuredTilt ?? '—'}</b></span><span>bTilt <b>{sample.breakTilt ?? '—'}</b></span>
+            <span>Velo <b>{sample.velocity?.toFixed(1) ?? '—'} mph</b></span><span>Spin <b>{Math.round(sample.spinRate).toLocaleString()} rpm</b></span><span>Efficiency <b>{efficiency?.toFixed(1) ?? '—'}%</b></span><span title={`${cameraMode === 'catcher' ? 'Catcher' : 'Pitcher'}-view release tilt`}>rTilt <b>{visualReleaseTilt(sample, cameraMode)}</b></span><span>bTilt <b>{displayTilt(sample.breakTilt)}</b></span>
           </div>
           <div className={styles.forceGrid}>
             <div><span>Magnus model</span><b>{movement(breakdown.magnus?.ivb ?? null)} IVB</b><b>{movement(breakdown.magnus?.hb ?? null)} HB</b></div>
             <div className={styles.residualForce}><span>SSW / residual*</span><b>{movement(breakdown.residual?.ivb ?? null)} IVB</b><b>{movement(breakdown.residual?.hb ?? null)} HB</b></div>
             <div className={styles.totalForce}><span>Measured total</span><b>{movement(sample.inducedVerticalBreak)} IVB</b><b>{movement(sample.horizontalBreak)} HB</b></div>
           </div>
-          <details className={styles.rawDetails}><summary>Measured coordinate details</summary><code>TrackMan XYZ {sample.spinAxis.x.toFixed(3)}, {sample.spinAxis.y.toFixed(3)}, {sample.spinAxis.z.toFixed(3)}</code><code>Scene ZXY {sceneAxis.x.toFixed(3)}, {sceneAxis.y.toFixed(3)}, {sceneAxis.z.toFixed(3)}</code><code>Rotation {sample.seamRotation.x.toFixed(2)}°, {sample.seamRotation.y.toFixed(2)}°, {sample.seamRotation.z.toFixed(2)}°</code><code>{sample.pitchUid ?? 'PitchUID unavailable'}</code></details>
+          <details className={styles.rawDetails}><summary>{sample.source === 'edger_video' ? 'Video fit details' : 'Measured coordinate details'}</summary><code>{sample.source === 'edger_video' ? 'Edger camera XYZ' : 'TrackMan XYZ'} {sample.spinAxis.x.toFixed(3)}, {sample.spinAxis.y.toFixed(3)}, {sample.spinAxis.z.toFixed(3)}</code><code>Scene axis {sceneAxis.x.toFixed(3)}, {sceneAxis.y.toFixed(3)}, {sceneAxis.z.toFixed(3)}</code><code>Rotation {sample.seamRotation.x.toFixed(2)}°, {sample.seamRotation.y.toFixed(2)}°, {sample.seamRotation.z.toFixed(2)}°</code><code>{sample.pitchUid ?? 'PitchUID unavailable'}</code>{sample.source === 'edger_video' && sample.sourceUrl ? <a href={sample.sourceUrl} target="_blank" rel="noreferrer">Open source Edger clip</a> : null}</details>
         </article>;
       })}
     </div>
-    <p className={styles.note}>* The residual is measured total movement minus a standard-air Magnus model. It is an SSW candidate, not a pure SSW measurement: environmental effects, tracking error, and Magnus-model error are also included. TrackMan XYZ is converted to scene ZXY before rendering.</p>
+    <p className={styles.note}>* The residual is measured total movement minus a standard-air Magnus model. It is an SSW candidate, not a pure SSW measurement. “Video-derived” means the seam pose was fitted from the linked Edger sequence. The rotation axis is video-fitted when identifiable; otherwise measured TrackMan tilt and efficiency constrain it and held-out video frames select the gyro direction. The initial pitcher view matches the Edger camera reference and can then be orbited in 3D. TrackMan-measured seam coordinates still take precedence when both sources exist.</p>
   </section>;
 }

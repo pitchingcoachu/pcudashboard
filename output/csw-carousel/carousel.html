@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CSW% Carousel</title>
+  <style>
+    :root {
+      --ink: #050505;
+      --ink-2: #11100f;
+      --navy: #191713;
+      --paper: #ffffff;
+      --muted: #bdb8b1;
+      --sand: #c8102e;
+      --orange: #c8102e;
+      --red: #c61f2b;
+      --green: #c8102e;
+      --line: rgba(255,255,255,.16);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: #222; }
+    body { font-family: "Avenir Next", "Helvetica Neue", sans-serif; }
+    .deck { display: grid; gap: 48px; padding: 48px; justify-content: center; }
+    .slide {
+      position: relative;
+      width: 1080px;
+      height: 1350px;
+      overflow: hidden;
+      color: var(--paper);
+      background:
+        radial-gradient(circle at 90% 12%, rgba(200,16,46,.2), transparent 34%),
+        linear-gradient(145deg, var(--ink-2), var(--ink) 55%);
+      isolation: isolate;
+    }
+    .slide::before {
+      content: "";
+      position: absolute; inset: 0; z-index: -1; opacity: .14;
+      background-image:
+        linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
+      background-size: 54px 54px;
+      mask-image: linear-gradient(to bottom, black, transparent 72%);
+    }
+    .slide::after {
+      content: "";
+      position: absolute; left: 0; top: 0; width: 12px; height: 100%;
+      background: var(--orange);
+    }
+    .pad { position: absolute; inset: 82px 76px 76px 88px; }
+    .eyebrow {
+      display: none;
+      font-family: "Avenir Next Condensed", "Helvetica Neue", sans-serif;
+      font-size: 25px; font-weight: 800; letter-spacing: .18em; text-transform: uppercase;
+      color: var(--sand);
+    }
+    .kicker { color: var(--orange); }
+    h1, h2, h3, p { margin: 0; }
+    h1, h2, h3 {
+      font-family: "Avenir Next Condensed", "Helvetica Neue", sans-serif;
+      font-weight: 900; letter-spacing: -.035em; line-height: .93;
+    }
+    h1 { font-size: 140px; }
+    h2 { font-size: 92px; }
+    h3 { font-size: 54px; }
+    .body { font-size: 34px; line-height: 1.28; color: #d9dfe8; }
+    .body strong { color: var(--paper); }
+    .rule { height: 2px; background: var(--line); }
+    .accent-rule { height: 8px; width: 118px; background: var(--orange); }
+    .corner-logo { position: absolute; bottom: 42px; z-index: 5; object-fit: contain; }
+    .corner-logo.pearl { left: 82px; width: 56px; height: 56px; }
+    .corner-logo.pcu { right: 60px; width: 66px; height: 66px; }
+    .pill {
+      display: inline-flex; padding: 11px 19px; border: 1px solid rgba(255,255,255,.22);
+      border-radius: 999px; color: var(--paper); background: rgba(255,255,255,.055);
+      font-size: 19px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+    }
+    .stat { font-family: "Avenir Next Condensed", sans-serif; font-weight: 900; line-height: .9; }
+
+    /* Cover */
+    .cover .pad { display: flex; flex-direction: column; justify-content: center; padding-bottom: 90px; }
+    .cover h1 { max-width: 900px; margin-top: 30px; }
+    .cover h1 span { color: var(--orange); }
+    .cover .sub { margin-top: 40px; max-width: 720px; font-size: 38px; line-height: 1.22; color: #d6dce6; }
+    .cover .formula {
+      margin-top: 72px; display: flex; align-items: center; gap: 20px;
+      font-family: "Avenir Next Condensed", sans-serif; font-size: 36px; font-weight: 900;
+    }
+    .cover .formula .plus { color: var(--orange); font-size: 52px; }
+    .cover .ghost {
+      position: absolute; right: -80px; top: 110px; font-family: "Avenir Next Condensed", sans-serif;
+      font-size: 390px; font-weight: 900; color: rgba(255,255,255,.026); transform: rotate(-8deg);
+    }
+
+    /* Definition */
+    .definition h2 { margin-top: 32px; }
+    .equation-card {
+      margin-top: 72px; padding: 58px 48px 52px; border: 1px solid rgba(255,255,255,.17);
+      background: rgba(255,255,255,.055); border-radius: 26px;
+    }
+    .equation { font-family: "Avenir Next Condensed", sans-serif; text-align: center; font-weight: 900; }
+    .equation .top { font-size: 50px; padding-bottom: 20px; border-bottom: 4px solid var(--paper); }
+    .equation .bottom { padding-top: 19px; font-size: 43px; color: #cbd4df; }
+    .avg-wrap { margin-top: 76px; display: grid; grid-template-columns: 1.12fr .88fr; gap: 50px; align-items: center; }
+    .avg-wrap .stat { font-size: 150px; color: var(--orange); }
+    .avg-wrap .label { font-size: 26px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+    .avg-note { border-left: 3px solid var(--sand); padding-left: 28px; font-size: 34px; line-height: 1.25; color: #e5e8ee; }
+
+    /* Leaderboard */
+    .leaders h2 { margin-top: 30px; }
+    .leaders .average-chip { display: none; }
+    .leaders .average-chip .stat { font-size: 52px; color: var(--orange); }
+    .leaders .average-chip small { display: block; font-size: 17px; letter-spacing: .13em; color: var(--muted); text-transform: uppercase; }
+    .leader-list { margin-top: 58px; border-top: 1px solid var(--line); }
+    .leader-row {
+      display: grid; grid-template-columns: 70px 1fr 145px; align-items: center;
+      min-height: 145px; border-bottom: 1px solid var(--line);
+    }
+    .leader-row .rank { font-family: "Avenir Next Condensed"; font-size: 29px; font-weight: 900; color: var(--sand); }
+    .leader-row .name { font-family: "Avenir Next Condensed"; font-size: 45px; font-weight: 900; }
+    .leader-row .pct { font-family: "Avenir Next Condensed"; text-align: right; font-size: 55px; font-weight: 900; color: var(--orange); }
+    .leader-row:first-child { background: linear-gradient(90deg, rgba(200,16,46,.17), transparent); }
+    .leaders .takeaway { margin-top: 28px; max-width: 850px; font-size: 27px; line-height: 1.22; color: #cfd6e0; }
+    .leaders .takeaway strong { color: var(--paper); }
+
+    /* Correlation */
+    .correlation h2 { margin-top: 25px; max-width: 830px; }
+    .chart-card {
+      position: relative; margin-top: 46px; height: 650px; overflow: hidden; border-radius: 22px;
+      border: 1px solid rgba(255,255,255,.18); background: #050b19;
+    }
+    .chart-card img { width: 100%; height: 100%; object-fit: contain; }
+    .chart-redline { position: absolute; left: 64px; top: 510px; width: 886px; height: 8px; z-index: 2; transform: rotate(-21.3deg); transform-origin: left center; background: var(--red); }
+    .chart-cover {
+      position: absolute; right: 0; top: 0; width: 280px; height: 140px;
+      background: linear-gradient(135deg, #07111e, #06191b);
+    }
+    .r2 {
+      position: absolute; right: 26px; top: 24px; z-index: 2;
+      font-family: "Avenir Next Condensed"; font-size: 38px; font-weight: 900; color: var(--orange);
+    }
+    .correlation .conclusion {
+      margin-top: 42px; display: flex; align-items: center; gap: 24px;
+      font-family: "Avenir Next Condensed"; font-size: 43px; line-height: 1.1; font-weight: 900;
+    }
+    .arrow-right { color: var(--orange); font-size: 56px; }
+
+    /* Called strikes */
+    .two-strikes h2 { margin-top: 26px; }
+    .strike-grid { margin-top: 78px; display: grid; grid-template-columns: 1fr 90px 1fr; align-items: stretch; }
+    .strike-card {
+      min-height: 460px; border: 1px solid rgba(255,255,255,.17); border-radius: 26px;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: rgba(255,255,255,.045); padding: 35px;
+    }
+    .strike-card .icon { font-family: "Avenir Next Condensed"; font-size: 120px; line-height: 1; font-weight: 900; color: var(--orange); }
+    .strike-card h3 { margin-top: 24px; font-size: 43px; }
+    .strike-card p { margin-top: 15px; font-size: 23px; color: var(--muted); text-align: center; line-height: 1.3; }
+    .equals { display: flex; align-items: center; justify-content: center; font-size: 65px; color: var(--sand); font-weight: 900; }
+    .two-strikes .bottom-line { margin-top: 68px; font-size: 42px; line-height: 1.18; font-weight: 800; }
+    .two-strikes .bottom-line span { color: var(--orange); }
+
+    /* Location diagrams */
+    .location h2 { margin-top: 24px; max-width: 850px; }
+    .location .intro { margin-top: 30px; max-width: 850px; font-size: 30px; line-height: 1.3; color: #cfd6df; }
+    .diagram-wrap { margin-top: 38px; display: grid; grid-template-columns: 470px 1fr; gap: 36px; align-items: center; }
+    .zone-diagram {
+      position: relative; width: 470px; height: 580px; border-radius: 26px;
+      border: 1px solid rgba(200,16,46,.48); background: linear-gradient(160deg, #131313, #050505); overflow: hidden;
+      box-shadow: 0 24px 60px rgba(0,0,0,.32);
+    }
+    .zone-diagram svg { width: 100%; height: 100%; display: block; }
+    .zone-line { stroke: rgba(255,255,255,.92); fill: none; }
+    .zone-muted { stroke: rgba(255,255,255,.42); fill: none; }
+    .zone-pocket { fill: rgba(255,255,255,.035); stroke: rgba(255,255,255,.3); }
+    .zone-pocket.active { fill: rgba(200,16,46,.24); stroke: var(--red); }
+    .zone-label { fill: var(--muted); font: 800 15px "Avenir Next", sans-serif; letter-spacing: 1.4px; }
+    .zone-callout { fill: var(--sand); font: 900 16px "Avenir Next Condensed", sans-serif; letter-spacing: 1px; }
+    .diagram-note .pill { margin-bottom: 22px; }
+    .diagram-note h3 { font-size: 45px; }
+    .diagram-note p { margin-top: 23px; font-size: 27px; line-height: 1.3; color: #d3dae4; }
+    .diagram-note .example { margin-top: 35px; border-left: 4px solid var(--orange); padding-left: 23px; color: var(--paper); font-weight: 700; }
+    .location .footnote { margin-top: 35px; font-size: 21px; line-height: 1.35; color: #8f9bad; }
+    .location .purpose-tag { margin-top: 22px; color: var(--sand); font-size: 27px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; }
+    .take-slide .kicker, .take-slide .diagram-note h3 { color: var(--sand); }
+
+    /* Final */
+    .final .pad { display: flex; flex-direction: column; justify-content: center; padding-bottom: 85px; }
+    .final h2 { margin-top: 28px; font-size: 104px; }
+    .final h2 span { color: var(--orange); }
+    .final .thesis { margin-top: 40px; max-width: 830px; font-size: 38px; line-height: 1.25; color: #d8dee8; }
+    .summary-list { margin-top: 58px; display: grid; gap: 18px; }
+    .summary-item { display: grid; grid-template-columns: 64px 1fr; align-items: center; padding: 19px 22px; border: 1px solid rgba(200,16,46,.42); background: rgba(255,255,255,.035); font-size: 31px; font-weight: 750; }
+    .summary-item .num { font-family: "Avenir Next Condensed"; color: var(--sand); font-size: 23px; font-weight: 900; }
+    .save {
+      margin-top: 74px; padding: 24px 30px; width: fit-content; border: 2px solid var(--orange);
+      font-family: "Avenir Next Condensed"; font-size: 28px; font-weight: 900; letter-spacing: .04em;
+      text-transform: uppercase; color: var(--paper);
+    }
+  </style>
+</head>
+<body>
+<main class="deck">
+  <section class="slide cover" id="slide-1">
+    <div class="ghost">%</div>
+    <div class="pad">
+      <div class="eyebrow">Pitching intelligence</div>
+      <h1>CSW<span>%</span><br/>WINS<br/>AT-BATS.</h1>
+      <p class="sub">Whiffs matter. But the pitchers who dominate also steal strikes without a swing.</p>
+      <div class="formula"><span>CALLED STRIKES</span><span class="plus">+</span><span>WHIFFS</span></div>
+    </div>
+    <img class="corner-logo pearl" src="../../public/pearl-mark-transparent.png"/><img class="corner-logo pcu" src="../../public/pitching-coach-u-logo.png"/>
+  </section>
+
+  <section class="slide definition" id="slide-2">
+    <div class="pad">
+      <div class="eyebrow">The metric</div>
+      <h2>WHAT DOES<br/><span class="kicker">CSW%</span> MEASURE?</h2>
+      <div class="equation-card">
+        <div class="equation"><div class="top">CALLED STRIKES + WHIFFS</div><div class="bottom">TOTAL PITCHES</div></div>
+      </div>
+      <div class="avg-wrap">
+        <div><div class="label">MLB average</div><div class="stat">28.2%</div></div>
+        <div class="avg-note">How often does a pitch produce <strong>a strike without contact?</strong></div>
+      </div>
+    </div>
+    <img class="corner-logo pearl" src="../../public/pearl-mark-transparent.png"/><img class="corner-logo pcu" src="../../public/pitching-coach-u-logo.png"/>
+  </section>
+
+  <section class="slide leaders" id="slide-3">
+    <div class="pad">
+      <div class="eyebrow">MLB leaderboard</div>
+      <h2>TOP 5<br/><span class="kicker">CSW% LEADERS.</span></h2>
+      <div class="leader-list">
+        <div class="leader-row"><div class="rank">01</div><div class="name">MASON MILLER</div><div class="pct">40.5%</div></div>
+        <div class="leader-row"><div class="rank">02</div><div class="name">ANDRÉS MUÑOZ</div><div class="pct">36.8%</div></div>
+        <div class="leader-row"><div class="rank">03</div><div class="name">ANTHONY BENDER</div><div class="pct">36.7%</div></div>
+        <div class="leader-row"><div class="rank">04</div><div class="name">JACOB MISIOROWSKI</div><div class="pct">36.2%</div></div>
+        <div class="leader-row"><div class="rank">05</div><div class="name">DYLAN LEE</div><div class="pct">35.2%</div></div>
+      </div>
+      <div class="takeaway"><strong>Mason Miller:</strong> more than 4 of every 10 pitches produce a called strike or whiff.</div>
+    </div>
+    <img class="corner-logo pearl" src="../../public/pearl-mark-transparent.png"/><img class="corner-logo pcu" src="../../public/pitching-coach-u-logo.png"/>
+  </section>
+
+  <section class="slide correlation" id="slide-4">
+    <div class="pad">
+      <div class="eyebrow">The relationship</div>
+      <h2>CSW% AND K%<br/><span class="kicker">MOVE TOGETHER.</span></h2>
+      <div class="chart-card">
+        <img src="csw-k-correlation.png" />
+        <div class="chart-redline"></div><div class="chart-cover"></div><div class="r2">R² = 0.64</div>
+      </div>
+      <div class="conclusion"><span>More called strikes + whiffs</span><span class="arrow-right">→</span><span>More strikeouts</span></div>
+    </div>
+    <img class="corner-logo pearl" src="../../public/pearl-mark-transparent.png"/><img class="corner-logo pcu" src="../../public/pitching-coach-u-logo.png"/>
+  </section>
+
+  <section class="slide two-strikes" id="slide-5">
+    <div class="pad">
+      <div class="eyebrow">Two ways to win</div>
+      <h2>WHIFFS AND<br/><span class="kicker">CALLED STRIKES</span><br/>BOTH WIN.</h2>
+      <div class="strike-grid">
+        <div class="strike-card"><div class="icon">K</div><h3>CALLED STRIKE</h3><p>The hitter never offers. The pitch still wins.</p></div>
+        <div class="equals">=</div>
+        <div class="strike-card"><div class="icon">×</div><h3>WHIFF</h3><p>The hitter offers and fails to make contact.</p></div>
+      </div>
+      <div class="bottom-line">Both move the count. Both can finish an at-bat. <span>Know the pitch's purpose.</span></div>
+    </div>
+    <img class="corner-logo pearl" src="../../public/pearl-mark-transparent.png"/><img class="corner-logo pcu" src="../../public/pitching-coach-u-logo.png"/>
+  </section>
+
+  <section class="slide location take-slide" id="slide-6">
+    <div class="pad">
+      <div class="eyebrow">Know the pitch's purpose</div>
+      <h2>MORE <span class="kicker">TAKES.</span></h2>
+      <p class="intro">Locate a pitch on the <strong>opposite side</strong> of the plate from its movement direction.</p>
+      <div class="purpose-tag">Glove-side movement · located arm side</div>
+      <div class="diagram-wrap">
+        <div class="zone-diagram">
+          <svg viewBox="0 0 460 560" role="img" aria-label="Nine-pocket strike zone showing glove-side movement located arm side">
+            <defs><marker id="take-arrow" markerUnits="userSpaceOnUse" markerWidth="18" markerHeight="18" refX="16" refY="9" orient="auto"><path d="M0,0 L18,9 L0,18 Z" fill="#c8102e"/></marker></defs>
+            <text x="24" y="34" class="zone-label">PITCHER VIEW · RHP</text>
+            <rect x="40" y="62" width="380" height="410" rx="4" class="zone-muted" stroke-dasharray="7 7" stroke-width="2"/>
+            <line x1="40" y1="267" x2="120" y2="267" class="zone-muted" stroke-width="2"/><line x1="340" y1="267" x2="420" y2="267" class="zone-muted" stroke-width="2"/>
+            <line x1="230" y1="62" x2="230" y2="130" class="zone-muted" stroke-width="2"/><line x1="230" y1="404" x2="230" y2="472" class="zone-muted" stroke-width="2"/>
+            <rect x="120" y="130" width="220" height="274" class="zone-line" stroke-width="4"/>
+            <rect x="120" y="130" width="73.3" height="91.3" class="zone-pocket"/><rect x="193.3" y="130" width="73.4" height="91.3" class="zone-pocket"/><rect x="266.7" y="130" width="73.3" height="91.3" class="zone-pocket"/>
+            <rect x="120" y="221.3" width="73.3" height="91.4" class="zone-pocket"/><rect x="193.3" y="221.3" width="73.4" height="91.4" class="zone-pocket"/><rect x="266.7" y="221.3" width="73.3" height="91.4" class="zone-pocket active"/>
+            <rect x="120" y="312.7" width="73.3" height="91.3" class="zone-pocket"/><rect x="193.3" y="312.7" width="73.4" height="91.3" class="zone-pocket"/><rect x="266.7" y="312.7" width="73.3" height="91.3" class="zone-pocket"/>
+            <path d="M168 519 L292 519 L292 511 L230 500 L168 511 Z" class="zone-line" stroke-width="3"/>
+            <path d="M395 267 C370 248 350 248 325 267" stroke="#c8102e" stroke-width="6" fill="none" marker-end="url(#take-arrow)"/>
+            <circle cx="303" cy="267" r="15" fill="#fff" stroke="#c8102e" stroke-width="7"/>
+            <text x="54" y="545" class="zone-label">GLOVE SIDE</text><text x="300" y="545" class="zone-label">ARM SIDE</text>
+            <text x="252" y="448" class="zone-callout">LOCATED ARM SIDE</text>
+          </svg>
+        </div>
+        <div class="diagram-note"><div class="pill">Take intent</div><h3>MOVE AWAY FROM THE LOCATION SIDE.</h3><p>The pitch finishes arm side while its shape moves glove side.</p><p class="example">Opposite movement and location lanes create more takes.</p></div>
+      </div>
+      <p class="footnote">Rule of thumb—not an absolute. Count, hitter, pitch quality and sequencing still matter.</p>
+    </div>
+    <img class="corner-logo pearl" src="../../public/pearl-mark-transparent.png"/><img class="corner-logo pcu" src="../../public/pitching-coach-u-logo.png"/>
+  </section>
+
+  <section class="slide location swing-slide" id="slide-7">
+    <div class="pad">
+      <div class="eyebrow">Know the pitch's purpose</div>
+      <h2>MORE <span class="kicker">SWINGS.</span></h2>
+      <p class="intro">Locate a pitch on the <strong>same side</strong> of the plate as its movement direction.</p>
+      <div class="purpose-tag">Glove-side movement · located glove side</div>
+      <div class="diagram-wrap">
+        <div class="zone-diagram">
+          <svg viewBox="0 0 460 560" role="img" aria-label="Nine-pocket strike zone showing glove-side movement located glove side">
+            <defs><marker id="swing-arrow" markerUnits="userSpaceOnUse" markerWidth="18" markerHeight="18" refX="16" refY="9" orient="auto"><path d="M0,0 L18,9 L0,18 Z" fill="#c8102e"/></marker></defs>
+            <text x="24" y="34" class="zone-label">PITCHER VIEW · RHP</text>
+            <rect x="40" y="62" width="380" height="410" rx="4" class="zone-muted" stroke-dasharray="7 7" stroke-width="2"/>
+            <line x1="40" y1="267" x2="120" y2="267" class="zone-muted" stroke-width="2"/><line x1="340" y1="267" x2="420" y2="267" class="zone-muted" stroke-width="2"/>
+            <line x1="230" y1="62" x2="230" y2="130" class="zone-muted" stroke-width="2"/><line x1="230" y1="404" x2="230" y2="472" class="zone-muted" stroke-width="2"/>
+            <rect x="120" y="130" width="220" height="274" class="zone-line" stroke-width="4"/>
+            <rect x="120" y="130" width="73.3" height="91.3" class="zone-pocket"/><rect x="193.3" y="130" width="73.4" height="91.3" class="zone-pocket"/><rect x="266.7" y="130" width="73.3" height="91.3" class="zone-pocket"/>
+            <rect x="120" y="221.3" width="73.3" height="91.4" class="zone-pocket active"/><rect x="193.3" y="221.3" width="73.4" height="91.4" class="zone-pocket"/><rect x="266.7" y="221.3" width="73.3" height="91.4" class="zone-pocket"/>
+            <rect x="120" y="312.7" width="73.3" height="91.3" class="zone-pocket"/><rect x="193.3" y="312.7" width="73.4" height="91.3" class="zone-pocket"/><rect x="266.7" y="312.7" width="73.3" height="91.3" class="zone-pocket"/>
+            <path d="M168 519 L292 519 L292 511 L230 500 L168 511 Z" class="zone-line" stroke-width="3"/>
+            <path d="M265 267 C230 245 210 248 180 267" stroke="#c8102e" stroke-width="6" fill="none" marker-end="url(#swing-arrow)"/>
+            <circle cx="157" cy="267" r="15" fill="#fff" stroke="#c8102e" stroke-width="7"/>
+            <text x="54" y="545" class="zone-label">GLOVE SIDE</text><text x="300" y="545" class="zone-label">ARM SIDE</text>
+            <text x="58" y="448" class="zone-callout">LOCATED GLOVE SIDE</text>
+          </svg>
+        </div>
+        <div class="diagram-note"><div class="pill">Swing intent</div><h3>MOVE TOWARD THE LOCATION SIDE.</h3><p>The pitch finishes glove side and keeps moving glove side.</p><p class="example">Matching movement and location lanes creates more swings.</p></div>
+      </div>
+      <p class="footnote">Rule of thumb—not an absolute. Count, hitter, pitch quality and sequencing still matter.</p>
+    </div>
+    <img class="corner-logo pearl" src="../../public/pearl-mark-transparent.png"/><img class="corner-logo pcu" src="../../public/pitching-coach-u-logo.png"/>
+  </section>
+
+  <section class="slide final" id="slide-8">
+    <div class="pad">
+      <div class="eyebrow">The takeaway</div>
+      <h2><span>TL;DR</span></h2>
+      <p class="thesis">The CSW playbook:</p>
+      <div class="summary-list">
+        <div class="summary-item"><span class="num">01</span><span><strong>CSW</strong> = called strikes + whiffs</span></div>
+        <div class="summary-item"><span class="num">02</span><span><strong>MLB average</strong> = 28.2%</span></div>
+        <div class="summary-item"><span class="num">03</span><span><strong>Bigger shapes</strong> = more takes<br/><small>Think curveballs and sweepers.</small></span></div>
+        <div class="summary-item"><span class="num">04</span><span><strong>Opposite side of movement</strong> = more takes</span></div>
+        <div class="summary-item"><span class="num">05</span><span><strong>Same side as movement</strong> = more swings</span></div>
+      </div>
+    </div>
+    <img class="corner-logo pearl" src="../../public/pearl-mark-transparent.png"/><img class="corner-logo pcu" src="../../public/pitching-coach-u-logo.png"/>
+  </section>
+</main>
+</body>
+</html>

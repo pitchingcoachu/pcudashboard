@@ -37,6 +37,23 @@
   text-transform: uppercase;
 }
 
+.videoReference {
+  display: grid;
+  gap: 5px;
+  color: #8f9b8d;
+  font-size: 0.58rem;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.videoReference b {
+  color: color-mix(in srgb, var(--spin-acid) 58%, white);
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
 .conventionPicker select {
   min-height: 38px;
   padding: 0 34px 0 11px;
@@ -237,6 +254,33 @@
   color: #f5f3e7;
   font-size: 0.92rem;
   letter-spacing: -0.02em;
+}
+
+.sourceBadge {
+  display: inline-flex;
+  min-height: 20px;
+  align-items: center;
+  padding: 0 7px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 999px;
+  font-size: 0.52rem;
+  font-weight: 850;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.videoBadge {
+  border-color: rgba(var(--portal-accent-rgb, 200, 16, 46), 0.54);
+  background: rgba(var(--portal-accent-rgb, 200, 16, 46), 0.14);
+  color: color-mix(in srgb, var(--spin-acid) 42%, white);
+}
+
+.measuredBadge {
+  border-color: rgba(132, 220, 176, 0.3);
+  background: rgba(75, 168, 121, 0.1);
+  color: #bce8d0;
 }
 
 .pitchHeader > span {
