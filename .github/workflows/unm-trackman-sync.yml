@@ -36,6 +36,12 @@ jobs:
       TRACKMAN_PRACTICE_FTP_PASSWORD: ${{ secrets.TRACKMAN_PRACTICE_FTP_PASSWORD }}
       TRACKMAN_V3_FTP_USER: ${{ secrets.TRACKMAN_V3_FTP_USER }}
       TRACKMAN_V3_FTP_PASSWORD: ${{ secrets.TRACKMAN_V3_FTP_PASSWORD }}
+      TM_CLIENT_ID: ${{ secrets.TM_CLIENT_ID }}
+      TM_CLIENT_SECRET: ${{ secrets.TM_CLIENT_SECRET }}
+      TM_LOOKBACK_DAYS: ${{ secrets.TM_LOOKBACK_DAYS }}
+      CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+      CLOUDINARY_UPLOAD_PRESET: ${{ secrets.CLOUDINARY_UPLOAD_PRESET }}
+      CLOUDINARY_FOLDER: trackman
 
     steps:
       - name: Check out pcudashboard
@@ -80,6 +86,15 @@ jobs:
           )
           ARGS+=(--start-date "${SYNC_START_DATE}" --end-date "${SYNC_END_DATE}")
           python scripts/sync_college_trackman_ftp.py "${ARGS[@]}"
+
+      - name: Sync UNM TrackMan videos
+        shell: bash
+        run: |
+          python scripts/sync_trackman_media.py \
+            --school UNM \
+            --environment practice \
+            --start-date "${SYNC_START_DATE}" \
+            --end-date "${SYNC_END_DATE}"
 
       - name: Refresh UNM dashboard rollups
         shell: bash
