@@ -6595,15 +6595,14 @@ def _filter_pitching_rows_by_team_type(
         batter_team_code = _normalize_team_code(str(row.get("batter_team_code") or ""))
         pitcher_is_marker = pitcher_team_code in team_markers_norm if pitcher_team_code else False
         batter_is_marker = batter_team_code in team_markers_norm if batter_team_code else False
-        is_pcu_blank_team_row = (
-            school_code == "PCU"
-            and not pitcher_team_code
+        is_blank_team_roster_row = (
+            not pitcher_team_code
             and not batter_team_code
             and bool(pitcher_key)
             and pitcher_key in (team_pitcher_norm | campers_norm)
         )
         # Treat intra-squad team-vs-team rows (both team codes match markers) as team rows.
-        is_team_pitching_row = pitcher_is_marker or is_pcu_blank_team_row
+        is_team_pitching_row = pitcher_is_marker or is_blank_team_roster_row
         is_opponent_pitching_row = batter_is_marker and bool(pitcher_team_code) and not pitcher_is_marker
 
         if team_type_value == "Opponents":
@@ -15974,8 +15973,7 @@ OR
 )
 OR
 (
-  UPPER(COALESCE(%(school_code)s::text, '')) = 'PCU'
-  AND """ + BLANK_TEAM_CODES_SQL + """
+  """ + BLANK_TEAM_CODES_SQL + """
   AND (
     (
       %(known_pitchers_count)s::int > 0
@@ -16008,8 +16006,7 @@ OR
 )
 OR
 (
-  UPPER(COALESCE(%(school_code)s::text, '')) = 'PCU'
-  AND """ + BLANK_TEAM_CODES_SQL + """
+  """ + BLANK_TEAM_CODES_SQL + """
   AND (
     (
       %(known_hitters_count)s::int > 0
@@ -16032,15 +16029,18 @@ HITTING_OPPONENT_MATCH_SQL = """
 """
 # Only include rows that are explicitly tied to the school by team code.
 # This prevents unrelated uploads (same school_code bucket) from leaking into All/Team/Opponent views.
+# Blank-team-code rows are scoped to this query's school_code already (every
+# caller filters pitch_events by school_code first), so allowing them through
+# here can't pull in another school's rows -- it only affects that school's
+# own already-scoped data.
 SCHOOL_RELEVANT_TEAM_SQL = (
     "("
     + PITCHER_TEAM_IS_MARKER_SQL
     + " OR "
     + BATTER_TEAM_IS_MARKER_SQL
     + " OR (UPPER(COALESCE(%(school_code)s::text, '')) = 'LEAGUE')"
-    + " OR (UPPER(COALESCE(%(school_code)s::text, '')) = 'PCU' AND "
+    + " OR "
     + BLANK_TEAM_CODES_SQL
-    + ")"
     + ")"
 )
 
@@ -16095,22 +16095,21 @@ def _append_college_rollup_team_filter(
         if markers:
             params["rollup_team_markers_norm"] = markers
             team_clause = f"{target_col} = ANY(%(rollup_team_markers_norm)s::text[])"
-            # PCU's rollup rows are frequently ingested with a blank team code
-            # rather than the school's own marker (mirrors the same carve-out
-            # in _filter_pitching_rows_by_team_type for raw rows). Without this,
+            # Rollup rows are frequently ingested with a blank team code rather
+            # than the school's own marker (mirrors the same carve-out in
+            # _filter_pitching_rows_by_team_type for raw rows). Without this,
             # filtering to the school's own team silently drops any pitcher/
             # batter whose rows never got tagged, even though they're clearly
             # on the roster.
-            if school_code == "PCU":
-                roster = _load_school_roster(school_code)
-                roster_norm = sorted({*roster.get("team_only_norm", []), *roster.get("campers_norm", [])})
-                name_col = "pitcher_norm" if role == "pitching" else "batter_norm"
-                if roster_norm:
-                    params["rollup_roster_norm"] = roster_norm
-                    team_clause = (
-                        f"({team_clause} OR (COALESCE(NULLIF({target_col}, ''), '') = '' "
-                        f"AND {name_col} = ANY(%(rollup_roster_norm)s::text[])))"
-                    )
+            roster = _load_school_roster(school_code)
+            roster_norm = sorted({*roster.get("team_only_norm", []), *roster.get("campers_norm", [])})
+            name_col = "pitcher_norm" if role == "pitching" else "batter_norm"
+            if roster_norm:
+                params["rollup_roster_norm"] = roster_norm
+                team_clause = (
+                    f"({team_clause} OR (COALESCE(NULLIF({target_col}, ''), '') = '' "
+                    f"AND {name_col} = ANY(%(rollup_roster_norm)s::text[])))"
+                )
             where_parts.append(team_clause)
         else:
             where_parts.append(f"{target_col} = %(team_type_norm)s::text")
@@ -26908,15 +26907,14 @@ def hitting_overview(
                 batter_team_code = _normalize_team_code(str(row.get("batter_team_code") or ""))
                 pitcher_is_marker = pitcher_team_code in team_markers_norm if pitcher_team_code else False
                 batter_is_marker = batter_team_code in team_markers_norm if batter_team_code else False
-                is_pcu_blank_team_row = (
-                    school_code == "PCU"
-                    and not pitcher_team_code
+                is_blank_team_roster_row = (
+                    not pitcher_team_code
                     and not batter_team_code
                     and bool(batter_key)
                     and batter_key in (team_hitter_norm | campers_norm)
                 )
                 # Treat intra-squad team-vs-team rows (both team codes match markers) as team rows.
-                is_team_hitting_row = batter_is_marker or is_pcu_blank_team_row
+                is_team_hitting_row = batter_is_marker or is_blank_team_roster_row
                 is_opponent_hitting_row = pitcher_is_marker and bool(batter_team_code) and not batter_is_marker
 
                 if team_type_value == "Opponents":
@@ -28109,15 +28107,14 @@ def catching_overview(
                 pitcher_is_marker = pitcher_team_code in team_markers_norm if pitcher_team_code else False
                 batter_is_marker = batter_team_code in team_markers_norm if batter_team_code else False
                 # Catching team/opponent split is driven by pitcherteam/batterteam markers.
-                is_pcu_blank_team_row = (
-                    school_code == "PCU"
-                    and not pitcher_team_code
+                is_blank_team_roster_row = (
+                    not pitcher_team_code
                     and not batter_team_code
                     and bool(catcher_key)
                     and catcher_key in (team_norm | campers_norm)
                 )
                 # Treat intra-squad team-vs-team rows (both team codes match markers) as team rows.
-                is_team_catching_row = pitcher_is_marker or is_pcu_blank_team_row
+                is_team_catching_row = pitcher_is_marker or is_blank_team_roster_row
                 is_opponent_catching_row = batter_is_marker and bool(pitcher_team_code) and not pitcher_is_marker
 
                 if team_type_value == "Opponents":
