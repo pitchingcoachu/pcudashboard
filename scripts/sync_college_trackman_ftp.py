@@ -268,6 +268,7 @@ def sync_file(
 ) -> tuple[int, bool]:
     stable_source = f"trackman://{remote.source}{remote.path}"
     checksum = hashlib.sha256(remote.payload).hexdigest()
+    rows = filter_school_rows(decode_csv(remote.payload), markers, roster_keys)
     existing = conn.execute(
         """SELECT file_id, file_checksum, row_count FROM public.pitch_data_files
            WHERE school_code = %s AND source_file = %s""",
@@ -278,10 +279,9 @@ def sync_file(
             "SELECT COUNT(*) FROM public.pitch_events WHERE school_code = %s AND file_id = %s",
             (school_code, existing[0]),
         ).fetchone()[0]
-        if actual == (existing[2] or 0):
+        if actual == (existing[2] or 0) and (actual > 0 or not rows):
             return 0, True
 
-    rows = filter_school_rows(decode_csv(remote.payload), markers, roster_keys)
     ensure_school(conn, school_code)
     file_id = conn.execute(
         """INSERT INTO public.pitch_data_files
