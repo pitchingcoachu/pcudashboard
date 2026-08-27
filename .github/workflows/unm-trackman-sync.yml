@@ -84,6 +84,6 @@ jobs:
       - name: Refresh UNM dashboard rollups
         shell: bash
         run: |
-          ARGS=(--school UNM --keep-pooler)
+          ARGS=(--school UNM --keep-pooler --batch-days 1 --retries 5)
           ARGS+=(--window-start "${SYNC_START_DATE}" --window-end "${SYNC_END_DATE}")
           python scripts/refresh_college_rollups.py "${ARGS[@]}"
