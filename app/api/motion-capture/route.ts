@@ -93,7 +93,7 @@ export async function GET(request: Request) {
   } else {
     players = await listPlayerChoicesByOrganization({
       organizationId,
-      assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
+      assignedCoachUserId: null,
       activeOnly: true,
     });
   }

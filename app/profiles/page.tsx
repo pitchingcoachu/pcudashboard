@@ -38,12 +38,11 @@ export default async function ProfilesPage() {
   ]);
   const canAccessProgramming = await canUseProgrammingData(session);
   const programmingOrganizationId = await resolveProgrammingOrganizationId(session);
-  const assignedCoachUserId = session.role === 'coach' ? session.userId : null;
   const players =
     canAccessProgramming && programmingOrganizationId > 0
       ? await listPlayerProfilesWithPlanGoals({
           organizationId: programmingOrganizationId,
-          assignedCoachUserId,
+          assignedCoachUserId: null,
         })
       : [];
 

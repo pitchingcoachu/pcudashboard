@@ -27,7 +27,7 @@ export async function POST(request: Request) {
   const synced = await runForcePlateSync({
     organizationId,
     schoolCode,
-    assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
+    assignedCoachUserId: null,
     forceFullSync,
   });
   if (!synced.ok) return NextResponse.json({ error: synced.error }, { status: 500 });

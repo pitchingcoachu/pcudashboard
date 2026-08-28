@@ -45,7 +45,7 @@ export async function GET(request: Request) {
 
   const filtered = await listPlayerSummariesByOrganization({
     organizationId: scopedOrganizationId,
-    assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
+    assignedCoachUserId: null,
   });
   return finish(200, {
     players: filtered.map((player) => ({

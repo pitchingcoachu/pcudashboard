@@ -17,7 +17,7 @@ export default async function AdminQuestionnairesPage() {
       ? await Promise.all([
           listPlayerChoicesByOrganization({
             organizationId,
-            assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
+            assignedCoachUserId: null,
             activeOnly: true,
           }),
           listQuestionnairesForOrganization(organizationId),

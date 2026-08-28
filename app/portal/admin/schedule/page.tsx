@@ -34,7 +34,7 @@ export default async function AdminSchedulePage({ searchParams }: AdminScheduleP
     programmingOrganizationId > 0
       ? listPlayerChoicesByOrganization({
           organizationId: programmingOrganizationId,
-          assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
+          assignedCoachUserId: null,
         })
       : Promise.resolve([]),
     programmingOrganizationId > 0 ? listWorkoutChoicesByOrganization(programmingOrganizationId) : Promise.resolve([]),

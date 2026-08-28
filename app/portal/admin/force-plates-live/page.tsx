@@ -11,7 +11,7 @@ export default async function ForcePlatesLivePage() {
     programmingOrganizationId > 0
       ? await listPlayerChoicesByOrganization({
           organizationId: programmingOrganizationId,
-          assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
+          assignedCoachUserId: null,
         })
       : [];
 

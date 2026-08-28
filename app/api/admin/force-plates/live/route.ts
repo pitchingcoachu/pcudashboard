@@ -62,7 +62,7 @@ export async function GET(request: Request) {
   if (wantsAllPlayers) {
     const roster = await listPlayerChoicesByOrganization({
       organizationId,
-      assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
+      assignedCoachUserId: null,
     });
     const playerNames = Array.from(
       new Set(roster.map((player) => toFirstLast(String(player.fullName ?? '').trim())).filter(Boolean))

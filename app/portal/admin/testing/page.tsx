@@ -13,7 +13,7 @@ export default async function AdminTestingPage() {
     programmingOrganizationId > 0
       ? await listPlayerChoicesByOrganization({
           organizationId: programmingOrganizationId,
-          assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
+          assignedCoachUserId: null,
         })
       : [];
 

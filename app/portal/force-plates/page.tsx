@@ -89,7 +89,7 @@ export default async function ForcePlatesPage({
     isPcu && canAccessProgramming && orgId > 0
       ? await listPlayerChoicesByOrganization({
           organizationId: orgId,
-          assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
+          assignedCoachUserId: null,
         })
       : [];
   const candidateNames = Array.from(

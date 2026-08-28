@@ -86,7 +86,7 @@ function buildFindPlayerByNameTool(ctx: ProgrammingSessionContext): BetaRunnable
     run: async (input) => {
       const roster = await listPlayerChoicesByOrganization({
         organizationId: ctx.organizationId,
-        assignedCoachUserId: ctx.role === 'coach' ? ctx.userId : null,
+        assignedCoachUserId: null,
         activeOnly: true,
       });
       const scored = roster
@@ -370,7 +370,7 @@ function buildFindSchedulingGapsTool(ctx: ProgrammingSessionContext): BetaRunnab
 
       const roster = await listPlayerChoicesByOrganization({
         organizationId: ctx.organizationId,
-        assignedCoachUserId: ctx.role === 'coach' ? ctx.userId : null,
+        assignedCoachUserId: null,
         activeOnly: true,
       });
 

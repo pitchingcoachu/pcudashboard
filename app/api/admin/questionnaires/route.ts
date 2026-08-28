@@ -93,7 +93,7 @@ export async function POST(request: Request) {
   const sanitizedAssignments = await sanitizeAssignments({
     assignments,
     organizationId,
-    coachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
+    coachUserId: null,
   });
 
   const result = await createQuestionnaire({
@@ -143,7 +143,7 @@ export async function PATCH(request: Request) {
   const sanitizedAssignments = await sanitizeAssignments({
     assignments,
     organizationId,
-    coachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
+    coachUserId: null,
     preservedPlayerIds: current.assignments.flatMap((assignment) => assignment.playerIds),
   });
   const result = await updateQuestionnaire({

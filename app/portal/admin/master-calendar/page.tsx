@@ -77,7 +77,7 @@ export default async function MasterCalendarPage({ searchParams }: MasterCalenda
     programmingOrganizationId > 0
       ? await listPlayerChoicesByOrganization({
           organizationId: programmingOrganizationId,
-          assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
+          assignedCoachUserId: null,
           activeOnly: true,
         }).catch(() => [])
       : [];

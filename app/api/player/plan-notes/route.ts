@@ -218,7 +218,7 @@ export async function GET(request: Request) {
       });
       const playerRows = await listPlayerSummariesByOrganization({
         organizationId,
-        assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
+        assignedCoachUserId: null,
       });
       const playerNoteGroups = await Promise.all(
         playerRows.map(async (player) => ({
