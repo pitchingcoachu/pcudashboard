@@ -898,6 +898,35 @@ export async function ensureAuthDbReady(): Promise<void> {
     ON user_school_access (school_code);
   `);
 
+  // Video exports render for several minutes, so the request that kicks one
+  // off returns immediately with a job row rather than blocking until the
+  // ffmpeg pipeline finishes -- this table is the persistent record a client
+  // (web Settings > Exports, mobile Settings > Exports) polls/lists against,
+  // and r2_key is only set once the finished MP4 has actually been uploaded.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS video_export_jobs (
+      id SERIAL PRIMARY KEY,
+      organization_id INTEGER NOT NULL,
+      requested_by_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'processing', 'ready', 'failed')),
+      request_params JSONB NOT NULL,
+      r2_key TEXT,
+      file_size_bytes BIGINT,
+      error_message TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      completed_at TIMESTAMPTZ
+    );
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_video_export_jobs_requested_by
+    ON video_export_jobs (requested_by_user_id, created_at DESC);
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_video_export_jobs_org
+    ON video_export_jobs (organization_id, created_at DESC);
+  `);
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');

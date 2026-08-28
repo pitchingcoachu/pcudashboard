@@ -54,43 +54,50 @@ export async function POST(request: Request) {
   if (session.role === 'player') return finish(403, { error: 'Forbidden' });
 
   const body = (await request.json().catch(() => null)) as
-    | { playerId?: number; groupId?: number; dayDate?: string; workoutId?: number; programName?: string }
+    | { playerId?: number; groupId?: number; dayDate?: string; workoutId?: number; workoutIds?: number[]; programName?: string }
     | null;
   if (!body) return finish(400, { error: 'Invalid JSON body.' });
 
   const groupId = Number(body.groupId ?? 0);
   const dayDate = parseDate(String(body.dayDate ?? ''));
   const workoutId = Number(body.workoutId ?? 0);
+  // groupId requests may send workoutIds (multi-select); the single-player
+  // path below only ever sends the legacy singular workoutId.
+  const workoutIds = Array.from(
+    new Set((body.workoutIds ?? (workoutId > 0 ? [workoutId] : [])).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))
+  );
   const userId = session.userId ?? 0;
   const programName = String(body.programName ?? 'Current Program');
 
   if (userId <= 0) {
     return finish(400, { error: 'Session context missing. Please log out and log in again.' });
   }
-  if (!dayDate || !Number.isFinite(workoutId) || workoutId <= 0) {
-    return finish(400, { error: 'dayDate and workoutId are required.' });
+  if (!dayDate || workoutIds.length === 0) {
+    return finish(400, { error: 'dayDate and at least one workout are required.' });
   }
 
   // groupId fans this same assignment out to every current member of the
-  // group -- a per-player failure (e.g. a player removed from the org since
-  // the group was built) is reported individually rather than failing the
-  // whole batch, since a partial success is more useful than an all-or-
-  // nothing rollback across unrelated players.
+  // group, once per selected workout -- a per-(player, workout) failure
+  // (e.g. a player removed from the org since the group was built) is
+  // reported individually rather than failing the whole batch, since a
+  // partial success is more useful than an all-or-nothing rollback across
+  // unrelated players/workouts.
   if (Number.isFinite(groupId) && groupId > 0) {
     const organizationId = await resolveProgrammingOrganizationId(session);
     if (organizationId <= 0) return finish(403, { error: 'Forbidden' });
     const playerIds = await listPlayerIdsForGroup({ organizationId, groupId });
     if (playerIds.length === 0) return finish(400, { error: 'This group has no players in it.' });
 
+    const pairs = playerIds.flatMap((playerId) => workoutIds.map((assignWorkoutId) => ({ playerId, workoutId: assignWorkoutId })));
     const results = await Promise.all(
-      playerIds.map(async (playerId) => {
+      pairs.map(async ({ playerId, workoutId: assignWorkoutId }) => {
         const result = await addProgramItem({
           organizationId,
           userId,
           playerId,
           dayDate,
           assignmentType: 'workout',
-          workoutId,
+          workoutId: assignWorkoutId,
           programName,
         });
         if (result.ok && result.playerUserId) {
@@ -103,15 +110,20 @@ export async function POST(request: Request) {
             data: { type: 'workout_assigned', itemId: result.itemId, dayDate },
           });
         }
-        return { playerId, ...result };
+        return { playerId, workoutId: assignWorkoutId, ...result };
       })
     );
     const succeeded = results.filter((r) => r.ok).length;
     const failed = results.filter((r) => !r.ok);
     return finish(
       200,
-      { ok: true, groupId, succeeded, failed: failed.map((f) => ({ playerId: f.playerId, error: 'error' in f ? f.error : 'Unknown error' })) },
-      { groupId, dayDate, workoutId, succeeded, failedCount: failed.length }
+      {
+        ok: true,
+        groupId,
+        succeeded,
+        failed: failed.map((f) => ({ playerId: f.playerId, workoutId: f.workoutId, error: 'error' in f ? f.error : 'Unknown error' })),
+      },
+      { groupId, dayDate, workoutIds, succeeded, failedCount: failed.length }
     );
   }
 

@@ -1,121 +1,25 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 
 type PortalUserMenuProps = {
   displayName: string;
 };
 
+// A compact settings-gear icon that goes straight to the dedicated Settings
+// page (/portal/settings) -- this used to be a "Logged In As [Name]" text
+// button that opened a small dropdown with just an email-preference
+// checkbox and a Log Out button; both now live on the Settings page itself
+// (Account card shows who's logged in, Notifications card has the email
+// toggle, Logout card has Log Out), so this component's only job now is to
+// get staff there from wherever they are, matching how players already
+// reach the same page via their own tab-bar Settings link.
 export default function PortalUserMenu({ displayName }: PortalUserMenuProps) {
-  const router = useRouter();
-  const [open, setOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [receivePlayerNoteEmails, setReceivePlayerNoteEmails] = useState(true);
-  const [loadingPrefs, setLoadingPrefs] = useState(false);
-  const [savingPrefs, setSavingPrefs] = useState(false);
-  const [loggingOut, setLoggingOut] = useState(false);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function onPointerDown(event: PointerEvent) {
-      if (!wrapRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-        setSettingsOpen(false);
-      }
-    }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        setOpen(false);
-        setSettingsOpen(false);
-      }
-    }
-    document.addEventListener('pointerdown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [open]);
-
-  const openSettings = async () => {
-    setSettingsOpen(true);
-    setLoadingPrefs(true);
-    try {
-      const response = await fetch('/api/portal/settings', { cache: 'no-store' });
-      if (response.ok) {
-        const payload = (await response.json().catch(() => ({}))) as { receivePlayerNoteEmails?: boolean };
-        setReceivePlayerNoteEmails(payload.receivePlayerNoteEmails !== false);
-      }
-    } finally {
-      setLoadingPrefs(false);
-    }
-  };
-
-  const toggleReceivePlayerNoteEmails = async (next: boolean) => {
-    setReceivePlayerNoteEmails(next);
-    setSavingPrefs(true);
-    try {
-      await fetch('/api/portal/settings', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ receivePlayerNoteEmails: next }),
-      });
-    } finally {
-      setSavingPrefs(false);
-    }
-  };
-
-  const handleLogout = async () => {
-    setLoggingOut(true);
-    await fetch('/api/auth/logout', { method: 'POST' });
-    router.push('/login');
-    router.refresh();
-  };
-
   return (
-    <div className="portal-user-menu" ref={wrapRef}>
-      <button
-        type="button"
-        className="portal-user-meta portal-user-meta-btn"
-        aria-label="Account menu"
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <p>Logged In As</p>
-        <h1>{displayName}</h1>
-      </button>
-      {open ? (
-        <div className="portal-user-menu-dropdown">
-          {settingsOpen ? (
-            <div className="portal-user-menu-settings">
-              <p className="portal-user-menu-settings-title">Settings</p>
-              <label className="portal-user-menu-checkbox-row">
-                <input
-                  type="checkbox"
-                  checked={receivePlayerNoteEmails}
-                  disabled={loadingPrefs || savingPrefs}
-                  onChange={(event) => void toggleReceivePlayerNoteEmails(event.target.checked)}
-                />
-                <span>Receive Daily Player Notes emails</span>
-              </label>
-              <button type="button" className="btn btn-ghost portal-user-menu-back" onClick={() => setSettingsOpen(false)}>
-                Back
-              </button>
-            </div>
-          ) : (
-            <>
-              <button type="button" className="btn btn-ghost portal-user-menu-item" onClick={() => void openSettings()}>
-                Settings
-              </button>
-              <button type="button" className="btn btn-ghost portal-user-menu-item" onClick={() => void handleLogout()} disabled={loggingOut}>
-                {loggingOut ? 'Logging Out...' : 'Log Out'}
-              </button>
-            </>
-          )}
-        </div>
-      ) : null}
-    </div>
+    <Link href="/portal/settings" className="portal-notifications-btn" aria-label={`Settings, logged in as ${displayName}`}>
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M19.14 12.94a7.14 7.14 0 0 0 .06-.94 7.14 7.14 0 0 0-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7.14 7.14 0 0 0-.06.94c0 .32.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.14.24.42.32.6.22l2.39-.96c.49.38 1.03.7 1.62.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.24.1.48 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" />
+      </svg>
+    </Link>
   );
 }

@@ -26,7 +26,7 @@ export function GroupAssignModal({ open, onClose, workouts, todayIso, onAssigned
   const [dayDate, setDayDate] = useState(todayIso);
   const [planSection, setPlanSection] = useState('daily_prep');
   const [workoutQuery, setWorkoutQuery] = useState('');
-  const [workoutId, setWorkoutId] = useState<number | null>(null);
+  const [workoutIds, setWorkoutIds] = useState<Set<number>>(new Set());
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -54,17 +54,27 @@ export function GroupAssignModal({ open, onClose, workouts, todayIso, onAssigned
 
   if (!open) return null;
 
+  function toggleWorkout(id: number) {
+    setWorkoutIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
   async function handleApply() {
-    if (!groupId || !workoutId) return;
+    if (!groupId || workoutIds.size === 0) return;
     setIsSaving(true);
     setError('');
     setMessage('');
     try {
       const path = target === 'calendar' ? '/api/admin/schedule/assignments' : '/api/admin/schedule/plan';
+      const selectedWorkoutIds = Array.from(workoutIds);
       const body =
         target === 'calendar'
-          ? { groupId, dayDate, workoutId }
-          : { groupId, workoutId, planSection };
+          ? { groupId, dayDate, workoutIds: selectedWorkoutIds }
+          : { groupId, workoutIds: selectedWorkoutIds, planSection };
       const response = await fetch(path, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -73,15 +83,15 @@ export function GroupAssignModal({ open, onClose, workouts, todayIso, onAssigned
       const payload = (await response.json().catch(() => ({}))) as {
         ok?: boolean;
         succeeded?: number;
-        failed?: Array<{ playerId: number; error: string }>;
+        failed?: Array<{ playerId: number; workoutId: number; error: string }>;
         error?: string;
       };
       if (!response.ok || !payload.ok) throw new Error(payload.error ?? 'Failed to apply workout to group.');
       const failedCount = payload.failed?.length ?? 0;
       setMessage(
         failedCount > 0
-          ? `Applied to ${payload.succeeded ?? 0} player(s); ${failedCount} failed.`
-          : `Applied to ${payload.succeeded ?? 0} player(s).`
+          ? `Applied ${payload.succeeded ?? 0} assignment(s); ${failedCount} failed.`
+          : `Applied ${payload.succeeded ?? 0} assignment(s).`
       );
       onAssigned();
     } catch (err) {
@@ -150,13 +160,13 @@ export function GroupAssignModal({ open, onClose, workouts, todayIso, onAssigned
           )}
 
           <label>
-            Workout
+            Workouts ({workoutIds.size} selected)
             <input value={workoutQuery} onChange={(event) => setWorkoutQuery(event.target.value)} placeholder="Search workouts..." />
           </label>
           <div className="portal-questionnaire-player-list" style={{ maxHeight: 220 }}>
             {filteredWorkouts.map((workout) => (
               <label key={workout.id} className="portal-questionnaire-player-option">
-                <input type="radio" name="group-assign-workout" checked={workoutId === workout.id} onChange={() => setWorkoutId(workout.id)} />
+                <input type="checkbox" checked={workoutIds.has(workout.id)} onChange={() => toggleWorkout(workout.id)} />
                 <span>
                   {workout.name} <span className="portal-muted-text">· {workout.category}</span>
                 </span>
@@ -169,8 +179,8 @@ export function GroupAssignModal({ open, onClose, workouts, todayIso, onAssigned
           {error ? <p className="auth-error">{error}</p> : null}
 
           <div className="portal-choice-line-actions">
-            <button type="button" className="btn btn-primary" onClick={handleApply} disabled={isSaving || !groupId || !workoutId}>
-              {isSaving ? 'Applying...' : 'Apply to Group'}
+            <button type="button" className="btn btn-primary" onClick={handleApply} disabled={isSaving || !groupId || workoutIds.size === 0}>
+              {isSaving ? 'Applying...' : `Apply ${workoutIds.size > 1 ? `${workoutIds.size} Workouts` : 'to Group'}`}
             </button>
           </div>
         </div>

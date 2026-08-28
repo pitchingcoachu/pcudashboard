@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromRequest } from '../../../../../lib/auth';
 import { resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
-import { resolveSchoolScopedOrganizationId } from '../../../../../lib/programming-scope';
+import { isGlobalAdminSession, resolveSchoolScopedOrganizationId } from '../../../../../lib/programming-scope';
 import { ensureTrainingDbReady } from '../../../../../lib/training-db';
 import { ensureAuthDbReady, getDbPool, listActiveStaffOrganizationIdsByEmail } from '../../../../../lib/auth-db';
 import type { PortalSession } from '../../../../../lib/portal-session';
@@ -59,14 +59,6 @@ function parseGlobalAdminEmails(): string[] {
     .map((entry) => entry.trim().toLowerCase())
     .filter(Boolean);
   return Array.from(new Set(values));
-}
-
-function isGlobalAdminSession(session: PortalSession): boolean {
-  if (session.role !== 'admin') return false;
-  if (process.env.NODE_ENV !== 'production') return true;
-  const email = String(session.email ?? '').trim().toLowerCase();
-  if (!email) return false;
-  return parseGlobalAdminEmails().includes(email);
 }
 
 declare global {
@@ -199,6 +191,9 @@ async function ensureDashboardCustomTableSchema(pool: Pool): Promise<void> {
     `);
     await client.query(`ALTER TABLE dashboard_custom_tables ADD COLUMN IF NOT EXISTS created_by_email TEXT;`);
     await client.query(
+      `ALTER TABLE dashboard_custom_tables ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'organization' CHECK (visibility IN ('private', 'organization', 'global'));`
+    );
+    await client.query(
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_dashboard_custom_tables_org_school_name ON dashboard_custom_tables (organization_id, school_code, lower(name));`
     );
     await client.query(
@@ -270,26 +265,36 @@ export async function GET(request: Request) {
   const pool = getDbPool();
   try {
     await ensureDashboardCustomTableSchemaBestEffort(pool);
+    // Ownership (by user id or, as a fallback, by matching email) always
+    // grants access regardless of visibility -- a private table must still
+    // be visible to the person who made it. Beyond that: 'global' rows are
+    // visible to anyone irrespective of school/org; 'organization' rows are
+    // visible to any member of a scoped org (today's pre-existing default
+    // behavior); 'private' rows are NOT granted by org membership alone.
     const scopedResult = await pool.query<{
       id: number;
       name: string;
       school_code: string;
       columns_json: unknown;
       created_by_email: string | null;
+      visibility: string;
       created_at: string;
       updated_at: string;
     }>(
       `
-      SELECT id, name, school_code, columns_json, created_by_email, created_at, updated_at
+      SELECT id, name, school_code, columns_json, created_by_email, visibility, created_at, updated_at
       FROM dashboard_custom_tables
       WHERE (
-        (school_code = $6 AND (
-          $4::boolean
-          OR organization_id = ANY($1::int[])
-          OR ($2::boolean AND created_by_user_id = ANY($3::bigint[]))
-          OR ($5::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($5))
-        ))
+        ($2::boolean AND created_by_user_id = ANY($3::bigint[]))
+        OR ($5::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($5))
         OR LOWER(COALESCE(created_by_email, '')) = ANY($7::text[])
+        OR $4::boolean
+        OR visibility = 'global'
+        OR (
+          visibility = 'organization'
+          AND school_code = $6
+          AND organization_id = ANY($1::int[])
+        )
       )
       ORDER BY updated_at DESC, id DESC
       `,
@@ -298,20 +303,23 @@ export async function GET(request: Request) {
     let candidateRows = scopedResult.rows;
     if (!candidateRows.length) {
       // Last-resort rescue for redeploy/session scope drift: keep school-owned
-      // custom tables visible instead of returning an empty list.
+      // custom tables visible instead of returning an empty list. Still
+      // excludes 'private' rows -- this fallback is for org-scope drift, not
+      // a bypass of another user's private table.
       const schoolFallback = await pool.query<{
         id: number;
         name: string;
         school_code: string;
         columns_json: unknown;
         created_by_email: string | null;
+        visibility: string;
         created_at: string;
         updated_at: string;
       }>(
         `
-        SELECT id, name, school_code, columns_json, created_by_email, created_at, updated_at
+        SELECT id, name, school_code, columns_json, created_by_email, visibility, created_at, updated_at
         FROM dashboard_custom_tables
-        WHERE school_code = $1
+        WHERE school_code = $1 AND visibility <> 'private'
         ORDER BY updated_at DESC, id DESC
         `,
         [schoolCode]
@@ -350,6 +358,7 @@ export async function GET(request: Request) {
         name: row.name,
         columns: normalizeColumns(row.columns_json),
         createdByEmail: row.created_by_email ?? null,
+        visibility: row.visibility ?? 'organization',
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       })),
@@ -399,12 +408,22 @@ export async function POST(request: Request) {
       id?: number;
       name?: string;
       columns?: unknown;
+      visibility?: string;
     };
     const id = Number(body.id);
     const name = String(body.name ?? '').trim();
     const columns = normalizeColumns(body.columns);
     if (!name) return NextResponse.json({ error: 'Table name is required.' }, { status: 400 });
     const payload = JSON.stringify(columns);
+    // 'global' is a global-admin-only tier; a non-admin request for it is
+    // silently downgraded to 'organization' rather than rejected outright.
+    const requestedVisibility = String(body.visibility ?? '').trim().toLowerCase();
+    const visibility =
+      requestedVisibility === 'private'
+        ? 'private'
+        : requestedVisibility === 'global' && canShareAcrossSites
+          ? 'global'
+          : 'organization';
 
     let saved;
     if (Number.isFinite(id) && id > 0) {
@@ -413,6 +432,7 @@ export async function POST(request: Request) {
         name: string;
         columns_json: unknown;
         created_by_email: string | null;
+        visibility: string;
         created_at: string;
         updated_at: string;
       }>(
@@ -421,6 +441,7 @@ export async function POST(request: Request) {
            SET name = $3,
                columns_json = $4::jsonb,
                created_by_email = CASE WHEN $8::text <> '' THEN $8::text ELSE created_by_email END,
+               visibility = $10,
                updated_at = NOW()
          WHERE id = $2
            AND (
@@ -434,9 +455,9 @@ export async function POST(request: Request) {
                )
              )
            )
-         RETURNING id, name, columns_json, created_by_email, created_at, updated_at
+         RETURNING id, name, columns_json, created_by_email, visibility, created_at, updated_at
         `,
-        [scopedOrgIds, id, name, payload, hasUserScope, effectiveUserIds, canShareAcrossSites, normalizedEmail, schoolCode]
+        [scopedOrgIds, id, name, payload, hasUserScope, effectiveUserIds, canShareAcrossSites, normalizedEmail, schoolCode, visibility]
       );
       if (!saved.rowCount) {
         return NextResponse.json({ error: 'Custom table not found.' }, { status: 404 });
@@ -447,47 +468,65 @@ export async function POST(request: Request) {
         name: string;
         columns_json: unknown;
         created_by_email: string | null;
+        visibility: string;
         created_at: string;
         updated_at: string;
       }>(
         `
         WITH existing AS (
+          -- A 'global' save matches an existing same-named GLOBAL row by
+          -- creator/global-admin alone, ignoring school_code entirely --
+          -- otherwise switching schools and re-saving forks a new
+          -- per-school row instead of updating the one shared global row.
+          -- Non-global saves keep the original org+school+name matching
+          -- (any org member sharing that org/school can update it, same as
+          -- before this visibility feature existed).
           SELECT id
           FROM dashboard_custom_tables
-          WHERE (
-            $9::boolean
-            OR (
-              school_code = $2
-              AND (
-                organization_id = ANY($1::int[])
-                OR ($6::boolean AND created_by_user_id = ANY($7::bigint[]))
-                OR ($10::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($10))
+          WHERE lower(name) = lower($3)
+            AND (
+              (
+                $11::text = 'global'
+                AND visibility = 'global'
+                AND (
+                  $9::boolean
+                  OR ($6::boolean AND created_by_user_id = ANY($7::bigint[]))
+                  OR ($10::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($10))
+                )
+              )
+              OR (
+                $11::text <> 'global'
+                AND school_code = $2
+                AND (
+                  $9::boolean
+                  OR organization_id = ANY($1::int[])
+                  OR ($6::boolean AND created_by_user_id = ANY($7::bigint[]))
+                  OR ($10::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($10))
+                )
               )
             )
-          )
-            AND school_code = $2
-            AND lower(name) = lower($3)
           LIMIT 1
         ),
         updated AS (
           UPDATE dashboard_custom_tables d
              SET columns_json = $4::jsonb,
                  name = $3,
+                 visibility = $11,
                  updated_at = NOW()
            WHERE d.id IN (SELECT id FROM existing)
-           RETURNING d.id, d.name, d.columns_json, d.created_by_email, d.created_at, d.updated_at
+           RETURNING d.id, d.name, d.columns_json, d.created_by_email, d.visibility, d.created_at, d.updated_at
         ),
         inserted AS (
           INSERT INTO dashboard_custom_tables (
-            organization_id, school_code, name, columns_json, created_by_user_id, created_by_email
+            organization_id, school_code, name, columns_json, created_by_user_id, created_by_email, visibility
           )
-          SELECT $8, $2, $3, $4::jsonb, $5, CASE WHEN $10::text <> '' THEN $10::text ELSE NULL END
+          SELECT $8, $2, $3, $4::jsonb, $5, CASE WHEN $10::text <> '' THEN $10::text ELSE NULL END, $11
           WHERE NOT EXISTS (SELECT 1 FROM existing)
-          RETURNING id, name, columns_json, created_by_email, created_at, updated_at
+          RETURNING id, name, columns_json, created_by_email, visibility, created_at, updated_at
         )
-        SELECT id, name, columns_json, created_by_email, created_at, updated_at FROM updated
+        SELECT id, name, columns_json, created_by_email, visibility, created_at, updated_at FROM updated
         UNION ALL
-        SELECT id, name, columns_json, created_by_email, created_at, updated_at FROM inserted
+        SELECT id, name, columns_json, created_by_email, visibility, created_at, updated_at FROM inserted
         `,
         [
           scopedOrgIds,
@@ -500,6 +539,7 @@ export async function POST(request: Request) {
           effectivePrimaryOrganizationId,
           canShareAcrossSites,
           normalizedEmail,
+          visibility,
         ]
       );
     }
@@ -511,6 +551,7 @@ export async function POST(request: Request) {
         name: row.name,
         columns: normalizeColumns(row.columns_json),
         createdByEmail: row.created_by_email ?? null,
+        visibility: row.visibility ?? 'organization',
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       },
@@ -552,20 +593,19 @@ export async function DELETE(request: Request) {
   const pool = getDbPool();
   try {
     await ensureDashboardCustomTableSchemaBestEffort(pool);
-    const target = await pool.query<{ id: number; name: string; school_code: string }>(
+    const target = await pool.query<{ id: number; name: string; school_code: string; visibility: string }>(
       `
-      SELECT id, name, school_code
+      SELECT id, name, school_code, visibility
       FROM dashboard_custom_tables
       WHERE id = $1
         AND (
-          $5::boolean
+          ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
+          OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
+          OR $5::boolean
           OR (
-            school_code = $7
-            AND (
-              organization_id = ANY($2::int[])
-              OR ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
-              OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
-            )
+            visibility <> 'private'
+            AND school_code = $7
+            AND organization_id = ANY($2::int[])
           )
         )
       LIMIT 1
@@ -585,14 +625,13 @@ export async function DELETE(request: Request) {
       WHERE school_code = $6
         AND lower(regexp_replace(trim(name), '\\s+', ' ', 'g')) = $7
         AND (
-          $5::boolean
+          ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
+          OR ($8::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($8))
+          OR $5::boolean
           OR (
-            school_code = $9
-            AND (
-              organization_id = ANY($2::int[])
-              OR ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
-              OR ($8::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($8))
-            )
+            visibility <> 'private'
+            AND school_code = $9
+            AND organization_id = ANY($2::int[])
           )
         )
       `,

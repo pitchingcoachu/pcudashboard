@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { uploadPlayerMediaFile } from '../../../lib/upload-player-media';
 import { createPortal } from 'react-dom';
-import type { ExerciseLoadHistoryEntry, ProgramItemRow } from '../../../lib/training-db';
+import type { ExerciseLoadHistoryEntry, ExerciseLogHistoryItemEntry, ProgramItemRow } from '../../../lib/training-db';
 
 type WorkoutLogModalProps = {
   item: ProgramItemRow;
@@ -273,6 +273,14 @@ export default function WorkoutLogModal({
   const [customizingWorkout, setCustomizingWorkout] = useState(false);
   const [exerciseDrafts, setExerciseDrafts] = useState<WorkoutExerciseDraft[]>(() => buildWorkoutExerciseDrafts(item));
   const formRef = useRef<HTMLFormElement | null>(null);
+  const [pastLogsOpen, setPastLogsOpen] = useState(false);
+  const [pastLogsLoading, setPastLogsLoading] = useState(false);
+  const [pastLogsError, setPastLogsError] = useState('');
+  const [pastLogs, setPastLogs] = useState<ExerciseLogHistoryItemEntry[]>([]);
+  const [editingLogId, setEditingLogId] = useState<number | null>(null);
+  const [editingLoadValue, setEditingLoadValue] = useState('');
+  const [editingNotesValue, setEditingNotesValue] = useState('');
+  const [savingEditId, setSavingEditId] = useState<number | null>(null);
 
   // Cycle and Plan items are both fixed-section (not date-scoped) alternatives
   // to the calendar, so they share the same "not calendar" behavior here:
@@ -363,6 +371,74 @@ export default function WorkoutLogModal({
       setError(customizeError instanceof Error ? customizeError.message : 'Failed to save workout customization.');
     } finally {
       setSavingCustomization(false);
+    }
+  };
+
+  const loadPastLogs = async () => {
+    if (item.scheduleType !== 'cycle' && item.scheduleType !== 'plan') return;
+    setPastLogsLoading(true);
+    setPastLogsError('');
+    try {
+      const params = new URLSearchParams({
+        playerId: String(playerId),
+        itemId: String(item.itemId),
+        scheduleType: item.scheduleType,
+      });
+      const response = await fetch(`/api/player/exercise-log-history?${params.toString()}`, { cache: 'no-store' });
+      const payload = (await response.json().catch(() => ({}))) as { entries?: ExerciseLogHistoryItemEntry[]; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to load past logs.');
+      setPastLogs(payload.entries ?? []);
+    } catch (loadError) {
+      setPastLogsError(loadError instanceof Error ? loadError.message : 'Failed to load past logs.');
+    } finally {
+      setPastLogsLoading(false);
+    }
+  };
+
+  const togglePastLogs = () => {
+    const next = !pastLogsOpen;
+    setPastLogsOpen(next);
+    if (next && pastLogs.length === 0) void loadPastLogs();
+  };
+
+  const startEditingLog = (entry: ExerciseLogHistoryItemEntry) => {
+    setEditingLogId(entry.id);
+    setEditingLoadValue(entry.performedLoad ?? '');
+    setEditingNotesValue(entry.notes ?? '');
+  };
+
+  const saveEditedLog = async (entry: ExerciseLogHistoryItemEntry) => {
+    if (item.scheduleType !== 'cycle' && item.scheduleType !== 'plan') return;
+    setSavingEditId(entry.id);
+    setPastLogsError('');
+    try {
+      const response = await fetch('/api/player/exercise-log-history', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          playerId,
+          itemId: item.itemId,
+          historyId: entry.id,
+          scheduleType: item.scheduleType,
+          performedLoad: editingLoadValue,
+          performedSets: entry.performedSets ?? '',
+          performedReps: entry.performedReps ?? '',
+          notes: editingNotesValue,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to save changes.');
+      setPastLogs((current) =>
+        current.map((row) =>
+          row.id === entry.id ? { ...row, performedLoad: editingLoadValue.trim() || null, notes: editingNotesValue.trim() || null } : row
+        )
+      );
+      setEditingLogId(null);
+      if (onSaved) await onSaved();
+    } catch (saveError) {
+      setPastLogsError(saveError instanceof Error ? saveError.message : 'Failed to save changes.');
+    } finally {
+      setSavingEditId(null);
     }
   };
 
@@ -464,6 +540,103 @@ export default function WorkoutLogModal({
               ? `3-Day Cycle${item.cycleSlot ? ` - ${cycleSlotLabel(item.cycleSlot)}` : ''}`
               : dateTitle(item.dayDate)}
           </p>
+        )}
+
+        {isCycleItem && (
+          <div style={{ marginBottom: '0.5rem' }}>
+            <button
+              type="button"
+              onClick={togglePastLogs}
+              className="btn btn-ghost"
+              style={{ fontSize: '0.85rem' }}
+            >
+              {pastLogsOpen ? 'Hide Past Logs' : 'View Past Logs'}
+            </button>
+            {pastLogsOpen && (
+              <div
+                style={{
+                  marginTop: '0.5rem',
+                  border: '1px solid rgba(255,255,255,0.15)',
+                  borderRadius: '8px',
+                  padding: '0.6rem 0.75rem',
+                  maxHeight: '220px',
+                  overflow: 'auto',
+                }}
+              >
+                {pastLogsLoading && <p className="portal-muted-text" style={{ margin: 0 }}>Loading...</p>}
+                {pastLogsError && <p style={{ color: '#ff8799', margin: 0 }}>{pastLogsError}</p>}
+                {!pastLogsLoading && !pastLogsError && pastLogs.length === 0 && (
+                  <p className="portal-muted-text" style={{ margin: 0 }}>No past logs yet.</p>
+                )}
+                {pastLogs.map((entry) => (
+                  <div
+                    key={entry.id}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.25rem',
+                      padding: '0.4rem 0',
+                      borderBottom: '1px solid rgba(255,255,255,0.08)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+                      <strong style={{ fontSize: '0.85rem' }}>{dateTitle(entry.dayDate)}</strong>
+                      {editingLogId !== entry.id && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          style={{ fontSize: '0.8rem', padding: '0.2rem 0.6rem' }}
+                          onClick={() => startEditingLog(entry)}
+                        >
+                          Edit
+                        </button>
+                      )}
+                    </div>
+                    {editingLogId === entry.id ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                        <label style={{ fontSize: '0.8rem' }}>
+                          Weight/Load
+                          <input
+                            type="text"
+                            value={editingLoadValue}
+                            onChange={(event) => setEditingLoadValue(event.target.value)}
+                            style={{ display: 'block', width: '100%' }}
+                          />
+                        </label>
+                        <label style={{ fontSize: '0.8rem' }}>
+                          Notes
+                          <textarea
+                            value={editingNotesValue}
+                            onChange={(event) => setEditingNotesValue(event.target.value)}
+                            rows={2}
+                            style={{ display: 'block', width: '100%' }}
+                          />
+                        </label>
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            disabled={savingEditId === entry.id}
+                            onClick={() => void saveEditedLog(entry)}
+                          >
+                            {savingEditId === entry.id ? 'Saving...' : 'Save'}
+                          </button>
+                          <button type="button" className="btn btn-ghost" onClick={() => setEditingLogId(null)}>
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="portal-muted-text" style={{ margin: 0, fontSize: '0.85rem' }}>
+                        {entry.performedLoad ? `${entry.performedLoad}` : 'No weight entered'}
+                        {entry.notes ? ` — ${entry.notes}` : ''}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         )}
 
         {catchPlayNote && (

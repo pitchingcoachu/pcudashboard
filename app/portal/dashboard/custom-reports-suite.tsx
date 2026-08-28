@@ -211,6 +211,7 @@ type SavedReportItem = {
   id: number;
   name: string;
   applyToAllSchools?: boolean;
+  visibility?: 'private' | 'organization' | 'global';
   payload: unknown;
   createdByEmail?: string | null;
   createdAt: string;
@@ -2324,8 +2325,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const [colSpanInputs, setColSpanInputs] = useState<Record<string, string>>({});
   const [savedReports, setSavedReports] = useState<SavedReportItem[]>([]);
   const [selectedReportId, setSelectedReportId] = useState<number | null>(null);
-  const [saveScope, setSaveScope] = useState<'Current School' | 'All Schools'>('Current School');
-  const [userRole, setUserRole] = useState<'admin' | 'coach' | 'player'>('coach');
+  const [saveVisibility, setSaveVisibility] = useState<'private' | 'organization' | 'global'>('organization');
+  const [isGlobalAdminForReportSaves, setIsGlobalAdminForReportSaves] = useState(false);
   const [playersByTeam, setPlayersByTeam] = useState<string[]>([]);
   const [playersBySelectedTeam, setPlayersBySelectedTeam] = useState<Record<string, string[]>>({});
   const [teamScopeSelectedPlayers, setTeamScopeSelectedPlayers] = useState<string[]>([]);
@@ -2361,7 +2362,6 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const inflightRef = useRef<Map<string, Promise<OverviewLitePayload>>>(new Map());
   const restoringSavedReportRef = useRef(false);
   const restoringSavedReportTimerRef = useRef<number | null>(null);
-  const isAdminUser = userRole === 'admin';
   const beginSavedReportRestore = () => {
     restoringSavedReportRef.current = true;
     if (restoringSavedReportTimerRef.current !== null) {
@@ -3160,31 +3160,23 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   }, [reportType]);
 
   useEffect(() => {
-    let active = true;
-    async function loadSessionRole() {
-      try {
-        const response = await fetch('/api/auth/session', { cache: 'no-store' });
-        const payload = (await response.json().catch(() => ({}))) as { role?: string };
-        if (!active) return;
-        const normalized: 'admin' | 'coach' | 'player' =
-          payload.role === 'player' ? 'player' : payload.role === 'admin' ? 'admin' : 'coach';
-        setUserRole(normalized);
-      } catch {
-        if (!active) return;
-        setUserRole('coach');
-      }
-    }
-    loadSessionRole();
+    let cancelled = false;
+    fetch('/api/dashboard/session-scope', { cache: 'no-store' })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload: { isGlobalAdmin?: boolean } | null) => {
+        if (!cancelled && payload) setIsGlobalAdminForReportSaves(Boolean(payload.isGlobalAdmin));
+      })
+      .catch(() => {});
     return () => {
-      active = false;
+      cancelled = true;
     };
   }, []);
 
   useEffect(() => {
-    if (!isAdminUser && saveScope !== 'Current School') {
-      setSaveScope('Current School');
+    if (!isGlobalAdminForReportSaves && saveVisibility === 'global') {
+      setSaveVisibility('organization');
     }
-  }, [isAdminUser, saveScope]);
+  }, [isGlobalAdminForReportSaves, saveVisibility]);
 
   useEffect(() => {
     let active = true;
@@ -4190,7 +4182,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         body: JSON.stringify({
           id: shouldUpdateExisting ? selected?.id : undefined,
           name,
-          applyToAllSchools: isAdminUser && saveScope === 'All Schools',
+          applyToAllSchools: isGlobalAdminForReportSaves && saveVisibility === 'global',
+          visibility: saveVisibility,
           payload: currentPayload(),
         }),
       });
@@ -4202,7 +4195,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         return [item, ...rest].sort((a, b) => (a.updatedAt > b.updatedAt ? -1 : 1));
       });
       setSelectedReportId(item.id);
-      setSaveScope(isAdminUser && item.applyToAllSchools ? 'All Schools' : 'Current School');
+      setSaveVisibility(item.visibility ?? (item.applyToAllSchools ? 'global' : 'organization'));
       if (!reportTitle.trim()) setReportTitle(item.name);
       setError(null);
     } catch (err) {
@@ -4245,7 +4238,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     setColumnNoteSpans(Array.from({ length: MAX_REPORT_COLS }, () => 1));
     setCellConfigs({ r1c1: emptyCell() });
     setSelectedReportId(null);
-    setSaveScope('Current School');
+    setSaveVisibility('organization');
   };
 
   const applyReportRowsInput = () => {
@@ -5048,23 +5041,24 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                     if (selected && selected.payload && typeof selected.payload === 'object') {
                       applyPayload(selected.payload as ReportPayload);
                     }
-                    setSaveScope(isAdminUser && selected?.applyToAllSchools ? 'All Schools' : 'Current School');
+                    setSaveVisibility(selected?.visibility ?? (selected?.applyToAllSchools ? 'global' : 'organization'));
                   }}
                 />
               </label>
-              {isAdminUser ? (
-                <label>
-                  Save Scope
-                  <SearchableSingleSelect
-                    options={[
-                      { value: 'Current School', label: 'Current School' },
-                      { value: 'All Schools', label: 'All Schools' },
-                    ]}
-                    value={saveScope}
-                    onChange={(next) => setSaveScope(next === 'All Schools' ? 'All Schools' : 'Current School')}
-                  />
-                </label>
-              ) : null}
+              <label>
+                Visibility
+                <SearchableSingleSelect
+                  options={[
+                    { value: 'private', label: 'Only Me' },
+                    { value: 'organization', label: 'My Organization' },
+                    ...(isGlobalAdminForReportSaves ? [{ value: 'global', label: 'All Sites' }] : []),
+                  ]}
+                  value={saveVisibility}
+                  onChange={(next) =>
+                    setSaveVisibility(next === 'private' || next === 'global' ? next : 'organization')
+                  }
+                />
+              </label>
             </div>
             {reportScope === 'Multi-Player' ? (
               <div className="portal-custom-reports-row-players">

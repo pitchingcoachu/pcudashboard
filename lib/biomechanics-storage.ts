@@ -193,6 +193,42 @@ export async function uploadBiomechanicsPitchVideoToR2(args: {
   }
 }
 
+export async function uploadVideoExportToR2(args: {
+  organizationId: number;
+  jobId: number;
+  body: Buffer;
+}): Promise<string | null> {
+  const key = `video-exports/org-${args.organizationId}/job-${args.jobId}.mp4`;
+  const client = getR2Client();
+  if (!client) {
+    if (!canUseLocalMotionCaptureStorage()) return null;
+    try {
+      const filePath = path.join(localMotionCaptureRoot(), key);
+      await mkdir(path.dirname(filePath), { recursive: true });
+      await writeFile(filePath, args.body);
+      return `local:${key}`;
+    } catch {
+      return null;
+    }
+  }
+  const bucket = getR2Bucket();
+  try {
+    await client.send(new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: args.body,
+      ContentType: 'video/mp4',
+      Metadata: {
+        organization_id: String(args.organizationId),
+        job_id: String(args.jobId),
+      },
+    }));
+    return key;
+  } catch {
+    return null;
+  }
+}
+
 export async function uploadPlayerMediaToR2(args: {
   organizationId: number;
   playerId: number;

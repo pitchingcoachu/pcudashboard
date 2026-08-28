@@ -2,6 +2,7 @@ import Link from 'next/link';
 import SchoolAccessCard from './school-access-card';
 import PlayerSearch from './player-search';
 import ViewModeToggle from '../view-mode-toggle';
+import ExportsCard from '../settings/exports-card';
 import {
   getClientCountByOrganization,
   getExerciseCountByOrganization,
@@ -267,6 +268,7 @@ export default async function AdminHomePage() {
           Open Dashboard
         </Link>
       </article>
+      <ExportsCard />
       {/* Admin/coach's tab bar Settings destination is this page (players
           get a dedicated /portal/settings instead) -- without this card,
           admin/coach had no reachable way to switch to the desktop site on

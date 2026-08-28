@@ -1874,6 +1874,36 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     }
   };
 
+  const reorderTrainingProgramItems = async (planSection: ProgramPlanSection, orderedItemIds: number[]) => {
+    if (!playerId) return;
+    setItems((prev) => {
+      const sectionMap = new Map<number, ProgramItemRow>();
+      for (const item of prev.filter((item) => item.scheduleType === 'plan' && item.planSection === planSection)) {
+        sectionMap.set(item.itemId, item);
+      }
+      const sectionSorted = orderedItemIds.map((id) => sectionMap.get(id)).filter((item): item is ProgramItemRow => Boolean(item));
+      const other = prev.filter((item) => !(item.scheduleType === 'plan' && item.planSection === planSection));
+      return [...other, ...sectionSorted];
+    });
+
+    setError('');
+    try {
+      const response = await fetchWithTimeout('/api/admin/schedule/plan', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ playerId, planSection, orderedItemIds }),
+      });
+      if (!response.ok) {
+        await loadItems();
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        setError(payload.error ?? 'Failed to reorder workouts.');
+      }
+    } catch (reorderError) {
+      await loadItems();
+      setError(reorderError instanceof Error ? reorderError.message : 'Failed to reorder workouts.');
+    }
+  };
+
   const updateTrainingProgramTargetCount = async (itemId: number, targetCount: number | null) => {
     if (!playerId) return;
     setError('');
@@ -2208,6 +2238,35 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     const workoutId = Number(event.dataTransfer.getData('workoutId'));
     if (!Number.isFinite(workoutId) || workoutId <= 0) return;
     await assignTrainingProgramWorkout(planSection, workoutId);
+  };
+
+  // Dropping directly onto another item's row (rather than empty space in
+  // the section container) reorders within that section when both items are
+  // already in it -- otherwise falls back to the container's move-between-
+  // sections behavior, same as dropping anywhere else in the section.
+  const onPlanItemDrop = async (
+    event: React.DragEvent<HTMLElement>,
+    planSection: ProgramPlanSection,
+    targetItemId: number
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const trainingProgramItemId = Number(event.dataTransfer.getData('trainingProgramItemId'));
+    if (!Number.isFinite(trainingProgramItemId) || trainingProgramItemId <= 0) return;
+    const sourceSection = event.dataTransfer.getData('trainingProgramItemSection');
+    if (sourceSection !== planSection) {
+      await moveTrainingProgramItem(trainingProgramItemId, planSection);
+      return;
+    }
+    if (trainingProgramItemId === targetItemId) return;
+    const sectionItemIds = trainingProgramItemsBySection[planSection].map((item) => item.itemId);
+    const from = sectionItemIds.indexOf(trainingProgramItemId);
+    const to = sectionItemIds.indexOf(targetItemId);
+    if (from < 0 || to < 0) return;
+    const next = [...sectionItemIds];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    await reorderTrainingProgramItems(planSection, next);
   };
 
   const copyThrowingDayMonth = (date: string) => {
@@ -4190,11 +4249,9 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                 View Profile
               </Link>
             ) : null}
-            {(view === 'day' || view === 'week' || view === 'plan') ? (
-              <button type="button" className="btn btn-ghost" onClick={() => setGroupAssignOpen(true)}>
-                Apply to Group...
-              </button>
-            ) : null}
+            <button type="button" className="btn btn-ghost" onClick={() => setGroupAssignOpen(true)}>
+              Apply to Group...
+            </button>
             <div className="portal-schedule-view-switch" role="group" aria-label="Calendar view">
               {(['day', 'week', 'month', 'plan', 'throwing', 'bullpens', 'drills', 'hitting', 'hitting-drills'] as ViewMode[]).map((mode) => (
                 <button
@@ -5980,6 +6037,11 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                                 event.dataTransfer.setData('trainingProgramItemId', String(item.itemId));
                                 event.dataTransfer.setData('trainingProgramItemSection', item.planSection ?? '');
                               }}
+                              onDragOver={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                              }}
+                              onDrop={(event) => void onPlanItemDrop(event, section.key, item.itemId)}
                               onClick={() => {
                                 if (selectedItemIds.size > 0) {
                                   setSelectedItemIds((prev) => {

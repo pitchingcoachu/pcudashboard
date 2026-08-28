@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
 import { resolveDashboardSchoolCode } from '../../../../lib/dashboard-access';
-import { resolveSchoolScopedOrganizationId } from '../../../../lib/programming-scope';
+import { isGlobalAdminSession, resolveSchoolScopedOrganizationId } from '../../../../lib/programming-scope';
 import { ensureAuthDbReady, getDbPool, listActiveStaffOrganizationIdsByEmail } from '../../../../lib/auth-db';
 import type { PortalSession } from '../../../../lib/portal-session';
 import type { Pool } from 'pg';
@@ -69,14 +69,6 @@ function parseGlobalAdminEmails(): string[] {
     .map((entry) => entry.trim().toLowerCase())
     .filter(Boolean);
   return Array.from(new Set(values));
-}
-
-function isGlobalAdminSession(session: PortalSession): boolean {
-  if (session.role !== 'admin') return false;
-  if (process.env.NODE_ENV !== 'production') return true;
-  const email = String(session.email ?? '').trim().toLowerCase();
-  if (!email) return false;
-  return parseGlobalAdminEmails().includes(email);
 }
 
 declare global {
@@ -212,6 +204,14 @@ async function ensureDashboardCustomReportsSchema(pool: Pool): Promise<void> {
     `);
     await client.query(`ALTER TABLE dashboard_custom_reports ADD COLUMN IF NOT EXISTS applies_to_all_schools BOOLEAN NOT NULL DEFAULT FALSE;`);
     await client.query(`ALTER TABLE dashboard_custom_reports ADD COLUMN IF NOT EXISTS created_by_email TEXT;`);
+    // 'organization' matches the pre-existing implicit default; applies_to_all_schools=TRUE
+    // rows are backfilled to 'global' below so nothing already-global silently narrows.
+    await client.query(
+      `ALTER TABLE dashboard_custom_reports ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'organization' CHECK (visibility IN ('private', 'organization', 'global'));`
+    );
+    await client.query(
+      `UPDATE dashboard_custom_reports SET visibility = 'global' WHERE applies_to_all_schools = TRUE AND visibility <> 'global';`
+    );
     await client.query(
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_dashboard_custom_reports_org_school_scope_name ON dashboard_custom_reports (organization_id, school_code, applies_to_all_schools, lower(name));`
     );
@@ -286,6 +286,13 @@ export async function GET() {
   const pool = getDbPool();
   try {
     await ensureDashboardCustomReportsSchemaBestEffort(pool);
+    // Ownership always grants access regardless of visibility (a private
+    // report must still be visible to its creator). 'global' rows are
+    // visible to anyone; 'organization' rows to any member of a scoped org
+    // (today's pre-existing default); 'private' rows are NOT granted by org
+    // membership alone. applies_to_all_schools=TRUE rows are backfilled to
+    // visibility='global' at schema-init time, so checking visibility alone
+    // is sufficient without also checking applies_to_all_schools here.
     const result = await pool.query<{
       id: number;
       name: string;
@@ -293,20 +300,23 @@ export async function GET() {
       school_code: string;
       payload_json: unknown;
       created_by_email: string | null;
+      visibility: string;
       created_at: string;
       updated_at: string;
     }>(
       `
-      SELECT id, name, applies_to_all_schools, school_code, payload_json, created_by_email, created_at, updated_at
+      SELECT id, name, applies_to_all_schools, school_code, payload_json, created_by_email, visibility, created_at, updated_at
       FROM dashboard_custom_reports
       WHERE (
-        (school_code = $2 AND (
-          $5::boolean
-          OR organization_id = ANY($1::int[])
-          OR ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
-          OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
-        ))
-        OR (applies_to_all_schools = TRUE AND LOWER(COALESCE(created_by_email, '')) = ANY($7::text[]))
+        ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
+        OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
+        OR $5::boolean
+        OR visibility = 'global'
+        OR (
+          visibility = 'organization'
+          AND school_code = $2
+          AND organization_id = ANY($1::int[])
+        )
       )
       ORDER BY updated_at DESC, id DESC
       `,
@@ -321,21 +331,24 @@ export async function GET() {
         school_code: string;
         payload_json: unknown;
         created_by_email: string | null;
+        visibility: string;
         created_at: string;
         updated_at: string;
       }>(
         `
-        SELECT id, name, applies_to_all_schools, school_code, payload_json, created_by_email, created_at, updated_at
+        SELECT id, name, applies_to_all_schools, school_code, payload_json, created_by_email, visibility, created_at, updated_at
         FROM dashboard_custom_reports
         WHERE (
-          school_code = $6 AND (
-            $4::boolean
-            OR organization_id = ANY($1::int[])
-            OR ($2::boolean AND created_by_user_id = ANY($3::bigint[]))
-            OR ($5::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($5))
+          ($2::boolean AND created_by_user_id = ANY($3::bigint[]))
+          OR ($5::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($5))
+          OR $4::boolean
+          OR visibility = 'global'
+          OR (
+            visibility = 'organization'
+            AND school_code = $6
+            AND organization_id = ANY($1::int[])
           )
         )
-        OR (applies_to_all_schools = TRUE AND LOWER(COALESCE(created_by_email, '')) = ANY($7::text[]))
         ORDER BY updated_at DESC, id DESC
         `,
         [scopedOrgIds, hasUserScope, effectiveUserIds, canShareAcrossSites, normalizedEmail, schoolCode, globalAdminEmails]
@@ -343,8 +356,10 @@ export async function GET() {
       rows = fallback.rows;
     }
     if (!rows.length) {
-      // Last-resort rescue for redeploy/session scope drift: return school/global
-      // reports rather than leaving Custom Reports blank.
+      // Last-resort rescue for redeploy/session scope drift: return
+      // school/global reports rather than leaving Custom Reports blank.
+      // Still excludes 'private' rows -- this is for org-scope drift, not a
+      // bypass of another user's private report.
       const schoolFallback = await pool.query<{
         id: number;
         name: string;
@@ -352,17 +367,18 @@ export async function GET() {
         school_code: string;
         payload_json: unknown;
         created_by_email: string | null;
+        visibility: string;
         created_at: string;
         updated_at: string;
       }>(
         `
-        SELECT id, name, applies_to_all_schools, school_code, payload_json, created_by_email, created_at, updated_at
+        SELECT id, name, applies_to_all_schools, school_code, payload_json, created_by_email, visibility, created_at, updated_at
         FROM dashboard_custom_reports
-        WHERE school_code = $1
-          OR (applies_to_all_schools = TRUE AND LOWER(COALESCE(created_by_email, '')) = ANY($2::text[]))
+        WHERE (school_code = $1 OR visibility = 'global')
+          AND visibility <> 'private'
         ORDER BY updated_at DESC, id DESC
         `,
-        [schoolCode, globalAdminEmails]
+        [schoolCode]
       );
       rows = schoolFallback.rows;
     }
@@ -404,11 +420,12 @@ export async function GET() {
         school_code: string;
         payload_json: unknown;
         created_by_email: string | null;
+        visibility: string;
         created_at: string;
         updated_at: string;
       }>(
         `
-        SELECT id, name, applies_to_all_schools, school_code, payload_json, created_by_email, created_at, updated_at
+        SELECT id, name, applies_to_all_schools, school_code, payload_json, created_by_email, visibility, created_at, updated_at
         FROM dashboard_custom_reports
         WHERE
           lower(name) = ANY($1::text[])
@@ -447,6 +464,7 @@ export async function GET() {
         applyToAllSchools: Boolean(row.applies_to_all_schools),
         payload: row.payload_json ?? {},
         createdByEmail: row.created_by_email ?? null,
+        visibility: row.visibility ?? 'organization',
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       })),
@@ -492,12 +510,23 @@ export async function POST(request: Request) {
   const pool = getDbPool();
   try {
     await ensureDashboardCustomReportsSchemaBestEffort(pool);
-    const body = (await request.json().catch(() => ({}))) as ReportPayload;
+    const body = (await request.json().catch(() => ({}))) as ReportPayload & { visibility?: string };
     const id = Number(body.id);
     const name = String(body.name ?? '').trim();
     const payload = body.payload ?? {};
     const applyToAllSchools = canShareAcrossSites ? Boolean(body.applyToAllSchools) : false;
     if (!name) return NextResponse.json({ error: 'Report name is required.' }, { status: 400 });
+    // 'global' is a global-admin-only tier; a non-admin request for it is
+    // silently downgraded to 'organization'. applyToAllSchools=true (the
+    // legacy field) forces 'global' too, so the two stay in sync.
+    const requestedVisibility = String(body.visibility ?? '').trim().toLowerCase();
+    const visibility = applyToAllSchools
+      ? 'global'
+      : requestedVisibility === 'private'
+        ? 'private'
+        : requestedVisibility === 'global' && canShareAcrossSites
+          ? 'global'
+          : 'organization';
 
     let saved;
     if (Number.isFinite(id) && id > 0) {
@@ -507,6 +536,7 @@ export async function POST(request: Request) {
         applies_to_all_schools: boolean;
         payload_json: unknown;
         created_by_email: string | null;
+        visibility: string;
         created_at: string;
         updated_at: string;
       }>(
@@ -516,22 +546,22 @@ export async function POST(request: Request) {
                applies_to_all_schools = $5,
                payload_json = $4::jsonb,
                created_by_email = CASE WHEN $9::text <> '' THEN $9::text ELSE created_by_email END,
+               visibility = $11,
                updated_at = NOW()
          WHERE id = $2
            AND (
-             $8::boolean
+             ($6::boolean AND created_by_user_id = ANY($7::bigint[]))
+             OR ($9::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($9))
+             OR $8::boolean
              OR (
-               school_code = $10
-               AND (
-                 organization_id = ANY($1::int[])
-                 OR ($6::boolean AND created_by_user_id = ANY($7::bigint[]))
-                 OR ($9::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($9))
-               )
+               visibility <> 'private'
+               AND school_code = $10
+               AND organization_id = ANY($1::int[])
              )
            )
-         RETURNING id, name, applies_to_all_schools, payload_json, created_by_email, created_at, updated_at
+         RETURNING id, name, applies_to_all_schools, payload_json, created_by_email, visibility, created_at, updated_at
         `,
-        [scopedOrgIds, id, name, JSON.stringify(payload), applyToAllSchools, hasUserScope, effectiveUserIds, canShareAcrossSites, normalizedEmail, schoolCode]
+        [scopedOrgIds, id, name, JSON.stringify(payload), applyToAllSchools, hasUserScope, effectiveUserIds, canShareAcrossSites, normalizedEmail, schoolCode, visibility]
       );
       if (!saved.rowCount) {
         return NextResponse.json({ error: 'Custom report not found.' }, { status: 404 });
@@ -543,27 +573,44 @@ export async function POST(request: Request) {
         applies_to_all_schools: boolean;
         payload_json: unknown;
         created_by_email: string | null;
+        visibility: string;
         created_at: string;
         updated_at: string;
       }>(
         `
         WITH existing AS (
+          -- A global (applies_to_all_schools) save matches an existing
+          -- same-named GLOBAL row by creator/global-admin alone, ignoring
+          -- school_code entirely -- otherwise switching schools and
+          -- re-saving forks a new per-school row instead of updating the
+          -- one shared global row. Non-global saves keep the original
+          -- org+school+name matching (any org member sharing that org/
+          -- school can update it, same as before this feature existed).
           SELECT id
           FROM dashboard_custom_reports
-          WHERE (
-            $10::boolean
-            OR (
-              school_code = $2
-              AND (
-                organization_id = ANY($1::int[])
-                OR ($7::boolean AND created_by_user_id = ANY($8::bigint[]))
-                OR ($11::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($11))
+          WHERE lower(name) = lower($3)
+            AND (
+              (
+                $6::boolean
+                AND applies_to_all_schools = TRUE
+                AND (
+                  $10::boolean
+                  OR ($7::boolean AND created_by_user_id = ANY($8::bigint[]))
+                  OR ($11::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($11))
+                )
+              )
+              OR (
+                NOT $6::boolean
+                AND school_code = $2
+                AND applies_to_all_schools = FALSE
+                AND (
+                  $10::boolean
+                  OR ($7::boolean AND created_by_user_id = ANY($8::bigint[]))
+                  OR ($11::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($11))
+                  OR organization_id = ANY($1::int[])
+                )
               )
             )
-          )
-            AND school_code = $2
-            AND applies_to_all_schools = $6
-            AND lower(name) = lower($3)
           LIMIT 1
         ),
         updated AS (
@@ -571,17 +618,18 @@ export async function POST(request: Request) {
              SET payload_json = $4::jsonb,
                  name = $3,
                  applies_to_all_schools = $6,
+                 visibility = $12,
                  updated_at = NOW()
            WHERE d.id IN (SELECT id FROM existing)
-           RETURNING d.id, d.name, d.applies_to_all_schools, d.payload_json, d.created_by_email, d.created_at, d.updated_at
+           RETURNING d.id, d.name, d.applies_to_all_schools, d.payload_json, d.created_by_email, d.visibility, d.created_at, d.updated_at
         ),
         inserted AS (
           INSERT INTO dashboard_custom_reports (
-            organization_id, school_code, applies_to_all_schools, name, payload_json, created_by_user_id, created_by_email
+            organization_id, school_code, applies_to_all_schools, name, payload_json, created_by_user_id, created_by_email, visibility
           )
-          SELECT $9, $2, $6, $3, $4::jsonb, $5, CASE WHEN $11::text <> '' THEN $11::text ELSE NULL END
+          SELECT $9, $2, $6, $3, $4::jsonb, $5, CASE WHEN $11::text <> '' THEN $11::text ELSE NULL END, $12
           WHERE NOT EXISTS (SELECT 1 FROM existing)
-          RETURNING id, name, applies_to_all_schools, payload_json, created_by_email, created_at, updated_at
+          RETURNING id, name, applies_to_all_schools, payload_json, created_by_email, visibility, created_at, updated_at
         )
         SELECT * FROM updated
         UNION ALL
@@ -600,6 +648,7 @@ export async function POST(request: Request) {
           effectivePrimaryOrganizationId,
           canShareAcrossSites,
           normalizedEmail,
+          visibility,
         ]
       );
     }
@@ -612,6 +661,7 @@ export async function POST(request: Request) {
         applyToAllSchools: Boolean(row.applies_to_all_schools),
         payload: row.payload_json ?? {},
         createdByEmail: row.created_by_email ?? null,
+        visibility: row.visibility ?? 'organization',
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       },
@@ -659,14 +709,13 @@ export async function DELETE(request: Request) {
       FROM dashboard_custom_reports
       WHERE id = $1
         AND (
-          $5::boolean
+          ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
+          OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
+          OR $5::boolean
           OR (
-            school_code = $7
-            AND (
-              organization_id = ANY($2::int[])
-              OR ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
-              OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
-            )
+            visibility <> 'private'
+            AND school_code = $7
+            AND organization_id = ANY($2::int[])
           )
         )
       LIMIT 1
@@ -685,14 +734,13 @@ export async function DELETE(request: Request) {
       DELETE FROM dashboard_custom_reports
       WHERE id = $1
         AND (
-          $5::boolean
+          ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
+          OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
+          OR $5::boolean
           OR (
-            school_code = $7
-            AND (
-              organization_id = ANY($2::int[])
-              OR ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
-              OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
-            )
+            visibility <> 'private'
+            AND school_code = $7
+            AND organization_id = ANY($2::int[])
           )
         )
       `,

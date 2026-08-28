@@ -263,6 +263,7 @@ type CustomTableConfig = {
   name: string;
   columns: string[];
   createdByEmail?: string | null;
+  visibility?: 'private' | 'organization' | 'global';
   createdAt: string;
   updatedAt: string;
 };
@@ -5189,6 +5190,13 @@ export default function PitchingSuite({
   const [customTablesLoaded, setCustomTablesLoaded] = useState(false);
   const [customTableName, setCustomTableName] = useState('');
   const [selectedCustomTableId, setSelectedCustomTableId] = useState<number | null>(null);
+  // Explicit visibility choice at save time -- switching the school selector
+  // used to silently fork a brand-new row per school for the same-named
+  // table, which is what this replaces. 'global' is only ever sent to the
+  // server when isGlobalAdminSession is true; the server downgrades it
+  // otherwise, so this is purely a UI convenience, not the real gate.
+  const [customTableVisibility, setCustomTableVisibility] = useState<'private' | 'organization' | 'global'>('organization');
+  const [isGlobalAdminForSaves, setIsGlobalAdminForSaves] = useState(false);
   const proDefaultTableAppliedRef = useRef(false);
   const gcuDefaultTableAppliedRef = useRef(false);
   const pcuDefaultTableAppliedRef = useRef(false);
@@ -5454,14 +5462,14 @@ export default function PitchingSuite({
   // video -- on by default (matches prior behavior before this toggle
   // existed), off gives a plain video-only export.
   const [actionExportShowMetrics, setActionExportShowMetrics] = useState(true);
-  const [actionExportState, setActionExportState] = useState<'idle' | 'exporting' | 'error'>('idle');
+  // Exports now render as a background job (see runActionVideoExport) --
+  // 'submitting' covers the brief POST that creates the job row, then the
+  // export finishes on its own on the server. The Settings > Exports page is
+  // the durable status/download destination; this state is only about the
+  // few-hundred-ms request that kicks the job off.
+  const [actionExportState, setActionExportState] = useState<'idle' | 'submitting' | 'submitted' | 'error'>('idle');
   const [actionExportMessage, setActionExportMessage] = useState('');
-  // Elapsed export time, driven by chunks actually arriving off the response
-  // stream (see runActionVideoExport) rather than a plain timer -- this is a
-  // multi-minute server-side ffmpeg job with no discrete progress signal, so
-  // "time elapsed while bytes keep arriving" is the only honest indicator
-  // that it's still alive rather than hung.
-  const [actionExportElapsedSeconds, setActionExportElapsedSeconds] = useState(0);
+  const [actionExportName, setActionExportName] = useState('');
   const [breakdownMode, setBreakdownMode] = useState(false);
   const [breakdownToolbarVisible, setBreakdownToolbarVisible] = useState(true);
   const [breakdownTool, setBreakdownTool] = useState<BreakdownTool>('line');
@@ -8243,6 +8251,19 @@ export default function PitchingSuite({
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    fetch('/api/dashboard/session-scope', { cache: 'no-store' })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload: { isGlobalAdmin?: boolean } | null) => {
+        if (!cancelled && payload) setIsGlobalAdminForSaves(Boolean(payload.isGlobalAdmin));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!isPro || !customTablesLoaded || proDefaultTableAppliedRef.current) return;
     const canApplyDefault = selectedCustomTableId === null && tableMode === 'Live';
     if (!canApplyDefault) return;
@@ -8350,6 +8371,7 @@ export default function PitchingSuite({
           id: selectedCustomTableId ?? undefined,
           name,
           columns: customTableColumns,
+          visibility: customTableVisibility,
         }),
       });
       const payload = (await response.json().catch(() => ({}))) as {
@@ -8365,6 +8387,7 @@ export default function PitchingSuite({
       setSelectedCustomTableId(saved.id);
       setCustomTableName(saved.name);
       setCustomTableColumns(saved.columns ?? []);
+      setCustomTableVisibility(saved.visibility ?? 'organization');
       setCustomTables((current) => {
         const next = [saved, ...current.filter((row) => row.id !== saved.id)];
         return next;
@@ -9629,12 +9652,6 @@ export default function PitchingSuite({
     a.remove();
   };
 
-  const downloadBlob = (blob: Blob, fileName: string) => {
-    const url = URL.createObjectURL(blob);
-    downloadUrl(url, fileName);
-    URL.revokeObjectURL(url);
-  };
-
   const runActionVideoExport = async () => {
     // actionPitches inherits whatever order populated the modal (e.g. the
     // Pitch Log's newest-first display order) -- a full-session export
@@ -9677,13 +9694,8 @@ export default function PitchingSuite({
       return;
     }
 
-    setActionExportState('exporting');
+    setActionExportState('submitting');
     setActionExportMessage('');
-    setActionExportElapsedSeconds(0);
-    const startedAt = Date.now();
-    const tickTimer = window.setInterval(() => {
-      setActionExportElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
-    }, 1000);
     try {
       const response = await fetch('/api/dashboard/pitching/video-export', {
         method: 'POST',
@@ -9693,38 +9705,19 @@ export default function PitchingSuite({
           camera: camerasToSend,
           mode: actionExportMode,
           showMetrics: actionExportShowMetrics,
+          name: actionExportName.trim() || undefined,
         }),
       });
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => ({}))) as { error?: string };
-        throw new Error(payload.error || 'Failed to export video.');
-      }
-      // Read the response as it streams in rather than a single blocking
-      // response.blob() -- the server sends real progress the whole time
-      // (a 15s no-op heartbeat until ffmpeg finishes, then the actual file in
-      // 64KB chunks), so this is the only way the UI can reflect "still
-      // alive" instead of looking frozen for however long the export takes.
-      const reader = response.body?.getReader();
-      if (!reader) {
-        const blob = await response.blob();
-        downloadBlob(blob, `pitch-export-${pitchEventIds.length}-clip${pitchEventIds.length === 1 ? '' : 's'}.mp4`);
-      } else {
-        const chunks: Uint8Array[] = [];
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value) chunks.push(value);
-        }
-        const blob = new Blob(chunks as BlobPart[], { type: 'video/mp4' });
-        downloadBlob(blob, `pitch-export-${pitchEventIds.length}-clip${pitchEventIds.length === 1 ? '' : 's'}.mp4`);
-      }
-      setActionExportState('idle');
-      setActionExportMenuOpen(false);
+      const payload = (await response.json().catch(() => ({}))) as { error?: string; jobId?: number };
+      if (!response.ok) throw new Error(payload.error || 'Failed to start export.');
+      // The render itself now happens server-side after this request
+      // returns -- there's nothing left to download here. Settings >
+      // Exports is where the finished file shows up once it's ready.
+      setActionExportState('submitted');
+      setActionExportName('');
     } catch (error) {
       setActionExportState('error');
-      setActionExportMessage(error instanceof Error ? error.message : 'Failed to export video.');
-    } finally {
-      window.clearInterval(tickTimer);
+      setActionExportMessage(error instanceof Error ? error.message : 'Failed to start export.');
     }
   };
 
@@ -15797,6 +15790,7 @@ export default function PitchingSuite({
                               setSelectedCustomTableId(null);
                               setCustomTableName('');
                               setCustomTableColumns([]);
+                              setCustomTableVisibility('organization');
                               setCustomSaveState('idle');
                               setCustomSaveMessage('');
                               return;
@@ -15808,6 +15802,7 @@ export default function PitchingSuite({
                             setSelectedCustomTableId(found.id);
                             setCustomTableName(found.name);
                             setCustomTableColumns(found.columns ?? []);
+                            setCustomTableVisibility(found.visibility ?? 'organization');
                             setCustomSaveState('idle');
                             setCustomSaveMessage('');
                             setAppliedFilterVersion((current) => current + 1);
@@ -15821,6 +15816,20 @@ export default function PitchingSuite({
                           value={customTableName}
                           onChange={(event) => setCustomTableName(event.target.value)}
                           placeholder="Example: OSU Live Pitching"
+                        />
+                      </label>
+                      <label>
+                        Visibility
+                        <SearchableSingleSelect
+                          options={[
+                            { value: 'private', label: 'Only Me' },
+                            { value: 'organization', label: 'My Organization' },
+                            ...(isGlobalAdminForSaves ? [{ value: 'global', label: 'All Sites' }] : []),
+                          ]}
+                          value={customTableVisibility}
+                          onChange={(next) =>
+                            setCustomTableVisibility(next === 'private' || next === 'global' ? next : 'organization')
+                          }
                         />
                       </label>
                       <label>
@@ -18876,6 +18885,26 @@ export default function PitchingSuite({
                           >
                             <div style={{ display: 'grid', gap: 6 }}>
                               <div style={{ fontSize: '0.7rem', fontWeight: 700, color: actionModalTheme.muted, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                                Export Name
+                              </div>
+                              <input
+                                type="text"
+                                value={actionExportName}
+                                onChange={(event) => setActionExportName(event.target.value)}
+                                placeholder="e.g. Dilger bullpen 8/24"
+                                maxLength={200}
+                                style={{
+                                  padding: '0.4rem 0.5rem',
+                                  borderRadius: 8,
+                                  border: `1px solid ${actionModalTheme.border}`,
+                                  background: actionModalTheme.controlBg,
+                                  color: actionModalTheme.textStrong,
+                                  fontSize: '0.85rem',
+                                }}
+                              />
+                            </div>
+                            <div style={{ display: 'grid', gap: 6 }}>
+                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: actionModalTheme.muted, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
                                 Layout
                               </div>
                               <div style={{ display: 'flex', gap: 6 }}>
@@ -19004,20 +19033,24 @@ export default function PitchingSuite({
                               style={{ padding: '0.5rem 0.75rem', fontWeight: 700 }}
                               onClick={() => void runActionVideoExport()}
                               disabled={
-                                actionExportState === 'exporting' ||
+                                actionExportState === 'submitting' ||
                                 !actionExportAvailableCameras.length ||
                                 !actionExportCameras.length ||
                                 (actionExportMode === 'combined' && actionExportCameras.length < 2)
                               }
                             >
-                              {actionExportState === 'exporting'
-                                ? `Exporting… ${String(Math.floor(actionExportElapsedSeconds / 60)).padStart(2, '0')}:${String(actionExportElapsedSeconds % 60).padStart(2, '0')}`
-                                : 'Download Export'}
+                              {actionExportState === 'submitting' ? 'Starting Export…' : 'Start Export'}
                             </button>
-                            {actionExportState === 'exporting' ? (
+                            {actionExportState === 'submitting' ? (
                               <div style={{ color: actionModalTheme.muted, fontWeight: 600, fontSize: '0.8rem' }}>
-                                Large combined exports (many pitches, multiple cameras) can take several minutes -- this is
-                                still working as long as the timer keeps counting up.
+                                Starting the export…
+                              </div>
+                            ) : null}
+                            {actionExportState === 'submitted' ? (
+                              <div style={{ color: actionModalTheme.muted, fontWeight: 600, fontSize: '0.8rem' }}>
+                                Export started — this can take several minutes for large exports. You can close this or
+                                leave the page; it&apos;ll keep rendering. Find it under Settings → Exports when it&apos;s
+                                ready, and you&apos;ll get a notification too.
                               </div>
                             ) : null}
                             {actionExportState === 'error' && actionExportMessage ? (

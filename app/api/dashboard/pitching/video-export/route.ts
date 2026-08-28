@@ -1,8 +1,7 @@
 import { cookies } from 'next/headers';
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import ffmpegPath from '@ffmpeg-installer/ffmpeg';
@@ -20,12 +19,24 @@ import {
   renderPitchExportOverlayHorizontalPng,
   PITCH_EXPORT_PANEL_WIDTH,
 } from '../../../../../lib/pitch-export-overlay';
+import { uploadVideoExportToR2 } from '../../../../../lib/biomechanics-storage';
+import {
+  createNotificationsForUsers,
+  createVideoExportJob,
+  markVideoExportJobFailed,
+  markVideoExportJobProcessing,
+  markVideoExportJobReady,
+} from '../../../../../lib/training-db';
 
-// Multi-clip download + ffmpeg re-encode/concat is a media-processing job,
-// not a normal API request. A 25-pitch, 2-camera combined export performs
-// work on roughly 50 source videos and previously hit the old 300-second
-// ceiling exactly. This project runs on Vercel Pro + Fluid Compute, whose
-// Node runtime supports the 30-minute media-processing duration.
+// The POST handler itself returns almost immediately (just creates a job
+// row), but the actual render runs inside after() -- Next.js keeps the
+// function instance alive to finish that work even though the response
+// already went out, and it's still bound by this same maxDuration. A
+// 25-pitch, 2-camera combined export performs work on roughly 50 source
+// videos and previously hit the old 300-second ceiling exactly when this
+// route was a single synchronous streamed response. This project runs on
+// Vercel Pro + Fluid Compute, whose Node runtime supports the 30-minute
+// media-processing duration.
 export const maxDuration = 1800;
 
 const MAX_PITCHES_PER_EXPORT = 50;
@@ -195,56 +206,6 @@ async function probeDurationSeconds(filePath: string): Promise<number | null> {
 // (keep the end, since iPhone recordings run continuously and the pitch
 // itself is usually right before the clip ends).
 const EXPORT_CLIP_SECONDS = 2.5;
-
-// Standard ISO Base Media File Type box emitted by ffmpeg for these H.264
-// MP4s. Sending it as the first response chunk flushes HTTP headers while
-// the export is still rendering. The identical box at the start of ffmpeg's
-// completed file is skipped when that file is streamed below.
-const STREAMING_MP4_FTYP = Buffer.from(
-  '000000206674797069736f6d0000020069736f6d69736f32617663316d703431',
-  'hex'
-);
-// A valid empty ISO BMFF `free` box. Emitting one periodically is a no-op to
-// MP4 players but prevents infrastructure from closing an otherwise-idle
-// response while ffmpeg is still rendering the real media boxes.
-const STREAMING_MP4_HEARTBEAT = Buffer.from('0000000866726565', 'hex');
-
-/** Adjusts MP4 chunk offsets after no-op boxes have been inserted between
- * `ftyp` and the rest of the original file. Chunk tables live inside `moov`;
- * searching only that top-level box avoids false matches in encoded `mdat`
- * bytes while supporting both 32-bit `stco` and 64-bit `co64` tables. */
-function adjustMp4ChunkOffsets(file: Buffer, delta: number): void {
-  if (!delta) return;
-  let cursor = 0;
-  while (cursor + 8 <= file.length) {
-    const boxSize = file.readUInt32BE(cursor);
-    const boxType = file.toString('ascii', cursor + 4, cursor + 8);
-    if (boxSize < 8 || cursor + boxSize > file.length) break;
-    if (boxType === 'moov') {
-      const moovEnd = cursor + boxSize;
-      for (let typeOffset = cursor + 12; typeOffset + 12 <= moovEnd; typeOffset += 1) {
-        const tableType = file.toString('ascii', typeOffset, typeOffset + 4);
-        if (tableType !== 'stco' && tableType !== 'co64') continue;
-        const tableStart = typeOffset - 4;
-        const tableSize = file.readUInt32BE(tableStart);
-        const entryCount = file.readUInt32BE(tableStart + 12);
-        const entryBytes = tableType === 'stco' ? 4 : 8;
-        if (tableSize < 16 || tableStart + tableSize > moovEnd || 16 + entryCount * entryBytes > tableSize) continue;
-        for (let index = 0; index < entryCount; index += 1) {
-          const entryOffset = tableStart + 16 + index * entryBytes;
-          if (tableType === 'stco') {
-            file.writeUInt32BE(file.readUInt32BE(entryOffset) + delta, entryOffset);
-          } else {
-            file.writeBigUInt64BE(file.readBigUInt64BE(entryOffset) + BigInt(delta), entryOffset);
-          }
-        }
-        typeOffset = tableStart + tableSize - 1;
-      }
-      return;
-    }
-    cursor += boxSize;
-  }
-}
 
 /** Given a clip's real duration, returns the ffmpeg trim args needed to cap
  * it at EXPORT_CLIP_SECONDS, or an empty array if it's already short enough
@@ -672,66 +633,30 @@ async function buildCombinedPitchClip(
   return addMetricsPanel(workDir, `pitch${pitchIndex}-panel`, videoPath, tileCanvasHeight, metrics);
 }
 
-export async function POST(request: Request) {
-  const session = getSessionFromRequest(request, await cookies());
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (!isDatabaseConfigured()) return NextResponse.json({ error: 'DATABASE_URL is not configured.' }, { status: 500 });
+type VideoExportRequestParams = {
+  pitchEventIds: number[];
+  camerasToExport: CameraSelection[];
+  mode: 'sequential' | 'combined';
+  showMetrics: boolean;
+  schoolCode: string;
+};
 
-  const body = (await request.json().catch(() => null)) as
-    | { pitchEventIds?: number[]; camera?: string | string[]; mode?: string; showMetrics?: boolean }
-    | null;
-  if (!body) return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
-  // Whether to burn the metrics + strike-zone side panel into the exported
-  // video -- defaults to true (matches behavior before this option existed)
-  // so older callers that don't send this field are unaffected.
-  const showMetrics = body.showMetrics !== false;
+/** Does the actual multi-clip download + ffmpeg render, exactly as this
+ * route always has, but as a plain function returning the finished MP4's
+ * local path instead of streaming bytes back to an open HTTP response --
+ * this is what runs detached (via after()) once the job row exists, so a
+ * slow/failed render can no longer take the requesting browser tab down
+ * with it. Throws on any failure; caller is responsible for job-status
+ * bookkeeping and temp-dir cleanup. */
+async function renderVideoExportFile(params: VideoExportRequestParams): Promise<string> {
+  const { pitchEventIds, camerasToExport, mode, showMetrics, schoolCode } = params;
 
-  const pitchEventIds = Array.from(
-    new Set((body.pitchEventIds ?? []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))
-  );
-  if (!pitchEventIds.length) return NextResponse.json({ error: 'At least one pitch is required.' }, { status: 400 });
-  if (pitchEventIds.length > MAX_PITCHES_PER_EXPORT) {
-    return NextResponse.json({ error: `Export is limited to ${MAX_PITCHES_PER_EXPORT} pitches at a time.` }, { status: 400 });
-  }
-
-  const camerasToExport = parseCameraSelection(body.camera ?? null);
-  // 'combined' shows every selected camera side by side per pitch, then
-  // advances to the next pitch's composite; 'sequential' (default) is the
-  // original behavior -- each camera's clips concatenated across all pitches
-  // before moving to the next camera.
-  const mode: 'sequential' | 'combined' = body.mode === 'combined' ? 'combined' : 'sequential';
-  if (mode === 'combined' && camerasToExport.length < 2) {
-    return NextResponse.json({ error: 'Combined export needs at least 2 cameras selected.' }, { status: 400 });
-  }
-
-  const schoolCode = resolveDashboardSchoolCode({
-    userId: session.userId ?? 0,
-    email: session.email,
-    name: session.name,
-    role: session.role === 'player' ? 'player' : session.role === 'coach' ? 'coach' : 'admin',
-    organizationId: session.organizationId ?? 0,
-    playerId: session.playerId ?? null,
-    dashboardSchoolCode: session.dashboardSchoolCode ?? null,
-    appUrl: session.appUrl,
-    apps: session.apps,
-  })
-    .trim()
-    .toUpperCase();
-
-  let pitches: PitchVideoUrls[];
-  try {
-    pitches = await lookupPitchVideoUrls(pitchEventIds, schoolCode);
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to resolve pitch videos.' },
-      { status: 500 }
-    );
-  }
+  const pitches = await lookupPitchVideoUrls(pitchEventIds, schoolCode);
   // Preserve the order the caller asked for (e.g. Prev/Next pitch order in
   // the modal), not whatever order the DB happened to return rows in.
   const byId = new Map(pitches.map((p) => [p.pitch_event_id, p]));
   const orderedPitches = pitchEventIds.map((id) => byId.get(id)).filter((p): p is PitchVideoUrls => Boolean(p));
-  if (!orderedPitches.length) return NextResponse.json({ error: 'No video found for the selected pitches.' }, { status: 404 });
+  if (!orderedPitches.length) throw new Error('No video found for the selected pitches.');
 
   // Metrics/location for the exported video's side panel -- best-effort:
   // export still proceeds without the panel if this lookup fails, since
@@ -772,12 +697,8 @@ export async function POST(request: Request) {
   // then freezes while the duration/timer keeps advancing) since stream
   // copy never renegotiates resolution mid-stream.
   const allUrls = Array.from(clipsByCamera.values()).flat().map((c) => c.url);
-  if (!allUrls.length) {
-    return NextResponse.json(
-      { error: 'None of the selected pitches have video for the requested camera(s).' },
-      { status: 404 }
-    );
-  }
+  if (!allUrls.length) throw new Error('None of the selected pitches have video for the requested camera(s).');
+
   const dimensions = await Promise.all(allUrls.map((url) => probeDimensions(url)));
   const dimensionsByUrl = new Map(allUrls.map((url, i) => [url, dimensions[i]]));
   const canvasWidth = Math.max(480, ...dimensions.map((d) => d?.width ?? 0));
@@ -867,38 +788,9 @@ export async function POST(request: Request) {
     }
   }
 
-  const fileName = `pitch-export-${randomUUID().slice(0, 8)}.mp4`;
-  // Commit the response headers before the expensive ffmpeg phase starts.
-  // Keeping a streaming response open prevents browser/proxy idle-header
-  // timeouts, and streaming the completed file avoids Vercel's 4.5 MB
-  // buffered Function response limit.
-  let responseCancelled = false;
-  let heartbeatBytes = 0;
-  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  const responseStream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      const enqueue = (chunk: Uint8Array): boolean => {
-        if (responseCancelled) return false;
-        try {
-          controller.enqueue(chunk);
-          return true;
-        } catch {
-          responseCancelled = true;
-          return false;
-        }
-      };
-
-      enqueue(new Uint8Array(STREAMING_MP4_FTYP));
-      heartbeatTimer = setInterval(() => {
-        if (enqueue(new Uint8Array(STREAMING_MP4_HEARTBEAT))) {
-          heartbeatBytes += STREAMING_MP4_HEARTBEAT.length;
-        }
-      }, 15_000);
-      void (async () => {
-        let workDir = '';
-        try {
-          workDir = await mkdtemp(path.join(tmpdir(), 'pcu-video-export-'));
-          let finalPath: string;
+  const workDir = await mkdtemp(path.join(tmpdir(), 'pcu-video-export-'));
+  try {
+    let finalPath: string;
 
     if (mode === 'combined') {
       // Every pitch's composite is concatenated into one final file, so all
@@ -973,57 +865,114 @@ export async function POST(request: Request) {
         finalPath = path.join(workDir, 'final-combined.mp4');
         await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', finalPath]);
       }
-          }
+    }
 
-          if (heartbeatTimer) {
-            clearInterval(heartbeatTimer);
-            heartbeatTimer = null;
-          }
-          const fileBuffer = await readFile(finalPath);
-          const originalFtypSize =
-            fileBuffer.length >= 8 && fileBuffer.toString('ascii', 4, 8) === 'ftyp'
-              ? fileBuffer.readUInt32BE(0)
-              : 0;
-          if (originalFtypSize < 8 || originalFtypSize > fileBuffer.length) {
-            throw new Error('Rendered MP4 is missing a valid file-type box.');
-          }
-          adjustMp4ChunkOffsets(
-            fileBuffer,
-            STREAMING_MP4_FTYP.length + heartbeatBytes - originalFtypSize
-          );
-          const responseChunkBytes = 64 * 1024;
-          for (let offset = originalFtypSize; offset < fileBuffer.length; offset += responseChunkBytes) {
-            const end = Math.min(fileBuffer.length, offset + responseChunkBytes);
-            if (!enqueue(new Uint8Array(fileBuffer.subarray(offset, end)))) break;
-          }
-          if (!responseCancelled) controller.close();
-        } catch (error) {
-          if (!responseCancelled) {
-            console.error('[video-export] streaming export failed', error);
-            try {
-              controller.error(error);
-            } catch {
-              responseCancelled = true;
-            }
-          }
-        } finally {
-          if (heartbeatTimer) clearInterval(heartbeatTimer);
-          if (workDir) await rm(workDir, { recursive: true, force: true });
-        }
-      })();
-    },
-    cancel() {
-      responseCancelled = true;
-      if (heartbeatTimer) clearInterval(heartbeatTimer);
-    },
+    // Copy out of workDir before it's cleaned up below -- the caller uploads
+    // this to R2 and is responsible for deleting it once done.
+    const finalOutPath = path.join(tmpdir(), `pcu-video-export-final-${path.basename(workDir)}.mp4`);
+    await writeFile(finalOutPath, await readFile(finalPath));
+    return finalOutPath;
+  } finally {
+    await rm(workDir, { recursive: true, force: true });
+  }
+}
+
+export async function POST(request: Request) {
+  const session = getSessionFromRequest(request, await cookies());
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!isDatabaseConfigured()) return NextResponse.json({ error: 'DATABASE_URL is not configured.' }, { status: 500 });
+
+  const body = (await request.json().catch(() => null)) as
+    | { pitchEventIds?: number[]; camera?: string | string[]; mode?: string; showMetrics?: boolean; name?: string }
+    | null;
+  if (!body) return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
+  // Whether to burn the metrics + strike-zone side panel into the exported
+  // video -- defaults to true (matches behavior before this option existed)
+  // so older callers that don't send this field are unaffected.
+  const showMetrics = body.showMetrics !== false;
+
+  const pitchEventIds = Array.from(
+    new Set((body.pitchEventIds ?? []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))
+  );
+  if (!pitchEventIds.length) return NextResponse.json({ error: 'At least one pitch is required.' }, { status: 400 });
+  if (pitchEventIds.length > MAX_PITCHES_PER_EXPORT) {
+    return NextResponse.json({ error: `Export is limited to ${MAX_PITCHES_PER_EXPORT} pitches at a time.` }, { status: 400 });
+  }
+
+  const camerasToExport = parseCameraSelection(body.camera ?? null);
+  // 'combined' shows every selected camera side by side per pitch, then
+  // advances to the next pitch's composite; 'sequential' (default) is the
+  // original behavior -- each camera's clips concatenated across all pitches
+  // before moving to the next camera.
+  const mode: 'sequential' | 'combined' = body.mode === 'combined' ? 'combined' : 'sequential';
+  if (mode === 'combined' && camerasToExport.length < 2) {
+    return NextResponse.json({ error: 'Combined export needs at least 2 cameras selected.' }, { status: 400 });
+  }
+
+  const schoolCode = resolveDashboardSchoolCode({
+    userId: session.userId ?? 0,
+    email: session.email,
+    name: session.name,
+    role: session.role === 'player' ? 'player' : session.role === 'coach' ? 'coach' : 'admin',
+    organizationId: session.organizationId ?? 0,
+    playerId: session.playerId ?? null,
+    dashboardSchoolCode: session.dashboardSchoolCode ?? null,
+    appUrl: session.appUrl,
+    apps: session.apps,
+  })
+    .trim()
+    .toUpperCase();
+
+  const organizationId = Number(session.organizationId ?? 0);
+  const userId = Number(session.userId ?? 0);
+  const jobName =
+    String(body.name ?? '').trim().slice(0, 200) ||
+    `Pitch export (${pitchEventIds.length} pitch${pitchEventIds.length === 1 ? '' : 'es'})`;
+
+  const jobId = await createVideoExportJob({
+    organizationId,
+    requestedByUserId: userId,
+    name: jobName,
+    requestParams: { pitchEventIds, camerasToExport, mode, showMetrics, schoolCode },
   });
 
-  return new NextResponse(responseStream, {
-    status: 200,
-    headers: {
-      'Content-Type': 'video/mp4',
-      'Content-Disposition': `attachment; filename="${fileName}"`,
-      'X-Content-Type-Options': 'nosniff',
-    },
+  after(async () => {
+    try {
+      await markVideoExportJobProcessing(jobId);
+      const finalOutPath = await renderVideoExportFile({ pitchEventIds, camerasToExport, mode, showMetrics, schoolCode });
+      try {
+        const fileBuffer = await readFile(finalOutPath);
+        const fileStat = await stat(finalOutPath);
+        const r2Key = await uploadVideoExportToR2({ organizationId, jobId, body: fileBuffer });
+        if (!r2Key) throw new Error('Failed to store the finished export.');
+        await markVideoExportJobReady({ jobId, r2Key, fileSizeBytes: fileStat.size });
+      } finally {
+        await rm(finalOutPath, { force: true });
+      }
+      if (userId > 0) {
+        await createNotificationsForUsers({
+          recipientUserIds: [userId],
+          eventType: 'video_export_complete',
+          title: 'Video export ready',
+          detail: `"${jobName}" finished rendering and is ready to download.`,
+          path: '/portal/settings',
+        }).catch(() => {});
+        const { sendPushNotificationToUsers } = await import('../../../../../lib/push-notifications');
+        await sendPushNotificationToUsers({
+          userIds: [userId],
+          title: 'Video export ready',
+          body: `"${jobName}" finished rendering and is ready to download.`,
+          data: { type: 'video_export_complete', jobId },
+        }).catch(() => {});
+      }
+    } catch (error) {
+      console.error('[video-export] background render failed', error);
+      await markVideoExportJobFailed({
+        jobId,
+        errorMessage: error instanceof Error ? error.message : 'Export failed.',
+      }).catch(() => {});
+    }
   });
+
+  return NextResponse.json({ ok: true, jobId }, { status: 202 });
 }

@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
-import { getSessionFromCookies } from '../../../../lib/auth';
+import { getSessionFromRequest } from '../../../../lib/auth';
 import { listExerciseTrendForPlayer } from '../../../../lib/training-db';
 import { canManagePlayer } from '../../../../lib/portal-access';
 import { logApiTiming } from '../../../../lib/request-timing';
@@ -19,7 +19,7 @@ export async function GET(request: Request) {
     return NextResponse.json(payload, { status });
   };
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return finish(401, { error: 'Unauthorized' });
 
   const url = new URL(request.url);

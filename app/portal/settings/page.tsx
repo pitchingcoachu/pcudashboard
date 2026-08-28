@@ -13,6 +13,9 @@ import PortalThemeToggle from '../theme-toggle';
 import PortalNotificationsBell from '../notifications-bell';
 import PortalMessagesNavButton from '../messages-nav-button';
 import ViewModeToggle from '../view-mode-toggle';
+import ExportsCard from './exports-card';
+import NotificationsCard from './notifications-card';
+import MySavedViewsCard from './my-saved-views-card';
 
 export default async function PortalSettingsPage() {
   const session = await requirePortalSession();
@@ -93,6 +96,12 @@ export default async function PortalSettingsPage() {
           </p>
           <ViewModeToggle viewMode={viewMode} />
         </article>
+
+        {isStaff ? <NotificationsCard /> : null}
+
+        <ExportsCard />
+
+        {isStaff ? <MySavedViewsCard /> : null}
 
         <article className="portal-admin-card">
           <h2>Theme</h2>

@@ -602,6 +602,12 @@ export async function ensureTrainingDbReady(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
+    // 'organization' matches the pre-existing implicit default (any org
+    // member could already see any org-scoped table) -- adding this column
+    // must not silently hide anything that was previously visible.
+    await pool.query(
+      `ALTER TABLE dashboard_custom_tables ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'organization' CHECK (visibility IN ('private', 'organization', 'global'));`
+    );
     await pool.query(
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_dashboard_custom_tables_org_school_name ON dashboard_custom_tables (organization_id, school_code, lower(name));`
     );
@@ -2039,6 +2045,145 @@ export async function listGroupIdsForPlayer(input: { playerId: number }): Promis
   const pool = getDbPool();
   const result = await pool.query<{ group_id: number }>(`SELECT group_id FROM player_group_members WHERE player_id = $1`, [input.playerId]);
   return result.rows.map((row) => row.group_id);
+}
+
+export type VideoExportJobStatus = 'queued' | 'processing' | 'ready' | 'failed';
+
+export type VideoExportJobRow = {
+  id: number;
+  name: string;
+  status: VideoExportJobStatus;
+  errorMessage: string | null;
+  fileSizeBytes: number | null;
+  createdAt: string;
+  completedAt: string | null;
+};
+
+export async function createVideoExportJob(input: {
+  organizationId: number;
+  requestedByUserId: number;
+  name: string;
+  requestParams: Record<string, unknown>;
+}): Promise<number> {
+  if (!isDatabaseConfigured()) throw new Error('DATABASE_URL is not configured.');
+  await ensureAuthDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{ id: number }>(
+    `
+      INSERT INTO video_export_jobs (organization_id, requested_by_user_id, name, status, request_params)
+      VALUES ($1, $2, $3, 'queued', $4::jsonb)
+      RETURNING id
+    `,
+    [input.organizationId, input.requestedByUserId, input.name.trim() || 'Untitled Export', JSON.stringify(input.requestParams)]
+  );
+  return result.rows[0].id;
+}
+
+export async function markVideoExportJobProcessing(jobId: number): Promise<void> {
+  if (!isDatabaseConfigured()) return;
+  const pool = getDbPool();
+  await pool.query(`UPDATE video_export_jobs SET status = 'processing' WHERE id = $1`, [jobId]);
+}
+
+export async function markVideoExportJobReady(input: { jobId: number; r2Key: string; fileSizeBytes: number }): Promise<void> {
+  if (!isDatabaseConfigured()) return;
+  const pool = getDbPool();
+  await pool.query(
+    `UPDATE video_export_jobs SET status = 'ready', r2_key = $2, file_size_bytes = $3, completed_at = NOW() WHERE id = $1`,
+    [input.jobId, input.r2Key, input.fileSizeBytes]
+  );
+}
+
+export async function markVideoExportJobFailed(input: { jobId: number; errorMessage: string }): Promise<void> {
+  if (!isDatabaseConfigured()) return;
+  const pool = getDbPool();
+  await pool.query(
+    `UPDATE video_export_jobs SET status = 'failed', error_message = $2, completed_at = NOW() WHERE id = $1`,
+    [input.jobId, input.errorMessage.slice(0, 2000)]
+  );
+}
+
+// Scoped to the requesting user (not the whole org) -- exports are a
+// personal download list, like a browser's download history, not a shared
+// coach/admin resource the way Player Groups or the roster is.
+export async function listVideoExportJobsForUser(input: { userId: number; limit?: number }): Promise<VideoExportJobRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureAuthDbReady();
+  const pool = getDbPool();
+  const limit = Math.max(1, Math.min(200, input.limit ?? 50));
+  const result = await pool.query<{
+    id: number;
+    name: string;
+    status: VideoExportJobStatus;
+    error_message: string | null;
+    file_size_bytes: string | null;
+    created_at: string;
+    completed_at: string | null;
+  }>(
+    `
+      SELECT id, name, status, error_message, file_size_bytes::text, created_at::text, completed_at::text
+      FROM video_export_jobs
+      WHERE requested_by_user_id = $1
+      ORDER BY created_at DESC
+      LIMIT $2
+    `,
+    [input.userId, limit]
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    status: row.status,
+    errorMessage: row.error_message,
+    fileSizeBytes: row.file_size_bytes ? Number(row.file_size_bytes) : null,
+    createdAt: row.created_at,
+    completedAt: row.completed_at,
+  }));
+}
+
+export async function getVideoExportJobForUser(input: { userId: number; jobId: number }): Promise<(VideoExportJobRow & { r2Key: string | null }) | null> {
+  if (!isDatabaseConfigured()) return null;
+  await ensureAuthDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{
+    id: number;
+    name: string;
+    status: VideoExportJobStatus;
+    error_message: string | null;
+    file_size_bytes: string | null;
+    r2_key: string | null;
+    created_at: string;
+    completed_at: string | null;
+  }>(
+    `
+      SELECT id, name, status, error_message, file_size_bytes::text, r2_key, created_at::text, completed_at::text
+      FROM video_export_jobs
+      WHERE id = $1 AND requested_by_user_id = $2
+      LIMIT 1
+    `,
+    [input.jobId, input.userId]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    status: row.status,
+    errorMessage: row.error_message,
+    fileSizeBytes: row.file_size_bytes ? Number(row.file_size_bytes) : null,
+    r2Key: row.r2_key,
+    createdAt: row.created_at,
+    completedAt: row.completed_at,
+  };
+}
+
+export async function deleteVideoExportJobForUser(input: { userId: number; jobId: number }): Promise<string | null> {
+  if (!isDatabaseConfigured()) return null;
+  const pool = getDbPool();
+  const result = await pool.query<{ r2_key: string | null }>(
+    `DELETE FROM video_export_jobs WHERE id = $1 AND requested_by_user_id = $2 RETURNING r2_key`,
+    [input.jobId, input.userId]
+  );
+  return result.rows[0]?.r2_key ?? null;
 }
 
 export async function getClientCountByOrganization(input: {
@@ -6297,6 +6442,18 @@ export async function listProgramItemsForPlayerByDateRange(input: {
   }));
 }
 
+// program_cycle_items / program_plan_items are recurring assignments (unlike
+// program_day_items, which get a fresh row per calendar day), so "what did
+// they last log for this item" must be scoped to today or a stale value from
+// a prior day leaks into a brand-new session as a pre-filled default. Uses
+// the same America/Phoenix day boundary as the questionnaire helpers below
+// (todayIsoForQuestionnaires) since the app has no per-org timezone config.
+const PROGRAM_LOG_DAY_TIME_ZONE = 'America/Phoenix';
+
+function todayIsoForProgramLogs(): string {
+  return isoDateInTimeZone(new Date(), PROGRAM_LOG_DAY_TIME_ZONE);
+}
+
 export async function listCycleProgramItemsForPlayer(input: { playerId: number }): Promise<ProgramItemRow[]> {
   if (!isDatabaseConfigured()) return [];
   await ensureTrainingDbReady();
@@ -6392,6 +6549,7 @@ export async function listCycleProgramItemsForPlayer(input: { playerId: number }
         WHERE eh.player_id = ci.player_id
           AND eh.schedule_type = 'cycle'
           AND eh.cycle_item_id = ci.id
+          AND (eh.logged_at AT TIME ZONE 'America/Phoenix')::date = $2::date
         ORDER BY eh.logged_at DESC, eh.id DESC
         LIMIT 1
       ) h ON TRUE
@@ -6408,13 +6566,10 @@ export async function listCycleProgramItemsForPlayer(input: { playerId: number }
         ci.sort_order ASC,
         ci.id ASC
     `,
-    [input.playerId]
+    [input.playerId, todayIsoForProgramLogs()]
   );
 
-  const today = new Date();
-  const dayDate = `${today.getUTCFullYear()}-${String(today.getUTCMonth() + 1).padStart(2, '0')}-${String(
-    today.getUTCDate()
-  ).padStart(2, '0')}`;
+  const dayDate = todayIsoForProgramLogs();
 
   return result.rows.map((row) => ({
     workoutExercises: Array.isArray(row.workout_exercise_json)
@@ -6563,6 +6718,7 @@ export async function listPlanProgramItemsForPlayer(input: { playerId: number })
         WHERE eh.player_id = pi.player_id
           AND eh.schedule_type = 'plan'
           AND eh.plan_item_id = pi.id
+          AND (eh.logged_at AT TIME ZONE 'America/Phoenix')::date = $2::date
         ORDER BY eh.logged_at DESC, eh.id DESC
         LIMIT 1
       ) latest ON TRUE
@@ -6591,13 +6747,10 @@ export async function listPlanProgramItemsForPlayer(input: { playerId: number })
         pi.sort_order ASC,
         pi.id ASC
     `,
-    [input.playerId]
+    [input.playerId, todayIsoForProgramLogs()]
   );
 
-  const today = new Date();
-  const dayDate = `${today.getUTCFullYear()}-${String(today.getUTCMonth() + 1).padStart(2, '0')}-${String(
-    today.getUTCDate()
-  ).padStart(2, '0')}`;
+  const dayDate = todayIsoForProgramLogs();
 
   return result.rows.map((row) => ({
     workoutExercises: Array.isArray(row.workout_exercise_json)
@@ -6756,6 +6909,58 @@ export async function movePlanProgramItem(input: {
   );
 
   return { ok: true };
+}
+
+// Mirrors reorderProgramDayItems' validate-then-transactional-update shape,
+// but scoped to a player+section (plan items are recurring, not date-bound,
+// so there's no program_days/day_date join here -- the whole section's
+// current member set is the equivalent of "that day's items").
+export async function reorderPlanProgramItems(input: {
+  organizationId: number;
+  playerId: number;
+  planSection: string;
+  orderedItemIds: number[];
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const section = normalizePlanSection(input.planSection);
+  if (!section) return { ok: false, error: 'Plan section must be daily_prep, throwing, post_throw_arm_care, s_and_c, or movement_mobility.' };
+  const itemIds = input.orderedItemIds.filter((id) => Number.isFinite(id) && id > 0);
+  if (itemIds.length === 0) return { ok: false, error: 'No items to reorder.' };
+
+  const result = await pool.query<{ item_id: number }>(
+    `
+      SELECT id AS item_id
+      FROM program_plan_items
+      WHERE organization_id = $1 AND player_id = $2 AND plan_section = $3
+      ORDER BY sort_order ASC, id ASC
+    `,
+    [input.organizationId, input.playerId, section]
+  );
+
+  const existingIds = result.rows.map((row) => row.item_id);
+  if (existingIds.length !== itemIds.length) return { ok: false, error: 'Reorder payload does not match section items.' };
+  const existingSet = new Set(existingIds);
+  if (itemIds.some((id) => !existingSet.has(id))) return { ok: false, error: 'One or more items are invalid for that section.' };
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    let sortOrder = 1;
+    for (const itemId of itemIds) {
+      await client.query(`UPDATE program_plan_items SET sort_order = $1, updated_at = NOW() WHERE id = $2`, [sortOrder, itemId]);
+      sortOrder += 1;
+    }
+    await client.query('COMMIT');
+    return { ok: true };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    return { ok: false, error: error instanceof Error ? error.message : 'Failed to reorder items.' };
+  } finally {
+    client.release();
+  }
 }
 
 export async function deletePlanProgramItem(input: {
@@ -7195,7 +7400,7 @@ export async function listExerciseLoadHistoryForPlayer(input: {
       WITH history_rows AS (
         SELECT
           COALESCE(d.day_date, h.logged_at::date)::text AS day_date,
-          COALESCE(w.name, cw.name, e.name, 'Assignment') AS source_name,
+          COALESCE(w.name, cw.name, pw.name, e.name, 'Assignment') AS source_name,
           i.exercise_id,
           i.prescribed_reps,
           COALESCE(e.rep_measure, 'reps') AS rep_measure,
@@ -7204,6 +7409,7 @@ export async function listExerciseLoadHistoryForPlayer(input: {
           h.performed_load,
           CASE
             WHEN h.schedule_type = 'cycle' THEN cws.exercise_json
+            WHEN h.schedule_type = 'plan' THEN pws.exercise_json
             ELSE ws.exercise_json
           END AS workout_exercise_json
         FROM exercise_log_history h
@@ -7213,6 +7419,30 @@ export async function listExerciseLoadHistoryForPlayer(input: {
         LEFT JOIN workout_library w ON w.id = i.workout_id
         LEFT JOIN program_cycle_items ci ON ci.id = h.cycle_item_id
         LEFT JOIN workout_library cw ON cw.id = ci.workout_id
+        LEFT JOIN program_plan_items pi2 ON pi2.id = h.plan_item_id
+        LEFT JOIN workout_library pw ON pw.id = pi2.workout_id
+        LEFT JOIN LATERAL (
+          SELECT
+            COALESCE(
+              JSON_AGG(
+                JSON_BUILD_OBJECT(
+                  'exerciseId', e2.id,
+                  'prescribedSets', we2.prescribed_sets,
+                  'prescribedReps', we2.prescribed_reps,
+                  'prescribedLoad', we2.prescribed_load,
+                  'notes', we2.notes,
+                  'repMeasure', e2.rep_measure,
+                  'trackingType', e2.tracking_type,
+                  'repsPerSide', e2.reps_per_side
+                )
+                ORDER BY we2.sort_order, e2.name
+              ),
+              '[]'::json
+            ) AS exercise_json
+          FROM workout_exercises we2
+          JOIN exercise_library e2 ON e2.id = we2.exercise_id
+          WHERE we2.workout_id = pi2.workout_id
+        ) pws ON TRUE
         LEFT JOIN LATERAL (
           SELECT
             COALESCE(
@@ -7260,7 +7490,7 @@ export async function listExerciseLoadHistoryForPlayer(input: {
         WHERE h.player_id = $1
           AND h.performed_load IS NOT NULL
           AND LENGTH(TRIM(h.performed_load)) > 0
-          AND COALESCE(LOWER(w.category), LOWER(cw.category), '') <> 'assessment'
+          AND COALESCE(LOWER(w.category), LOWER(cw.category), LOWER(pw.category), '') <> 'assessment'
           AND (
             i.exercise_id = ANY($2::int[])
             OR EXISTS (
@@ -7273,6 +7503,12 @@ export async function listExerciseLoadHistoryForPlayer(input: {
               SELECT 1
               FROM workout_exercises wx
               WHERE wx.workout_id = ci.workout_id
+                AND wx.exercise_id = ANY($2::int[])
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM workout_exercises wx
+              WHERE wx.workout_id = pi2.workout_id
                 AND wx.exercise_id = ANY($2::int[])
             )
           )
@@ -7794,6 +8030,120 @@ export async function upsertExerciseLog(input: {
     [input.playerId, input.itemId, performedSets, performedReps, performedLoad, input.completed, notes, input.loggedByUserId]
   );
   _invalidateTrainingReadCacheForPlayer(input.playerId);
+}
+
+export type ExerciseLogHistoryItemEntry = {
+  id: number;
+  dayDate: string;
+  loggedAt: string;
+  completed: boolean;
+  performedSets: string | null;
+  performedReps: string | null;
+  performedLoad: string | null;
+  notes: string | null;
+};
+
+// Recurring (cycle/plan) items reuse the same item id across every day a
+// player logs it, so upsertExerciseLog/listCycleProgramItemsForPlayer only
+// ever surface "today's" entry. This lists every past day's entry for one
+// item so a coach/player can review or correct an earlier session -- source
+// of truth is exercise_log_history, grouped to one row per Phoenix-local day
+// (a player re-saving the same day's log multiple times should show as one
+// editable entry, using the latest save for that day).
+export async function listExerciseLogHistoryForItem(input: {
+  playerId: number;
+  itemId: number;
+  scheduleType: 'cycle' | 'plan';
+  limit?: number;
+}): Promise<ExerciseLogHistoryItemEntry[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const limit = Math.max(1, Math.min(200, input.limit ?? 60));
+  const itemColumn = input.scheduleType === 'cycle' ? 'cycle_item_id' : 'plan_item_id';
+
+  const result = await pool.query<{
+    id: number;
+    day_date: string;
+    logged_at: string;
+    completed: boolean;
+    performed_sets: string | null;
+    performed_reps: string | null;
+    performed_load: string | null;
+    notes: string | null;
+  }>(
+    `
+      SELECT DISTINCT ON ((logged_at AT TIME ZONE 'America/Phoenix')::date)
+        id,
+        (logged_at AT TIME ZONE 'America/Phoenix')::date::text AS day_date,
+        logged_at::text AS logged_at,
+        completed,
+        performed_sets,
+        performed_reps,
+        performed_load,
+        notes
+      FROM exercise_log_history
+      WHERE player_id = $1
+        AND schedule_type = $2
+        AND ${itemColumn} = $3
+      ORDER BY (logged_at AT TIME ZONE 'America/Phoenix')::date DESC, logged_at DESC, id DESC
+      LIMIT $4
+    `,
+    [input.playerId, input.scheduleType, input.itemId, limit]
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    dayDate: row.day_date,
+    loggedAt: row.logged_at,
+    completed: row.completed,
+    performedSets: row.performed_sets,
+    performedReps: row.performed_reps,
+    performedLoad: row.performed_load,
+    notes: row.notes,
+  }));
+}
+
+// Edits a single past day's history row in place (rather than inserting a
+// new one), since exercise_log_history is otherwise append-only and the
+// "one row per day" grouping above needs that row's content to be exactly
+// what a coach/player corrected it to, not a duplicate.
+export async function updateExerciseLogHistoryEntry(input: {
+  playerId: number;
+  scheduleType: 'cycle' | 'plan';
+  itemId: number;
+  historyId: number;
+  performedSets?: string;
+  performedReps?: string;
+  performedLoad?: string;
+  notes?: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const itemColumn = input.scheduleType === 'cycle' ? 'cycle_item_id' : 'plan_item_id';
+  const performedSets = (input.performedSets ?? '').trim() || null;
+  const performedReps = (input.performedReps ?? '').trim() || null;
+  const performedLoad = (input.performedLoad ?? '').trim() || null;
+  const notes = (input.notes ?? '').trim() || null;
+
+  const result = await pool.query(
+    `
+      UPDATE exercise_log_history
+      SET performed_sets = $1,
+          performed_reps = $2,
+          performed_load = $3,
+          notes = $4
+      WHERE id = $5
+        AND player_id = $6
+        AND schedule_type = $7
+        AND ${itemColumn} = $8
+    `,
+    [performedSets, performedReps, performedLoad, notes, input.historyId, input.playerId, input.scheduleType, input.itemId]
+  );
+  if ((result.rowCount ?? 0) === 0) return { ok: false, error: 'Log entry was not found.' };
+  _invalidateTrainingReadCacheForPlayer(input.playerId);
+  return { ok: true };
 }
 
 export async function getPlayerNotificationContext(input: {
@@ -9725,6 +10075,17 @@ export async function listTrackedExercisesForPlayer(input: { playerId: number })
           AND h.performed_load IS NOT NULL
           AND LENGTH(TRIM(h.performed_load)) > 0
       ),
+      history_workout_plan AS (
+        SELECT DISTINCT we.exercise_id
+        FROM exercise_log_history h
+        JOIN program_plan_items pi ON pi.id = h.plan_item_id
+        JOIN workout_exercises we ON we.workout_id = pi.workout_id
+        JOIN workout_library wl ON wl.id = pi.workout_id
+        WHERE h.player_id = $1
+          AND COALESCE(LOWER(wl.category), '') <> 'assessment'
+          AND h.performed_load IS NOT NULL
+          AND LENGTH(TRIM(h.performed_load)) > 0
+      ),
       legacy_direct AS (
         SELECT DISTINCT i.exercise_id
         FROM programs p
@@ -9762,6 +10123,8 @@ export async function listTrackedExercisesForPlayer(input: { playerId: number })
         SELECT exercise_id FROM history_workout_calendar
         UNION
         SELECT exercise_id FROM history_workout_cycle
+        UNION
+        SELECT exercise_id FROM history_workout_plan
         UNION
         SELECT exercise_id FROM legacy_direct
         UNION
