@@ -65,6 +65,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
 
   const moreItemsCompact = [
     { href: '/profiles', label: 'Profiles' },
+    { href: '/portal/admin/clients/groups', label: 'Player Groups' },
     ...(showCoachClientTabs ? [{ href: '/portal/admin/coaches', label: 'Coaches' }] : []),
     { href: '/portal/admin/exercises', label: 'Exercise Library' },
     { href: '/portal/admin/workouts', label: 'Workout Library' },
@@ -81,6 +82,9 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   const moreItemsClientManagement = [
     ...((session.role === 'admin' || session.role === 'coach') && showCoachClientTabs
       ? [{ href: '/portal/admin/clients', label: 'Players' }]
+      : []),
+    ...((session.role === 'admin' || session.role === 'coach') && showCoachClientTabs
+      ? [{ href: '/portal/admin/clients/groups', label: 'Player Groups' }]
       : []),
     ...((session.role === 'admin' || session.role === 'coach') && showCoachClientTabs
       ? [{ href: '/portal/admin/coaches', label: 'Coaches' }]

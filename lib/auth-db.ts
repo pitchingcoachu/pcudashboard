@@ -482,6 +482,28 @@ export async function ensureAuthDbReady(): Promise<void> {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS player_groups (
+      id SERIAL PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      created_by_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_player_groups_org_name ON player_groups (organization_id, LOWER(name));`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS player_group_members (
+      group_id INTEGER NOT NULL REFERENCES player_groups(id) ON DELETE CASCADE,
+      player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      added_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (group_id, player_id)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_group_members_player ON player_group_members (player_id);`);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS player_plan_goals (
       id SERIAL PRIMARY KEY,
       player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,

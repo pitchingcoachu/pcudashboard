@@ -1828,6 +1828,219 @@ export async function listPlayerSummariesByOrganization(input: {
   });
 }
 
+export type PlayerGroupRow = {
+  id: number;
+  name: string;
+  memberCount: number;
+  createdAt: string;
+};
+
+export type PlayerGroupWithMembersRow = {
+  id: number;
+  name: string;
+  members: PlayerSummaryRow[];
+};
+
+// Groups are intentionally never exposed to the player role -- coaches/admins
+// only, enforced at the API layer (no /api/player/groups route exists at
+// all), matching the player_plan_notes.player_visible pattern used elsewhere
+// for coach-authored, player-hidden content.
+export async function listPlayerGroups(input: { organizationId: number }): Promise<PlayerGroupRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{ id: number; name: string; member_count: string; created_at: string }>(
+    `
+      SELECT g.id, g.name, COUNT(m.player_id)::text AS member_count, g.created_at::text
+      FROM player_groups g
+      LEFT JOIN player_group_members m ON m.group_id = g.id
+      WHERE g.organization_id = $1
+      GROUP BY g.id, g.name, g.created_at
+      ORDER BY g.name ASC
+    `,
+    [input.organizationId]
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    memberCount: Number(row.member_count),
+    createdAt: row.created_at,
+  }));
+}
+
+export async function getPlayerGroupWithMembers(input: {
+  organizationId: number;
+  groupId: number;
+}): Promise<PlayerGroupWithMembersRow | null> {
+  if (!isDatabaseConfigured()) return null;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const groupResult = await pool.query<{ id: number; name: string }>(
+    `SELECT id, name FROM player_groups WHERE id = $1 AND organization_id = $2`,
+    [input.groupId, input.organizationId]
+  );
+  const group = groupResult.rows[0];
+  if (!group) return null;
+  const membersResult = await pool.query<{
+    player_id: number;
+    full_name: string;
+    assigned_coach_user_id: number | null;
+    throws_hand: string | null;
+    bats_hand: string | null;
+    position: string | null;
+  }>(
+    `
+      SELECT p.id AS player_id, p.full_name, p.assigned_coach_user_id, p.throws_hand, p.bats_hand, p.position
+      FROM player_group_members m
+      JOIN players p ON p.id = m.player_id
+      WHERE m.group_id = $1
+      ORDER BY p.full_name ASC
+    `,
+    [input.groupId]
+  );
+  return {
+    id: group.id,
+    name: group.name,
+    members: membersResult.rows.map((row) => ({
+      playerId: row.player_id,
+      fullName: row.full_name,
+      assignedCoachUserId: row.assigned_coach_user_id,
+      throwsHand: row.throws_hand,
+      batsHand: row.bats_hand,
+      position: row.position,
+    })),
+  };
+}
+
+/** Player ids for a group, scoped to the organization -- the fan-out source
+ * for "apply this workout to the whole group" actions. Returns [] (not an
+ * error) for a group id that doesn't belong to this organization, so callers
+ * that build an assignment list can safely treat it as "no members." */
+export async function listPlayerIdsForGroup(input: { organizationId: number; groupId: number }): Promise<number[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{ player_id: number }>(
+    `
+      SELECT m.player_id
+      FROM player_group_members m
+      JOIN player_groups g ON g.id = m.group_id
+      WHERE m.group_id = $1 AND g.organization_id = $2
+    `,
+    [input.groupId, input.organizationId]
+  );
+  return result.rows.map((row) => row.player_id);
+}
+
+export async function createPlayerGroup(input: {
+  organizationId: number;
+  name: string;
+  createdByUserId: number;
+}): Promise<{ ok: true; groupId: number } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const name = input.name.trim();
+  if (!name) return { ok: false, error: 'Group name is required.' };
+  try {
+    const result = await pool.query<{ id: number }>(
+      `INSERT INTO player_groups (organization_id, name, created_by_user_id) VALUES ($1, $2, $3) RETURNING id`,
+      [input.organizationId, name, input.createdByUserId]
+    );
+    return { ok: true, groupId: result.rows[0].id };
+  } catch (err) {
+    if (err instanceof Error && /unique/i.test(err.message)) {
+      return { ok: false, error: `A group named "${name}" already exists.` };
+    }
+    return { ok: false, error: 'Failed to create group.' };
+  }
+}
+
+export async function renamePlayerGroup(input: {
+  organizationId: number;
+  groupId: number;
+  name: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const name = input.name.trim();
+  if (!name) return { ok: false, error: 'Group name is required.' };
+  try {
+    const result = await pool.query(
+      `UPDATE player_groups SET name = $1, updated_at = NOW() WHERE id = $2 AND organization_id = $3`,
+      [name, input.groupId, input.organizationId]
+    );
+    if (result.rowCount === 0) return { ok: false, error: 'Group not found.' };
+    return { ok: true };
+  } catch (err) {
+    if (err instanceof Error && /unique/i.test(err.message)) {
+      return { ok: false, error: `A group named "${name}" already exists.` };
+    }
+    return { ok: false, error: 'Failed to rename group.' };
+  }
+}
+
+export async function deletePlayerGroup(input: { organizationId: number; groupId: number }): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query(`DELETE FROM player_groups WHERE id = $1 AND organization_id = $2`, [input.groupId, input.organizationId]);
+  if (result.rowCount === 0) return { ok: false, error: 'Group not found.' };
+  return { ok: true };
+}
+
+/** Replaces a group's full membership list in one call -- simplest contract
+ * for a web/mobile "edit group" screen that submits the whole checked-player
+ * set at once rather than diffing adds/removes itself. */
+export async function setPlayerGroupMembers(input: {
+  organizationId: number;
+  groupId: number;
+  playerIds: number[];
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const group = await pool.query(`SELECT id FROM player_groups WHERE id = $1 AND organization_id = $2`, [input.groupId, input.organizationId]);
+  if (group.rowCount === 0) return { ok: false, error: 'Group not found.' };
+
+  // Only players that actually belong to this organization can be added --
+  // mirrors the allow-list intersection pattern in admin/questionnaires.
+  const validPlayers = await pool.query<{ id: number }>(
+    `SELECT id FROM players WHERE organization_id = $1 AND id = ANY($2::int[])`,
+    [input.organizationId, input.playerIds]
+  );
+  const validPlayerIds = validPlayers.rows.map((row) => row.id);
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`DELETE FROM player_group_members WHERE group_id = $1`, [input.groupId]);
+    if (validPlayerIds.length > 0) {
+      const values = validPlayerIds.map((_, index) => `($1, $${index + 2})`).join(', ');
+      await client.query(`INSERT INTO player_group_members (group_id, player_id) VALUES ${values}`, [input.groupId, ...validPlayerIds]);
+    }
+    await client.query('COMMIT');
+    return { ok: true };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    return { ok: false, error: 'Failed to update group members.' };
+  } finally {
+    client.release();
+  }
+}
+
+/** Which group ids a player belongs to -- used to preselect membership when
+ * editing a player from their own profile, or to show group chips on a
+ * roster row. */
+export async function listGroupIdsForPlayer(input: { playerId: number }): Promise<number[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{ group_id: number }>(`SELECT group_id FROM player_group_members WHERE player_id = $1`, [input.playerId]);
+  return result.rows.map((row) => row.group_id);
+}
+
 export async function getClientCountByOrganization(input: {
   organizationId: number;
   assignedCoachUserId?: number | null;

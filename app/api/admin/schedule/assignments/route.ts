@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromRequest } from '../../../../../lib/auth';
 import { resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
-import { addProgramItem, listProgramItemsForPlayerByDateRange } from '../../../../../lib/training-db';
+import { addProgramItem, listPlayerIdsForGroup, listProgramItemsForPlayerByDateRange } from '../../../../../lib/training-db';
 import { canManagePlayer, resolveManageablePlayerOrganizationId } from '../../../../../lib/portal-access';
 import { logApiTiming } from '../../../../../lib/request-timing';
 import { sendPushNotificationToUsers } from '../../../../../lib/push-notifications';
@@ -54,20 +54,70 @@ export async function POST(request: Request) {
   if (session.role === 'player') return finish(403, { error: 'Forbidden' });
 
   const body = (await request.json().catch(() => null)) as
-    | { playerId?: number; dayDate?: string; workoutId?: number; programName?: string }
+    | { playerId?: number; groupId?: number; dayDate?: string; workoutId?: number; programName?: string }
     | null;
   if (!body) return finish(400, { error: 'Invalid JSON body.' });
 
-  const playerId = Number(body.playerId ?? 0);
+  const groupId = Number(body.groupId ?? 0);
   const dayDate = parseDate(String(body.dayDate ?? ''));
   const workoutId = Number(body.workoutId ?? 0);
   const userId = session.userId ?? 0;
+  const programName = String(body.programName ?? 'Current Program');
 
   if (userId <= 0) {
     return finish(400, { error: 'Session context missing. Please log out and log in again.' });
   }
-  if (!Number.isFinite(playerId) || playerId <= 0 || !dayDate || !Number.isFinite(workoutId) || workoutId <= 0) {
-    return finish(400, { error: 'playerId, dayDate, and workoutId are required.' });
+  if (!dayDate || !Number.isFinite(workoutId) || workoutId <= 0) {
+    return finish(400, { error: 'dayDate and workoutId are required.' });
+  }
+
+  // groupId fans this same assignment out to every current member of the
+  // group -- a per-player failure (e.g. a player removed from the org since
+  // the group was built) is reported individually rather than failing the
+  // whole batch, since a partial success is more useful than an all-or-
+  // nothing rollback across unrelated players.
+  if (Number.isFinite(groupId) && groupId > 0) {
+    const organizationId = await resolveProgrammingOrganizationId(session);
+    if (organizationId <= 0) return finish(403, { error: 'Forbidden' });
+    const playerIds = await listPlayerIdsForGroup({ organizationId, groupId });
+    if (playerIds.length === 0) return finish(400, { error: 'This group has no players in it.' });
+
+    const results = await Promise.all(
+      playerIds.map(async (playerId) => {
+        const result = await addProgramItem({
+          organizationId,
+          userId,
+          playerId,
+          dayDate,
+          assignmentType: 'workout',
+          workoutId,
+          programName,
+        });
+        if (result.ok && result.playerUserId) {
+          void sendPushNotificationToUsers({
+            userIds: [result.playerUserId],
+            title: 'New workout assigned',
+            body: result.workoutName
+              ? `${result.workoutName} was added to your schedule for ${dayDate}.`
+              : `A new workout was added to your schedule for ${dayDate}.`,
+            data: { type: 'workout_assigned', itemId: result.itemId, dayDate },
+          });
+        }
+        return { playerId, ...result };
+      })
+    );
+    const succeeded = results.filter((r) => r.ok).length;
+    const failed = results.filter((r) => !r.ok);
+    return finish(
+      200,
+      { ok: true, groupId, succeeded, failed: failed.map((f) => ({ playerId: f.playerId, error: 'error' in f ? f.error : 'Unknown error' })) },
+      { groupId, dayDate, workoutId, succeeded, failedCount: failed.length }
+    );
+  }
+
+  const playerId = Number(body.playerId ?? 0);
+  if (!Number.isFinite(playerId) || playerId <= 0) {
+    return finish(400, { error: 'playerId or groupId is required.' });
   }
   const manageableOrganizationId = await resolveManageablePlayerOrganizationId(session, playerId);
   if (manageableOrganizationId <= 0) return finish(403, { error: 'Forbidden' });
@@ -79,7 +129,7 @@ export async function POST(request: Request) {
     dayDate,
     assignmentType: 'workout',
     workoutId,
-    programName: String(body.programName ?? 'Current Program'),
+    programName,
   });
 
   if (!result.ok) return finish(400, { error: result.error });

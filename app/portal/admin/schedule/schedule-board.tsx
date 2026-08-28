@@ -16,6 +16,7 @@ import {
 } from '../../../../lib/drills-program';
 import { normalizeHittingDrillsState } from '../../../../lib/hitting-drills-program';
 import WorkoutLogModal from '../../components/workout-log-modal';
+import { GroupAssignModal } from './group-assign-modal';
 import BullpenEntry from '../../player/program/bullpens/bullpen-entry';
 import ScriptEntry from '../../player/program/shared-script-entry';
 import { bubbleCategoryIdFromType, bubbleColumnType, isBubbleColumnType } from '../../../../lib/bullpen-column-types';
@@ -408,6 +409,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const [selectedItem, setSelectedItem] = useState<ProgramItemRow | null>(null);
   const [selectedItemIds, setSelectedItemIds] = useState<Set<number>>(new Set());
   const [bulkReplaceOpen, setBulkReplaceOpen] = useState(false);
+  const [groupAssignOpen, setGroupAssignOpen] = useState(false);
   const [bulkReplaceQuery, setBulkReplaceQuery] = useState('');
   const [copiedPlan, setCopiedPlan] = useState<CopiedPlanBuffer | null>(null);
   const [copiedCycle, setCopiedCycle] = useState<CopiedCycleBuffer | null>(null);
@@ -4188,6 +4190,11 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                 View Profile
               </Link>
             ) : null}
+            {(view === 'day' || view === 'week' || view === 'plan') ? (
+              <button type="button" className="btn btn-ghost" onClick={() => setGroupAssignOpen(true)}>
+                Apply to Group...
+              </button>
+            ) : null}
             <div className="portal-schedule-view-switch" role="group" aria-label="Calendar view">
               {(['day', 'week', 'month', 'plan', 'throwing', 'bullpens', 'drills', 'hitting', 'hitting-drills'] as ViewMode[]).map((mode) => (
                 <button
@@ -6193,6 +6200,14 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           </div>
         </div>
       )}
+
+      <GroupAssignModal
+        open={groupAssignOpen}
+        onClose={() => setGroupAssignOpen(false)}
+        workouts={workouts}
+        todayIso={toIsoDate(new Date())}
+        onAssigned={() => void loadItems()}
+      />
 
       {selectedItem && (
         <WorkoutLogModal

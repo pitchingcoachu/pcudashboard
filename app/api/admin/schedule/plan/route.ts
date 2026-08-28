@@ -7,6 +7,7 @@ import {
   deletePlanProgramItem,
   getPlayerByIdInOrganization,
   listPlanProgramItemsForPlayer,
+  listPlayerIdsForGroup,
   movePlanProgramItem,
   normalizePlanSection,
   updatePlanItemTargetCount,
@@ -46,20 +47,45 @@ export async function POST(request: Request) {
   if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
   const body = (await request.json().catch(() => null)) as
-    | { playerId?: number; workoutId?: number; planSection?: string; targetCount?: number | null }
+    | { playerId?: number; groupId?: number; workoutId?: number; planSection?: string; targetCount?: number | null }
     | null;
   if (!body) return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
 
   const organizationId = await resolveProgrammingOrganizationId(session);
   const userId = session.userId ?? 0;
-  const playerId = Number(body.playerId ?? 0);
+  const groupId = Number(body.groupId ?? 0);
   const workoutId = Number(body.workoutId ?? 0);
   const planSection = normalizePlanSection(String(body.planSection ?? ''));
   if (organizationId <= 0 || userId <= 0) {
     return NextResponse.json({ error: 'Session context missing. Please log out and log in again.' }, { status: 400 });
   }
-  if (!Number.isFinite(playerId) || playerId <= 0 || !Number.isFinite(workoutId) || workoutId <= 0 || !planSection) {
-    return NextResponse.json({ error: 'playerId, workoutId, and planSection are required.' }, { status: 400 });
+  if (!Number.isFinite(workoutId) || workoutId <= 0 || !planSection) {
+    return NextResponse.json({ error: 'workoutId and planSection are required.' }, { status: 400 });
+  }
+
+  if (Number.isFinite(groupId) && groupId > 0) {
+    const playerIds = await listPlayerIdsForGroup({ organizationId, groupId });
+    if (playerIds.length === 0) return NextResponse.json({ error: 'This group has no players in it.' }, { status: 400 });
+    const results = await Promise.all(
+      playerIds.map((playerId) =>
+        addPlanWorkoutAssignment({ organizationId, userId, playerId, workoutId, planSection, targetCount: body.targetCount ?? null }).then(
+          (result) => ({ playerId, ...result })
+        )
+      )
+    );
+    const succeeded = results.filter((r) => r.ok).length;
+    const failed = results.filter((r) => !r.ok);
+    return NextResponse.json({
+      ok: true,
+      groupId,
+      succeeded,
+      failed: failed.map((f) => ({ playerId: f.playerId, error: 'error' in f ? f.error : 'Unknown error' })),
+    });
+  }
+
+  const playerId = Number(body.playerId ?? 0);
+  if (!Number.isFinite(playerId) || playerId <= 0) {
+    return NextResponse.json({ error: 'playerId or groupId is required.' }, { status: 400 });
   }
 
   const allowed = await canManagePlayer(session, playerId);
