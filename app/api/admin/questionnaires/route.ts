@@ -9,7 +9,30 @@ import {
   listQuestionnaireResponses,
   listQuestionnairesForOrganization,
   updateQuestionnaire,
+  upsertPlayerGroupByName,
 } from '../../../../lib/training-db';
+
+// A questionnaire assignment's typed "Group Name" plus whichever players are
+// checked becomes a real, reusable Player Group on every save -- best-effort
+// only, never allowed to fail the actual questionnaire save.
+async function syncPlayerGroupsFromAssignments(input: {
+  assignments: QuestionnaireAssignmentInput[];
+  organizationId: number;
+  userId: number | null;
+}): Promise<void> {
+  if (!input.userId) return;
+  for (const assignment of input.assignments) {
+    const groupName = String(assignment.groupName ?? '').trim();
+    const playerIds = Array.isArray(assignment.playerIds) ? (assignment.playerIds as number[]) : [];
+    if (!groupName || playerIds.length === 0) continue;
+    await upsertPlayerGroupByName({
+      organizationId: input.organizationId,
+      name: groupName,
+      playerIds,
+      createdByUserId: input.userId,
+    }).catch(() => null);
+  }
+}
 
 type QuestionnaireAssignmentInput = Record<string, unknown> & {
   id?: unknown;
@@ -104,6 +127,7 @@ export async function POST(request: Request) {
     assignments: sanitizedAssignments,
   });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
+  await syncPlayerGroupsFromAssignments({ assignments: sanitizedAssignments, organizationId, userId: session.userId ?? null });
 
   const [questionnaires, responses] = await Promise.all([
     listQuestionnairesForOrganization(organizationId),
@@ -158,6 +182,7 @@ export async function PATCH(request: Request) {
     const status = result.error === 'Questionnaire was not found.' ? 404 : 400;
     return NextResponse.json({ error: result.error }, { status });
   }
+  await syncPlayerGroupsFromAssignments({ assignments: sanitizedAssignments, organizationId, userId: session.userId ?? null });
 
   const [questionnaires, responses] = await Promise.all([
     listQuestionnairesForOrganization(organizationId),

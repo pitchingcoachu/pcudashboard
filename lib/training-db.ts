@@ -1938,6 +1938,107 @@ export async function listPlayerIdsForGroup(input: { organizationId: number; gro
   return result.rows.map((row) => row.player_id);
 }
 
+export type GroupWorkoutAssignmentTarget = {
+  organizationId: number;
+  groupId: number;
+  workoutId: number;
+} & ({ scheduleType: 'calendar'; dayDate: string } | { scheduleType: 'plan'; planSection: string } | { scheduleType: 'cycle'; cycleSlot: string });
+
+export type GroupWorkoutAssignmentMatch = {
+  playerId: number;
+  playerName: string;
+  itemId: number;
+};
+
+// Finds every CURRENT group member's item for this workout on this day/
+// section/slot -- there is no persisted link back to a specific group-assign
+// action (program_day_items/program_plan_items/program_cycle_items don't
+// store a groupId), so this re-derives the target set by matching group
+// membership x workout x day/section/slot instead. That means it can miss a
+// player removed from the group since the original assignment, or sweep up
+// a matching item assigned some other way (e.g. manually, outside the group
+// flow) -- deliberately accepted per the "match-based delete" design so the
+// UI can show exactly what it found before the caller confirms.
+export async function previewGroupWorkoutAssignmentMatches(
+  target: GroupWorkoutAssignmentTarget
+): Promise<GroupWorkoutAssignmentMatch[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  if (target.scheduleType === 'calendar') {
+    const dayDate = target.dayDate.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dayDate)) return [];
+    const result = await pool.query<{ player_id: number; player_name: string; item_id: number }>(
+      `
+        SELECT p.player_id, pl.full_name AS player_name, i.id AS item_id
+        FROM player_group_members m
+        JOIN player_groups g ON g.id = m.group_id
+        JOIN players pl ON pl.id = m.player_id
+        JOIN programs p ON p.player_id = m.player_id AND p.organization_id = g.organization_id
+        JOIN program_days d ON d.program_id = p.id AND d.day_date = $4::date
+        JOIN program_day_items i ON i.program_day_id = d.id AND i.workout_id = $3
+        WHERE m.group_id = $1 AND g.organization_id = $2
+      `,
+      [target.groupId, target.organizationId, target.workoutId, dayDate]
+    );
+    return result.rows.map((row) => ({ playerId: row.player_id, playerName: row.player_name, itemId: row.item_id }));
+  }
+
+  if (target.scheduleType === 'plan') {
+    const planSection = normalizePlanSection(target.planSection);
+    if (!planSection) return [];
+    const result = await pool.query<{ player_id: number; player_name: string; item_id: number }>(
+      `
+        SELECT m.player_id, pl.full_name AS player_name, i.id AS item_id
+        FROM player_group_members m
+        JOIN player_groups g ON g.id = m.group_id
+        JOIN players pl ON pl.id = m.player_id
+        JOIN program_plan_items i ON i.player_id = m.player_id AND i.organization_id = g.organization_id
+          AND i.plan_section = $4 AND i.workout_id = $3
+        WHERE m.group_id = $1 AND g.organization_id = $2
+      `,
+      [target.groupId, target.organizationId, target.workoutId, planSection]
+    );
+    return result.rows.map((row) => ({ playerId: row.player_id, playerName: row.player_name, itemId: row.item_id }));
+  }
+
+  const cycleSlot = target.cycleSlot;
+  const result = await pool.query<{ player_id: number; player_name: string; item_id: number }>(
+    `
+      SELECT m.player_id, pl.full_name AS player_name, i.id AS item_id
+      FROM player_group_members m
+      JOIN player_groups g ON g.id = m.group_id
+      JOIN players pl ON pl.id = m.player_id
+      JOIN program_cycle_items i ON i.player_id = m.player_id AND i.organization_id = g.organization_id
+        AND i.cycle_slot = $4 AND i.workout_id = $3
+      WHERE m.group_id = $1 AND g.organization_id = $2
+    `,
+    [target.groupId, target.organizationId, target.workoutId, cycleSlot]
+  );
+  return result.rows.map((row) => ({ playerId: row.player_id, playerName: row.player_name, itemId: row.item_id }));
+}
+
+export async function deleteGroupWorkoutAssignment(
+  target: GroupWorkoutAssignmentTarget
+): Promise<{ succeeded: number; failed: Array<{ playerId: number; error: string }> }> {
+  const matches = await previewGroupWorkoutAssignmentMatches(target);
+  const results = await Promise.all(
+    matches.map(async (match) => {
+      const result =
+        target.scheduleType === 'calendar'
+          ? await deleteProgramItem({ organizationId: target.organizationId, playerId: match.playerId, itemId: match.itemId })
+          : target.scheduleType === 'plan'
+            ? await deletePlanProgramItem({ organizationId: target.organizationId, playerId: match.playerId, itemId: match.itemId })
+            : await deleteCycleProgramItem({ organizationId: target.organizationId, playerId: match.playerId, itemId: match.itemId });
+      return { playerId: match.playerId, ...result };
+    })
+  );
+  const succeeded = results.filter((r) => r.ok).length;
+  const failed = results.filter((r) => !r.ok).map((r) => ({ playerId: r.playerId, error: 'error' in r ? r.error : 'Unknown error' }));
+  return { succeeded, failed };
+}
+
 export async function createPlayerGroup(input: {
   organizationId: number;
   name: string;
@@ -1960,6 +2061,41 @@ export async function createPlayerGroup(input: {
     }
     return { ok: false, error: 'Failed to create group.' };
   }
+}
+
+// Finds-or-creates a player_groups row by name (case-insensitive, matching
+// the table's own uniqueness) and replaces its membership with playerIds --
+// used to turn a questionnaire assignment's typed "Group Name" + checked
+// players into a real, reusable Player Group every time that questionnaire
+// is saved, so the same name later shows up as a normal group everywhere
+// else (e.g. the workout Apply-to-Group flow) without a second group
+// system. Silently no-ops (returns null) for an empty name or player list --
+// this is a best-effort side effect of saving a questionnaire, not a
+// user-facing action of its own, so it should never fail the actual save.
+export async function upsertPlayerGroupByName(input: {
+  organizationId: number;
+  name: string;
+  playerIds: number[];
+  createdByUserId: number;
+}): Promise<number | null> {
+  const name = input.name.trim();
+  if (!name || input.playerIds.length === 0) return null;
+  if (!isDatabaseConfigured()) return null;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const existing = await pool.query<{ id: number }>(
+    `SELECT id FROM player_groups WHERE organization_id = $1 AND LOWER(name) = LOWER($2) LIMIT 1`,
+    [input.organizationId, name]
+  );
+  let groupId = existing.rows[0]?.id ?? null;
+  if (!groupId) {
+    const created = await createPlayerGroup({ organizationId: input.organizationId, name, createdByUserId: input.createdByUserId });
+    if (!created.ok) return null;
+    groupId = created.groupId;
+  }
+  const synced = await setPlayerGroupMembers({ organizationId: input.organizationId, groupId, playerIds: input.playerIds });
+  return synced.ok ? groupId : null;
 }
 
 export async function renamePlayerGroup(input: {
