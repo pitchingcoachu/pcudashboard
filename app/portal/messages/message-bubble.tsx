@@ -26,20 +26,22 @@ export function MessageBubble({
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [actionsVisible, setActionsVisible] = useState(false);
+  const [namesPopoverEmoji, setNamesPopoverEmoji] = useState<string | null>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!actionsVisible) return;
+    if (!actionsVisible && !namesPopoverEmoji) return;
     function onPointerDownOutside(event: PointerEvent) {
       if (!wrapRef.current?.contains(event.target as Node)) {
         setActionsVisible(false);
         setPickerOpen(false);
+        setNamesPopoverEmoji(null);
       }
     }
     document.addEventListener('pointerdown', onPointerDownOutside);
     return () => document.removeEventListener('pointerdown', onPointerDownOutside);
-  }, [actionsVisible]);
+  }, [actionsVisible, namesPopoverEmoji]);
 
   function clearLongPressTimer() {
     if (longPressTimer.current) {
@@ -69,6 +71,13 @@ export function MessageBubble({
       </div>
     );
   }
+
+  // A message that's only a photo/video (no caption) doesn't need the
+  // bubble's own padded fill -- see .portal-messages-bubble.is-media-only.
+  const hasOnlyMedia =
+    !message.body &&
+    message.attachments.length > 0 &&
+    message.attachments.every((attachment) => attachment.kind === 'photo' || attachment.kind === 'video');
 
   return (
     <div ref={wrapRef} className={`portal-messages-bubble-wrap${isOwn ? ' is-own' : ' is-other'}`}>
@@ -127,7 +136,7 @@ export function MessageBubble({
         </div>
       ) : null}
       <div
-        className={`portal-messages-bubble${isOwn ? ' is-own' : ' is-other'}`}
+        className={`portal-messages-bubble${isOwn ? ' is-own' : ' is-other'}${hasOnlyMedia ? ' is-media-only' : ''}`}
         onPointerDown={onReact ? startLongPress : undefined}
         onPointerUp={onReact ? clearLongPressTimer : undefined}
         onPointerLeave={onReact ? clearLongPressTimer : undefined}
@@ -172,18 +181,22 @@ export function MessageBubble({
       {message.reactions.length > 0 ? (
         <div className="portal-messages-reactions" aria-label="Message reactions">
           {message.reactions.map((reaction) => (
-            <button
-              key={reaction.emoji}
-              type="button"
-              className={`portal-messages-reaction-chip${reaction.reactedByCurrentUser ? ' is-active' : ''}`}
-              title={reaction.reactors.map((reactor) => reactor.name).join(', ')}
-              aria-label={`${reaction.emoji}, ${reaction.count} reaction${reaction.count === 1 ? '' : 's'}`}
-              onClick={() => onReact?.(message.id, reaction.emoji)}
-              disabled={!onReact}
-            >
-              <span>{reaction.emoji}</span>
-              <span>{reaction.count}</span>
-            </button>
+            <div key={reaction.emoji} className="portal-messages-reaction-chip-wrap">
+              <button
+                type="button"
+                className={`portal-messages-reaction-chip${reaction.reactedByCurrentUser ? ' is-active' : ''}`}
+                aria-label={`${reaction.emoji}, ${reaction.count} reaction${reaction.count === 1 ? '' : 's'}. Click to see who reacted.`}
+                onClick={() => setNamesPopoverEmoji((current) => (current === reaction.emoji ? null : reaction.emoji))}
+              >
+                <span>{reaction.emoji}</span>
+                <span>{reaction.count}</span>
+              </button>
+              {namesPopoverEmoji === reaction.emoji ? (
+                <div className="portal-messages-reaction-names-popover" role="tooltip">
+                  {reaction.reactors.map((reactor) => reactor.name).join(', ')}
+                </div>
+              ) : null}
+            </div>
           ))}
         </div>
       ) : null}
