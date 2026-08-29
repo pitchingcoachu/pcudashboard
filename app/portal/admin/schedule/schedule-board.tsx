@@ -6279,7 +6279,10 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           onSaved={async () => {
             await loadItems();
           }}
-          allowWorkoutCustomization={selectedItem.scheduleType === 'calendar' && selectedItem.itemType === 'workout'}
+          allowWorkoutCustomization={
+            (selectedItem.scheduleType === 'calendar' || selectedItem.scheduleType === 'plan') &&
+            selectedItem.itemType === 'workout'
+          }
           exerciseOptions={exercises.map((exercise) => ({
             id: exercise.id,
             name: exercise.name,

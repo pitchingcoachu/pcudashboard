@@ -348,7 +348,7 @@ export default function WorkoutLogModal({
   }, [item]);
 
   const saveWorkoutCustomization = async () => {
-    if (item.itemType !== 'workout' || item.scheduleType !== 'calendar') return;
+    if (item.itemType !== 'workout' || (item.scheduleType !== 'calendar' && item.scheduleType !== 'plan')) return;
     setSavingCustomization(true);
     setError('');
     try {
@@ -358,7 +358,8 @@ export default function WorkoutLogModal({
         body: JSON.stringify({
           playerId,
           itemId: item.itemId,
-          dayDate: item.dayDate,
+          scheduleType: item.scheduleType,
+          ...(item.scheduleType === 'calendar' ? { dayDate: item.dayDate } : {}),
           overrides: exerciseDrafts,
         }),
       });
@@ -696,7 +697,10 @@ export default function WorkoutLogModal({
               which meant a save only recorded a completion if the item was
               already complete, silently no-opping on every first-time save. */}
           <input type="hidden" name="completed" value="on" />
-          {allowWorkoutCustomization && item.itemType === 'workout' && item.scheduleType === 'calendar' && item.workoutExercises.length > 0 ? (
+          {allowWorkoutCustomization &&
+          item.itemType === 'workout' &&
+          (item.scheduleType === 'calendar' || item.scheduleType === 'plan') &&
+          item.workoutExercises.length > 0 ? (
             <div className="portal-workout-customize-panel">
               <div className="portal-choice-line-actions">
                 <div>

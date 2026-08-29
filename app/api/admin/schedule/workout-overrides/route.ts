@@ -3,7 +3,12 @@ import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { canManagePlayer } from '../../../../../lib/portal-access';
 import { resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
-import { listProgramItemsForPlayerByDateRange, saveProgramWorkoutExerciseOverrides } from '../../../../../lib/training-db';
+import {
+  listPlanProgramItemsForPlayer,
+  listProgramItemsForPlayerByDateRange,
+  saveProgramWorkoutExerciseOverrides,
+  savePlanWorkoutExerciseOverrides,
+} from '../../../../../lib/training-db';
 
 export async function POST(request: Request) {
   const cookieStore = await cookies();
@@ -15,6 +20,7 @@ export async function POST(request: Request) {
     | {
         playerId?: number;
         itemId?: number;
+        scheduleType?: string;
         dayDate?: string;
         overrides?: Array<{
           workoutExerciseIndex?: number;
@@ -31,32 +37,50 @@ export async function POST(request: Request) {
   const organizationId = await resolveProgrammingOrganizationId(session);
   const playerId = Number(body.playerId ?? 0);
   const itemId = Number(body.itemId ?? 0);
+  const scheduleType = body.scheduleType === 'plan' ? 'plan' : 'calendar';
   const dayDate = String(body.dayDate ?? '').trim();
   if (organizationId <= 0 || !Number.isFinite(playerId) || playerId <= 0 || !Number.isFinite(itemId) || itemId <= 0) {
     return NextResponse.json({ error: 'playerId and itemId are required.' }, { status: 400 });
   }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dayDate)) {
+  if (scheduleType === 'calendar' && !/^\d{4}-\d{2}-\d{2}$/.test(dayDate)) {
     return NextResponse.json({ error: 'dayDate is required.' }, { status: 400 });
   }
 
   const allowed = await canManagePlayer(session, playerId);
   if (!allowed) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
+  const overrides = Array.isArray(body.overrides)
+    ? body.overrides.map((override) => ({
+        workoutExerciseIndex: Number(override.workoutExerciseIndex ?? -1),
+        exerciseId: override.exerciseId ?? null,
+        prescribedSets: override.prescribedSets ?? null,
+        prescribedReps: override.prescribedReps ?? null,
+        prescribedLoad: override.prescribedLoad ?? null,
+        notes: override.notes ?? null,
+      }))
+    : [];
+
+  if (scheduleType === 'plan') {
+    const result = await savePlanWorkoutExerciseOverrides({
+      organizationId,
+      playerId,
+      programPlanItemId: itemId,
+      userId: session.userId ?? null,
+      overrides,
+    });
+    if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
+
+    const items = await listPlanProgramItemsForPlayer({ playerId });
+    const item = items.find((row) => row.itemId === itemId) ?? null;
+    return NextResponse.json({ ok: true, item });
+  }
+
   const result = await saveProgramWorkoutExerciseOverrides({
     organizationId,
     playerId,
     programDayItemId: itemId,
     userId: session.userId ?? null,
-    overrides: Array.isArray(body.overrides)
-      ? body.overrides.map((override) => ({
-          workoutExerciseIndex: Number(override.workoutExerciseIndex ?? -1),
-          exerciseId: override.exerciseId ?? null,
-          prescribedSets: override.prescribedSets ?? null,
-          prescribedReps: override.prescribedReps ?? null,
-          prescribedLoad: override.prescribedLoad ?? null,
-          notes: override.notes ?? null,
-        }))
-      : [],
+    overrides,
   });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
 
