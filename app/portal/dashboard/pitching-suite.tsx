@@ -21,6 +21,10 @@ const BallFlightPanel = dynamic(() => import('./ball-flight-panel'), {
   loading: () => <p className="portal-muted-text">Loading Flight Lab…</p>,
 });
 
+const IntendedZonePanel = dynamic(() => import('./intended-zone-panel'), {
+  loading: () => <p className="portal-muted-text">Loading Intended Zones…</p>,
+});
+
 type FiltersPayload = {
   school_code: string;
   min_date: string | null;
@@ -5046,7 +5050,7 @@ export default function PitchingSuite({
   const isPlayerRole = role === 'player';
   const initialSchoolCode = String(selectedSchoolCode ?? '').trim().toUpperCase();
   const shouldUsePcuDefaults = initialSchoolCode === 'PCU';
-  const [dashboardPage, setDashboardPage] = useState<'Summary' | 'Leaderboard' | 'Game Log' | 'Pitch Log' | 'AB Report' | 'Velocity' | 'HeatMaps' | 'QP Locations' | 'Trend' | 'Velo Manual Entry' | 'Pitcher DNA' | 'Ball Flight'>('Summary');
+  const [dashboardPage, setDashboardPage] = useState<'Summary' | 'Leaderboard' | 'Game Log' | 'Pitch Log' | 'AB Report' | 'Velocity' | 'HeatMaps' | 'QP Locations' | 'Trend' | 'Velo Manual Entry' | 'Pitcher DNA' | 'Ball Flight' | 'Intended Zones'>('Summary');
   const [isSidebarHidden, setIsSidebarHidden] = useState(false);
   const [isMobileView, setIsMobileView] = useState(false);
   const [filters, setFilters] = useState<FiltersPayload | null>(null);
@@ -15146,6 +15150,7 @@ export default function PitchingSuite({
                   {canShowVeloManualEntry ? <option value="Velo Manual Entry">Velo Manual Entry</option> : null}
                   <option value="Pitcher DNA">Pitcher DNA</option>
                   <option value="Ball Flight">Ball Flight</option>
+                  <option value="Intended Zones">Intended Zones</option>
                 </select>
               </label>
             ) : (
@@ -15241,6 +15246,13 @@ export default function PitchingSuite({
                   onClick={() => setDashboardPage('Ball Flight')}
                 >
                   Ball Flight
+                </button>
+                <button
+                  type="button"
+                  className={dashboardPage === 'Intended Zones' ? 'btn btn-primary' : 'btn btn-ghost'}
+                  onClick={() => setDashboardPage('Intended Zones')}
+                >
+                  Intended Zones
                 </button>
               </div>
             )}
@@ -18297,6 +18309,13 @@ export default function PitchingSuite({
               playerName={ballFlightIdentity.playerName}
               logoUrl={ballFlightIdentity.logoUrl}
               logoAlt={ballFlightIdentity.logoAlt}
+            />
+          ) : dashboardPage === 'Intended Zones' ? (
+            <IntendedZonePanel
+              pitcherName={ballFlightIdentity.playerName || null}
+              startDate={startDate}
+              endDate={endDate}
+              selectedPitchTypes={selectedPitchTypes}
             />
           ) : dashboardPage === 'Pitcher DNA' ? (
             <PitcherDnaPanel

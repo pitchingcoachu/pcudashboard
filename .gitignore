@@ -20,3 +20,4 @@ private_exports/
 # dashboard_api/app/command_models/ is).
 dashboard_api/stuff2_training/data/
 dashboard_api/command_training/data/
+.env*
