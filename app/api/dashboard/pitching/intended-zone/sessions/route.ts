@@ -76,7 +76,7 @@ export async function POST(request: Request) {
     trackmanSessionId: body.trackmanSessionId?.trim() || null,
     targetRadiusFt: Number.isFinite(targetRadiusFt) && targetRadiusFt > 0 ? targetRadiusFt : 0.3,
     startedByUserId: session.userId ?? null,
-    mode: body.mode === 'ftp_deferred' ? 'ftp_deferred' : 'live',
+    mode: body.mode === 'ftp_deferred' || body.mode === 'manual' ? body.mode : 'live',
   });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
 

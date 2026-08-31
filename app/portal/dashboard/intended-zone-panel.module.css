@@ -109,25 +109,6 @@
   font-size: 0.9rem;
 }
 
-.sliderRow {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.slider {
-  flex: 1;
-  accent-color: rgb(var(--portal-accent-rgb, 200, 16, 46));
-}
-
-.sliderValue {
-  min-width: 64px;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  font-weight: 700;
-  color: #f8fafc;
-}
-
 .startButton {
   justify-self: start;
   padding: 12px 24px;
@@ -451,6 +432,7 @@
 
 .logSection {
   margin-top: 4px;
+  min-width: 0;
 }
 
 .logTitle {
@@ -475,7 +457,7 @@
 }
 
 .logTable thead th {
-  text-align: left;
+  text-align: center;
   padding: 10px 14px;
   font-size: 0.68rem;
   font-weight: 700;
@@ -491,6 +473,7 @@
   color: #e2e8f0;
   border-top: 1px solid rgba(148, 163, 184, 0.08);
   white-space: nowrap;
+  text-align: center;
 }
 
 .logTable tbody tr:hover {

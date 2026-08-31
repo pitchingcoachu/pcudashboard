@@ -1,3 +1,253 @@
+/** Shared tail end of both PDF export functions below: takes a set of
+ * already-captured canvas "batches" (each under the browser's canvas-height
+ * ceiling), walks them as one continuous source-height timeline, slices
+ * that into letter-size pages, and draws the shared header chrome (Pearl
+ * lockup + title/subtitle on page 1) on each page. */
+async function renderCaptureBatchesToPdf(options: {
+  captureBatches: HTMLCanvasElement[];
+  captureScale: number;
+  isLightTheme: boolean;
+  titleText: string;
+  /** Optional bold line rendered directly below titleText (e.g. a player's
+   * name) -- distinct from subtitleText, which renders smaller/muted below
+   * this line instead of right below the title. */
+  nameText?: string;
+  subtitleText: string;
+  fileName: string;
+  /** Fit everything on one page by sizing a CUSTOM page height to the
+   * content instead of paginating across fixed US Letter pages. The
+   * content's own row/heatmap count varies a lot (a pitcher with 6 pitch
+   * types has a much taller report than one with 2), so a fixed page size
+   * either wastes space or spills onto an awkward, half-empty second page
+   * -- fitting the page to the content avoids both. Width stays at Letter
+   * width; only height grows. */
+  singlePage?: boolean;
+}): Promise<void> {
+  const { captureBatches, captureScale, isLightTheme, titleText, nameText, subtitleText, fileName, singlePage } = options;
+  const { jsPDF } = await import('jspdf');
+  const rawW = Math.max(1, ...captureBatches.map((c) => c.width));
+  const totalRawH = captureBatches.reduce((sum, c) => sum + c.height, 0);
+  const orientation: 'portrait' | 'landscape' = rawW >= totalRawH ? 'landscape' : 'portrait';
+  const LETTER_WIDTH_PT = 612;
+  const LETTER_HEIGHT_PT = 792;
+  const pdf = singlePage
+    ? new jsPDF({
+        orientation: 'portrait',
+        unit: 'pt',
+        // Placeholder format -- replaced below once the real content
+        // height is known (needs pageWidth/scale computed from a real pdf
+        // instance first, so this can't be sized in one shot).
+        format: [LETTER_WIDTH_PT, LETTER_HEIGHT_PT],
+      })
+    : new jsPDF({
+        orientation,
+        unit: 'pt',
+        format: 'letter',
+      });
+  // Pearl lockup, top-right of every page. Loaded once as a data URL
+  // (jsPDF's addImage needs actual image data, not a URL) and reused
+  // across pages -- a fetch failure just means no logo, not a broken PDF.
+  const pearlLogoDataUrl = await (async () => {
+    try {
+      const response = await fetch('/pearl-lockup-transparent.png', { cache: 'force-cache' });
+      if (!response.ok) return null;
+      const blob = await response.blob();
+      return await new Promise<string | null>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(blob);
+      });
+    } catch {
+      return null;
+    }
+  })();
+  const PEARL_LOGO_ASPECT = 1554 / 402;
+  const margin = 18;
+  const logoHeight = pearlLogoDataUrl ? 22 : 0;
+  const logoWidth = logoHeight * PEARL_LOGO_ASPECT;
+  const titleBandHeight = nameText ? 48 : 34;
+  const headerBandHeight = Math.max(logoHeight, titleBandHeight) + 12;
+  let pageWidth = pdf.internal.pageSize.getWidth();
+  let pageHeight = pdf.internal.pageSize.getHeight();
+  const contentTop = margin + headerBandHeight;
+  const maxContentWidth = Math.max(1, pageWidth - margin * 2);
+  // Filling the full page width unconditionally stretches narrower content
+  // wider than it renders on web -- cap the scale factor at 1:1 (CSS px per
+  // pt) so content that doesn't naturally need the whole page width isn't
+  // blown up just because the page is wide.
+  const scale = Math.min(maxContentWidth / rawW, 1 / captureScale);
+  const contentWidth = Math.max(1, rawW * scale);
+  let contentHeight = Math.max(1, pageHeight - contentTop - margin);
+  let pageSourceHeight = Math.max(1, Math.floor(contentHeight / Math.max(scale, 1e-6)));
+  if (singlePage) {
+    // Now that scale is known, resize the page height to fit the ENTIRE
+    // capture on one page (width stays at Letter width) instead of
+    // whatever arbitrary placeholder height the pdf was constructed with.
+    const neededContentHeight = totalRawH * scale;
+    pageHeight = contentTop + neededContentHeight + margin;
+    pageWidth = LETTER_WIDTH_PT;
+    // jsPDF's type declarations omit setWidth/setHeight even though they
+    // exist at runtime on internal.pageSize -- cast to access them.
+    const pageSize = pdf.internal.pageSize as unknown as { setWidth(w: number): void; setHeight(h: number): void };
+    pageSize.setWidth(pageWidth);
+    pageSize.setHeight(pageHeight);
+    contentHeight = neededContentHeight;
+    pageSourceHeight = Math.max(1, Math.ceil(totalRawH));
+  }
+  const drawPageChrome = (isFirst: boolean) => {
+    if (isLightTheme) pdf.setFillColor(248, 250, 252);
+    else pdf.setFillColor(4, 5, 7);
+    pdf.rect(0, 0, pageWidth, pageHeight, 'F');
+    if (pearlLogoDataUrl) {
+      pdf.addImage(pearlLogoDataUrl, 'PNG', pageWidth - margin - logoWidth, margin, logoWidth, logoHeight, undefined, 'FAST');
+    }
+    if (isFirst) {
+      pdf.setTextColor(isLightTheme ? '#0f172a' : '#f8fafc');
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(16);
+      pdf.text(titleText, margin, margin + 16);
+      const nameY = margin + 32;
+      if (nameText) {
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(13);
+        pdf.text(nameText, margin, nameY);
+      }
+      if (subtitleText) {
+        pdf.setFont('helvetica', 'normal');
+        pdf.setFontSize(10);
+        pdf.setTextColor(isLightTheme ? '#475569' : '#94a3b8');
+        pdf.text(subtitleText, margin, nameText ? nameY + 14 : margin + 30);
+      }
+    }
+  };
+  // Batches exist purely to keep each individual html2canvas capture under
+  // the browser's canvas-height ceiling -- they are NOT page breaks.
+  // Treating each batch as its own page would stretch a short batch to
+  // fill an entire page by itself. Instead, walk every batch's rows as one
+  // continuous source-height timeline sliced into fixed-height page
+  // windows, so a page break only happens when a page's worth of content
+  // (pageSourceHeight) has actually been filled.
+  type PageState = { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D | null; used: number };
+  const pages: PageState[] = [];
+  const newPageState = (): PageState => {
+    const canvas = document.createElement('canvas');
+    canvas.width = rawW;
+    canvas.height = pageSourceHeight;
+    return { canvas, ctx: canvas.getContext('2d'), used: 0 };
+  };
+  let current = newPageState();
+  pages.push(current);
+  for (const batchCanvas of captureBatches) {
+    const batchW = Math.max(1, batchCanvas.width);
+    const batchH = Math.max(1, batchCanvas.height);
+    let sourceY = 0;
+    while (sourceY < batchH) {
+      if (pageSourceHeight - current.used <= 0) {
+        current = newPageState();
+        pages.push(current);
+        continue;
+      }
+      const chunkHeight = Math.min(pageSourceHeight - current.used, batchH - sourceY);
+      current.ctx?.drawImage(batchCanvas, 0, sourceY, batchW, chunkHeight, 0, current.used, batchW, chunkHeight);
+      current.used += chunkHeight;
+      sourceY += chunkHeight;
+    }
+  }
+  let isFirstPage = true;
+  for (const page of pages) {
+    if (!page.used) continue;
+    if (!isFirstPage) pdf.addPage('letter', orientation);
+    drawPageChrome(isFirstPage);
+    isFirstPage = false;
+    const drawHeight = page.used * scale;
+    // page.canvas is always allocated at the full pageSourceHeight (the
+    // per-page budget), but page.used is usually less than that -- short
+    // content never fills a whole page. toDataURL() on the full canvas
+    // serializes ALL of it, including the blank space below the real
+    // content; addImage() then scales that entire (mostly blank) image
+    // into a box sized only for the real content's height (drawHeight),
+    // which squashes the real content into a fraction of that box while
+    // width scales at the full intended factor -- an asymmetric
+    // width-vs-height scale that reads as "stretched" text. Cropping to
+    // just the used region before encoding keeps the image's own aspect
+    // ratio consistent with drawHeight/contentWidth.
+    let sourceCanvas = page.canvas;
+    if (page.used < page.canvas.height) {
+      const cropped = document.createElement('canvas');
+      cropped.width = page.canvas.width;
+      cropped.height = page.used;
+      cropped.getContext('2d')?.drawImage(page.canvas, 0, 0, page.canvas.width, page.used, 0, 0, page.canvas.width, page.used);
+      sourceCanvas = cropped;
+    }
+    pdf.addImage(sourceCanvas.toDataURL('image/jpeg', 0.82), 'JPEG', margin, contentTop, contentWidth, drawHeight, undefined, 'FAST');
+  }
+  pdf.save(fileName);
+}
+
+/** For a content block that ISN'T a table -- a mix of summary cards, a
+ * heatmap, stat tiles, etc. (e.g. Intended Zones' session export, which
+ * needs the stat tiles and miss-direction heatmap alongside the pitch log
+ * table, not just the table alone). Screenshots the whole node in
+ * height-limited horizontal strips (same technique downloadLeaderboardTablePdf
+ * uses for table row batches, generalized to an arbitrary node) and reuses
+ * the same paginated-PDF-with-header-chrome renderer. */
+export async function downloadContentPdf(options: {
+  node: HTMLElement;
+  titleText: string;
+  /** Optional bold line rendered directly below titleText (e.g. a
+   * player's name), distinct from the smaller/muted subtitleText line. */
+  nameText?: string;
+  subtitleText: string;
+  fileName: string;
+  /** Size the PDF to exactly one page fit to the content's own height
+   * instead of paginating across fixed US Letter pages -- see
+   * renderCaptureBatchesToPdf's singlePage option. */
+  singlePage?: boolean;
+}): Promise<void> {
+  const { node, titleText, nameText, subtitleText, fileName, singlePage } = options;
+  const { default: html2canvas } = await import('html2canvas');
+  const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
+  const captureScale = Math.min(2, Math.max(1.4, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1));
+  // Same reasoning as the table exporter: a single html2canvas(node) call
+  // captures the WHOLE node at once, and tall content times captureScale
+  // can exceed the browser's canvas-height ceiling (~16,384px). Capturing
+  // in fixed-height horizontal strips (cloning nothing -- just scrolling
+  // the capture window down the live node) keeps every individual capture
+  // well under that limit.
+  const MAX_CAPTURE_SOURCE_HEIGHT = 4000;
+  const rect = node.getBoundingClientRect();
+  const totalHeight = Math.max(1, Math.ceil(rect.height));
+  const captureBatches: HTMLCanvasElement[] = [];
+  let y = 0;
+  while (y < totalHeight) {
+    const sliceHeight = Math.min(MAX_CAPTURE_SOURCE_HEIGHT, totalHeight - y);
+    // eslint-disable-next-line no-await-in-loop
+    const canvas = await html2canvas(node, {
+      backgroundColor: isLightTheme ? '#f8fafc' : '#000000',
+      scale: captureScale,
+      useCORS: true,
+      logging: false,
+      y,
+      height: sliceHeight,
+      windowWidth: document.documentElement.scrollWidth,
+      // Some elements should show on-screen but not in the exported PDF
+      // (e.g. a heading that's redundant once the PDF has its own title) --
+      // mutating the CLONED document here (rather than the live node) lets
+      // that content collapse out of the capture's layout entirely instead
+      // of just being painted-over, leaving no gap where it was.
+      onclone: (clonedDoc) => {
+        clonedDoc.querySelectorAll('[data-pdf-hide="true"]').forEach((el) => {
+          (el as HTMLElement).style.display = 'none';
+        });
+      },
+    });
+    captureBatches.push(canvas);
+    y += sliceHeight;
+  }
+  await renderCaptureBatchesToPdf({ captureBatches, captureScale, isLightTheme, titleText, nameText, subtitleText, fileName, singlePage });
+}
+
 // Shared by pitching/hitting/catching suites' leaderboard "Download PDF"
 // button -- screenshots the actual rendered <table> (batched to stay under
 // the browser's canvas-height ceiling for large leaderboards), inlines any
@@ -9,9 +259,13 @@ export async function downloadLeaderboardTablePdf(options: {
   titleText: string;
   subtitleText: string;
   fileName: string;
+  /** Defaults to 'table.portal-table' (every existing caller's table class).
+   * Pass a different selector for a table that isn't tagged with that
+   * global class, e.g. a CSS-module table like Intended Zones' .logTable. */
+  tableSelector?: string;
 }): Promise<void> {
-  const { wrapNode, titleText, subtitleText, fileName } = options;
-  const tableNode = wrapNode.querySelector('table.portal-table') as HTMLTableElement | null;
+  const { wrapNode, titleText, subtitleText, fileName, tableSelector = 'table.portal-table' } = options;
+  const tableNode = wrapNode.querySelector(tableSelector) as HTMLTableElement | null;
   if (!tableNode) return;
   const headerCells = Array.from(tableNode.querySelectorAll('thead th')) as HTMLElement[];
   const originalWrapMaxHeight = wrapNode.style.maxHeight;
@@ -277,135 +531,7 @@ export async function downloadLeaderboardTablePdf(options: {
     } else if (!theadNode) {
       captureBatches.push(await captureNode(tableNode));
     }
-    const rawW = Math.max(1, ...captureBatches.map((c) => c.width));
-    const totalRawH = captureBatches.reduce((sum, c) => sum + c.height, 0);
-    const orientation: 'portrait' | 'landscape' = rawW >= totalRawH ? 'landscape' : 'portrait';
-    const pdf = new jsPDF({
-      orientation,
-      unit: 'pt',
-      format: 'letter',
-    });
-    // Pearl lockup, top-right of every page. Loaded once as a data URL
-    // (jsPDF's addImage needs actual image data, not a URL) and reused
-    // across pages -- a fetch failure just means no logo, not a broken PDF.
-    const pearlLogoDataUrl = await (async () => {
-      try {
-        const response = await fetch('/pearl-lockup-transparent.png', { cache: 'force-cache' });
-        if (!response.ok) return null;
-        const blob = await response.blob();
-        return await new Promise<string | null>((resolve) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
-          reader.onerror = () => resolve(null);
-          reader.readAsDataURL(blob);
-        });
-      } catch {
-        return null;
-      }
-    })();
-    const PEARL_LOGO_ASPECT = 1554 / 402;
-    const margin = 18;
-    const logoHeight = pearlLogoDataUrl ? 22 : 0;
-    const logoWidth = logoHeight * PEARL_LOGO_ASPECT;
-    const titleBandHeight = 34;
-    const headerBandHeight = Math.max(logoHeight, titleBandHeight) + 12;
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-    const contentTop = margin + headerBandHeight;
-    const maxContentWidth = Math.max(1, pageWidth - margin * 2);
-    const contentHeight = Math.max(1, pageHeight - contentTop - margin);
-    // Filling the full page width unconditionally stretches a narrower
-    // table's columns wider than they render on web -- cap the scale
-    // factor at 1:1 (CSS px per pt) so a table that doesn't naturally need
-    // the whole page width isn't blown up just because the page is wide.
-    const scale = Math.min(maxContentWidth / rawW, 1 / captureScale);
-    const contentWidth = Math.max(1, rawW * scale);
-    const pageSourceHeight = Math.max(1, Math.floor(contentHeight / Math.max(scale, 1e-6)));
-    const drawPageChrome = (isFirst: boolean) => {
-      if (isLightTheme) pdf.setFillColor(248, 250, 252);
-      else pdf.setFillColor(4, 5, 7);
-      pdf.rect(0, 0, pageWidth, pageHeight, 'F');
-      if (pearlLogoDataUrl) {
-        pdf.addImage(pearlLogoDataUrl, 'PNG', pageWidth - margin - logoWidth, margin, logoWidth, logoHeight, undefined, 'FAST');
-      }
-      if (isFirst) {
-        pdf.setTextColor(isLightTheme ? '#0f172a' : '#f8fafc');
-        pdf.setFont('helvetica', 'bold');
-        pdf.setFontSize(16);
-        pdf.text(titleText, margin, margin + 16);
-        if (subtitleText) {
-          pdf.setFont('helvetica', 'normal');
-          pdf.setFontSize(10);
-          pdf.setTextColor(isLightTheme ? '#475569' : '#94a3b8');
-          pdf.text(subtitleText, margin, margin + 30);
-        }
-      }
-    };
-    // Batches exist purely to keep each individual html2canvas capture
-    // under the browser's canvas-height ceiling -- they are NOT page
-    // breaks. Treating each batch as its own page (the previous version)
-    // stretched the short header batch to fill an entire page by itself,
-    // pushing all body rows onto page 2. Instead, walk every batch's rows
-    // as one continuous source-height timeline sliced into fixed-height
-    // page windows, so a page break only happens when a page's worth of
-    // content (pageSourceHeight) has actually been filled -- the header
-    // and the first chunk of body rows land on the same page together,
-    // same as the single-canvas version did before batching was added.
-    type PageState = { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D | null; used: number };
-    const pages: PageState[] = [];
-    const newPageState = (): PageState => {
-      const canvas = document.createElement('canvas');
-      canvas.width = rawW;
-      canvas.height = pageSourceHeight;
-      return { canvas, ctx: canvas.getContext('2d'), used: 0 };
-    };
-    let current = newPageState();
-    pages.push(current);
-    for (const batchCanvas of captureBatches) {
-      const batchW = Math.max(1, batchCanvas.width);
-      const batchH = Math.max(1, batchCanvas.height);
-      let sourceY = 0;
-      while (sourceY < batchH) {
-        if (pageSourceHeight - current.used <= 0) {
-          current = newPageState();
-          pages.push(current);
-          continue;
-        }
-        const chunkHeight = Math.min(pageSourceHeight - current.used, batchH - sourceY);
-        current.ctx?.drawImage(batchCanvas, 0, sourceY, batchW, chunkHeight, 0, current.used, batchW, chunkHeight);
-        current.used += chunkHeight;
-        sourceY += chunkHeight;
-      }
-    }
-    let isFirstPage = true;
-    for (const page of pages) {
-      if (!page.used) continue;
-      if (!isFirstPage) pdf.addPage('letter', orientation);
-      drawPageChrome(isFirstPage);
-      isFirstPage = false;
-      const drawHeight = page.used * scale;
-      // page.canvas is always allocated at the full pageSourceHeight (the
-      // per-page budget), but page.used is usually less than that -- a
-      // short table never fills a whole page. toDataURL() on the full
-      // canvas serializes ALL of it, including the blank space below the
-      // real content; addImage() then scales that entire (mostly blank)
-      // image into a box sized only for the real content's height
-      // (drawHeight), which squashes the real content into a fraction of
-      // that box while width scales at the full intended factor -- an
-      // asymmetric width-vs-height scale that reads as "stretched" text.
-      // Cropping to just the used region before encoding keeps the image's
-      // own aspect ratio consistent with drawHeight/contentWidth.
-      let sourceCanvas = page.canvas;
-      if (page.used < page.canvas.height) {
-        const cropped = document.createElement('canvas');
-        cropped.width = page.canvas.width;
-        cropped.height = page.used;
-        cropped.getContext('2d')?.drawImage(page.canvas, 0, 0, page.canvas.width, page.used, 0, 0, page.canvas.width, page.used);
-        sourceCanvas = cropped;
-      }
-      pdf.addImage(sourceCanvas.toDataURL('image/jpeg', 0.82), 'JPEG', margin, contentTop, contentWidth, drawHeight, undefined, 'FAST');
-    }
-    pdf.save(fileName);
+    await renderCaptureBatchesToPdf({ captureBatches, captureScale, isLightTheme, titleText, subtitleText, fileName });
   } finally {
     for (const entry of originalLogoAttrs) {
       if (entry.src === null) entry.node.removeAttribute('src');

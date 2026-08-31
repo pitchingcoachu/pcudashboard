@@ -3,10 +3,12 @@ import { NextResponse } from 'next/server';
 import { getSessionFromRequest } from '../../../../../../lib/auth';
 import { resolveProgrammingOrganizationId } from '../../../../../../lib/programming-scope';
 import {
+  deleteIntendedZonePitch,
   getIntendedZoneSession,
   listIntendedZonePitches,
   matchIntendedZonePitch,
   queueIntendedZoneTarget,
+  recordManualIntendedZonePitch,
 } from '../../../../../../lib/training-db';
 import { getPracticeBalls, getPracticePlays, type TrackmanPitchBall } from '../../../../../../lib/trackman-data-api';
 
@@ -81,7 +83,11 @@ export async function GET(request: Request) {
   return NextResponse.json({ session: izSession, pitches });
 }
 
-// POST -> queue the coach's tapped intended target for the next pitch.
+// POST -> queue the coach's tapped intended target for the next pitch
+// (live/ftp_deferred modes), OR -- when { manual: true, actualSideFt,
+// actualHeightFt } is included -- record a fully manual pitch in one call:
+// both the intended target and the actual landing spot, no TrackMan
+// involved at all.
 export async function POST(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromRequest(request, cookieStore);
@@ -92,7 +98,17 @@ export async function POST(request: Request) {
   if (organizationId <= 0) return NextResponse.json({ error: 'Session context missing.' }, { status: 400 });
 
   const body = (await request.json().catch(() => null)) as
-    | { sessionId?: number; intendedSideFt?: number; intendedHeightFt?: number; targetRadiusFt?: number }
+    | {
+        sessionId?: number;
+        intendedSideFt?: number;
+        intendedHeightFt?: number;
+        targetRadiusFt?: number;
+        manual?: boolean;
+        actualSideFt?: number;
+        actualHeightFt?: number;
+        pitchType?: string | null;
+        pitcherThrows?: string | null;
+      }
     | null;
   if (!body) return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
 
@@ -111,7 +127,48 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'sessionId, intendedSideFt, intendedHeightFt, and targetRadiusFt are required.' }, { status: 400 });
   }
 
+  if (body.manual) {
+    const actualSideFt = Number(body.actualSideFt);
+    const actualHeightFt = Number(body.actualHeightFt);
+    if (!Number.isFinite(actualSideFt) || !Number.isFinite(actualHeightFt)) {
+      return NextResponse.json({ error: 'actualSideFt and actualHeightFt are required for a manual pitch.' }, { status: 400 });
+    }
+    const result = await recordManualIntendedZonePitch({
+      organizationId,
+      sessionId,
+      intendedSideFt,
+      intendedHeightFt,
+      targetRadiusFt,
+      actualSideFt,
+      actualHeightFt,
+      pitchType: body.pitchType?.trim() || null,
+      pitcherThrows: body.pitcherThrows?.trim() || null,
+    });
+    if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
+    return NextResponse.json({ ok: true, pitch: result.pitch });
+  }
+
   const result = await queueIntendedZoneTarget({ organizationId, sessionId, intendedSideFt, intendedHeightFt, targetRadiusFt });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
   return NextResponse.json({ ok: true, pitchId: result.pitchId, pitchIndex: result.pitchIndex });
+}
+
+// DELETE ?pitchId= -> remove a single pitch (used for the manual mode's
+// undo right after a mis-tap, or an explicit delete from the pitch log).
+export async function DELETE(request: Request) {
+  const cookieStore = await cookies();
+  const session = getSessionFromRequest(request, cookieStore);
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
+  const organizationId = await resolveProgrammingOrganizationId(session);
+  if (organizationId <= 0) return NextResponse.json({ error: 'Session context missing.' }, { status: 400 });
+
+  const url = new URL(request.url);
+  const pitchId = Number(url.searchParams.get('pitchId') ?? '0');
+  if (!Number.isFinite(pitchId) || pitchId <= 0) return NextResponse.json({ error: 'pitchId is required.' }, { status: 400 });
+
+  const result = await deleteIntendedZonePitch({ organizationId, pitchId });
+  if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
+  return NextResponse.json({ ok: true });
 }

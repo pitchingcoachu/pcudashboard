@@ -22,7 +22,7 @@ const BallFlightPanel = dynamic(() => import('./ball-flight-panel'), {
 });
 
 const IntendedZonePanel = dynamic(() => import('./intended-zone-panel'), {
-  loading: () => <p className="portal-muted-text">Loading Intended Zones…</p>,
+  loading: () => <p className="portal-muted-text">Loading Intended Target…</p>,
 });
 
 type FiltersPayload = {
@@ -15150,7 +15150,7 @@ export default function PitchingSuite({
                   {canShowVeloManualEntry ? <option value="Velo Manual Entry">Velo Manual Entry</option> : null}
                   <option value="Pitcher DNA">Pitcher DNA</option>
                   <option value="Ball Flight">Ball Flight</option>
-                  <option value="Intended Zones">Intended Zones</option>
+                  <option value="Intended Zones">Intended Target</option>
                 </select>
               </label>
             ) : (
@@ -15252,7 +15252,7 @@ export default function PitchingSuite({
                   className={dashboardPage === 'Intended Zones' ? 'btn btn-primary' : 'btn btn-ghost'}
                   onClick={() => setDashboardPage('Intended Zones')}
                 >
-                  Intended Zones
+                  Intended Target
                 </button>
               </div>
             )}

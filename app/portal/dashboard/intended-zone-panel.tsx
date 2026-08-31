@@ -1,7 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import IntendedZoneStats from './intended-zone-stats';
+import { pitchLocationLabel } from '../../../lib/pitch-location';
+import { downloadContentPdf } from '../../../lib/leaderboard-pdf-export';
+import IntendedZoneStats, { DirectionHeatmap, emptyIntendedZoneDirectionBreakdown, type MissDirection } from './intended-zone-stats';
 import styles from './intended-zone-panel.module.css';
 
 // Mirrors pitching-suite.tsx's single-pitch "action zone" SVG geometry
@@ -58,9 +60,17 @@ const PITCH_COLORS: Record<string, string> = {
   Undefined: '#9ca3af',
 };
 
-const TARGET_RADIUS_MIN_FT = 0.15;
-const TARGET_RADIUS_MAX_FT = 0.75;
-const TARGET_RADIUS_DEFAULT_FT = 0.35;
+// Fixed target-size presets (diameter in inches -> radius in feet) --
+// replaced the old free-form slider so every session only ever uses one of
+// these four sizes, matching the fixed set mobile offers and keeping the
+// stats page's "N" Target Hit%" columns limited to exactly these four.
+const TARGET_SIZE_PRESETS: { label: string; radiusFt: number }[] = [
+  { label: '4"', radiusFt: 2 / 12 },
+  { label: '8"', radiusFt: 4 / 12 },
+  { label: '12"', radiusFt: 6 / 12 },
+  { label: '16"', radiusFt: 8 / 12 },
+];
+const TARGET_RADIUS_DEFAULT_FT = TARGET_SIZE_PRESETS[1].radiusFt;
 
 const MISS_DIRECTION_LABELS: Record<string, string> = {
   'up-arm': 'Up, Arm Side',
@@ -126,6 +136,8 @@ type IntendedZonePitch = {
   taggedPitcherName: string | null;
 };
 
+type IntendedZoneSessionMode = 'live' | 'ftp_deferred' | 'manual';
+
 type IntendedZoneSession = {
   id: number;
   organizationId: number;
@@ -134,7 +146,14 @@ type IntendedZoneSession = {
   targetRadiusFt: number;
   startedAt: string;
   endedAt: string | null;
+  mode: IntendedZoneSessionMode;
 };
+
+function modeLabel(mode: IntendedZoneSessionMode): string {
+  if (mode === 'ftp_deferred') return 'FTP Sync';
+  if (mode === 'manual') return 'Manual';
+  return 'Live';
+}
 
 type TrackmanDiscoveredSession = {
   sessionId: string;
@@ -156,17 +175,25 @@ export default function IntendedZonePanel({
   selectedPitchTypes?: string[];
 }) {
   const [page, setPage] = useState<'live' | 'stats'>('live');
+  const [mode, setMode] = useState<IntendedZoneSessionMode>('live');
   const [activeSession, setActiveSession] = useState<IntendedZoneSession | null>(null);
   const [discoveredSessions, setDiscoveredSessions] = useState<TrackmanDiscoveredSession[]>([]);
   const [selectedTrackmanSessionId, setSelectedTrackmanSessionId] = useState('');
   const [targetRadiusFt, setTargetRadiusFt] = useState(TARGET_RADIUS_DEFAULT_FT);
   const [pitches, setPitches] = useState<IntendedZonePitch[]>([]);
   const [pendingTarget, setPendingTarget] = useState<{ sideFt: number; heightFt: number } | null>(null);
+  const [manualActual, setManualActual] = useState<{ sideFt: number; heightFt: number } | null>(null);
+  const [manualPitchType, setManualPitchType] = useState('');
+  const [lastManualPitchId, setLastManualPitchId] = useState<number | null>(null);
   const [starting, setStarting] = useState(false);
+  const [checkingFtp, setCheckingFtp] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<IntendedZoneSession[]>([]);
   const [deletingSessionId, setDeletingSessionId] = useState<number | null>(null);
+  const [resumingSessionId, setResumingSessionId] = useState<number | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sessionExportRef = useRef<HTMLDivElement | null>(null);
+  const [isExportingSessionPdf, setIsExportingSessionPdf] = useState(false);
   const lastSeenPitchId = useRef<number | null>(null);
   const [justLanded, setJustLanded] = useState(false);
 
@@ -237,8 +264,9 @@ export default function IntendedZonePanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           pitcherName,
-          trackmanSessionId: selectedTrackmanSessionId || null,
+          trackmanSessionId: mode === 'live' ? selectedTrackmanSessionId || null : null,
           targetRadiusFt,
+          mode,
         }),
       });
       const payload = await response.json();
@@ -246,6 +274,8 @@ export default function IntendedZonePanel({
       setActiveSession(payload.session);
       setPitches([]);
       setPendingTarget(null);
+      setManualActual(null);
+      setLastManualPitchId(null);
       lastSeenPitchId.current = null;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start session.');
@@ -271,6 +301,27 @@ export default function IntendedZonePanel({
     }
   }
 
+  async function handleExportSessionPdf() {
+    const wrapNode = sessionExportRef.current;
+    if (!wrapNode || !activeSession) return;
+    setIsExportingSessionPdf(true);
+    setError(null);
+    try {
+      const dateLabel = new Date(activeSession.startedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      const safeName = (pitcherName || 'session').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      await downloadContentPdf({
+        node: wrapNode,
+        titleText: `Intended Target Session — ${pitcherName ?? 'Unknown Pitcher'}`,
+        subtitleText: [modeLabel(activeSession.mode), dateLabel].filter(Boolean).join('  ·  '),
+        fileName: `intended-zone-session-${safeName}.pdf`,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to export session PDF.');
+    } finally {
+      setIsExportingSessionPdf(false);
+    }
+  }
+
   async function handleDeleteSession(sessionId: number) {
     if (!window.confirm('Delete this session and all of its recorded pitches? This cannot be undone.')) return;
     setDeletingSessionId(sessionId);
@@ -292,13 +343,39 @@ export default function IntendedZonePanel({
     }
   }
 
+  async function handleResumeSession(target: IntendedZoneSession) {
+    setResumingSessionId(target.id);
+    setError(null);
+    try {
+      setActiveSession(target);
+      setPendingTarget(null);
+      setManualActual(null);
+      setLastManualPitchId(null);
+      lastSeenPitchId.current = null;
+      await poll(target.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to resume session.');
+    } finally {
+      setResumingSessionId(null);
+    }
+  }
+
   function handleZoneClick(event: React.MouseEvent<SVGSVGElement>) {
-    if (!activeSession || pendingTarget) return;
+    if (!activeSession) return;
     const svg = event.currentTarget;
     const rect = svg.getBoundingClientRect();
     const px = ((event.clientX - rect.left) / rect.width) * ZONE_W;
     const py = ((event.clientY - rect.top) / rect.height) * ZONE_H;
-    setPendingTarget({ sideFt: pxToFeetX(px), heightFt: pxToFeetY(py) });
+    const sideFt = pxToFeetX(px);
+    const heightFt = pxToFeetY(py);
+
+    if (activeSession.mode === 'manual') {
+      if (!pendingTarget) setPendingTarget({ sideFt, heightFt });
+      else if (!manualActual) setManualActual({ sideFt, heightFt });
+      return;
+    }
+    if (pendingTarget) return;
+    setPendingTarget({ sideFt, heightFt });
   }
 
   async function handleConfirmTarget() {
@@ -321,6 +398,78 @@ export default function IntendedZonePanel({
     }
   }
 
+  async function handleConfirmManualPitch() {
+    if (!activeSession || !pendingTarget || !manualActual) return;
+    try {
+      const response = await fetch('/api/dashboard/pitching/intended-zone/pitches', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: activeSession.id,
+          intendedSideFt: pendingTarget.sideFt,
+          intendedHeightFt: pendingTarget.heightFt,
+          targetRadiusFt,
+          manual: true,
+          actualSideFt: manualActual.sideFt,
+          actualHeightFt: manualActual.heightFt,
+          pitchType: manualPitchType || null,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to record pitch.');
+      setLastManualPitchId(payload.pitch?.id ?? null);
+      setPendingTarget(null);
+      setManualActual(null);
+      setManualPitchType('');
+      await poll(activeSession.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to record pitch.');
+    }
+  }
+
+  async function handleUndoLastManualPitch() {
+    if (!activeSession || !lastManualPitchId) return;
+    try {
+      await fetch(`/api/dashboard/pitching/intended-zone/pitches?pitchId=${lastManualPitchId}`, { method: 'DELETE' });
+      setLastManualPitchId(null);
+      await poll(activeSession.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to undo pitch.');
+    }
+  }
+
+  async function handleDeletePitch(pitchId: number) {
+    if (!activeSession) return;
+    if (!window.confirm('Delete this pitch? This cannot be undone.')) return;
+    try {
+      await fetch(`/api/dashboard/pitching/intended-zone/pitches?pitchId=${pitchId}`, { method: 'DELETE' });
+      setPitches((prev) => prev.filter((p) => p.id !== pitchId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete pitch.');
+    }
+  }
+
+  async function handleCheckFtpMatch() {
+    if (!activeSession) return;
+    setCheckingFtp(true);
+    setError(null);
+    try {
+      const response = await fetch('/api/dashboard/pitching/intended-zone/sessions', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: activeSession.id, action: 'check_ftp_match' }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to check for matches.');
+      window.alert(payload.matched > 0 ? `Matched ${payload.matched} pitch${payload.matched === 1 ? '' : 'es'}.` : 'No new matches yet — try again after the next FTP sync.');
+      await poll(activeSession.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to check for matches.');
+    } finally {
+      setCheckingFtp(false);
+    }
+  }
+
   const lastMatchedPitch = useMemo(() => {
     const matched = pitches.filter((p) => p.trackmanPlayId);
     return matched.length ? matched[matched.length - 1] : null;
@@ -332,6 +481,42 @@ export default function IntendedZonePanel({
     const avgMiss = matched.reduce((sum, p) => sum + (p.missDistanceFt ?? 0), 0) / matched.length;
     const onTarget = matched.filter((p) => p.missDirection === 'on-target').length;
     return { avgMiss, onTargetPct: (onTarget / matched.length) * 100, count: matched.length };
+  }, [pitches]);
+
+  // Running in-zone / competitive-zone tallies, overall and per pitch type --
+  // uses the same canonical strike-zone bounds as everywhere else in the
+  // dashboard (lib/pitch-location.ts), not the visual target circle, so
+  // these numbers mean the same thing as "InZone%" anywhere else in the app.
+  const zoneTallies = useMemo(() => {
+    const matched = pitches.filter((p) => p.trackmanPlayId);
+    if (!matched.length) return null;
+
+    function tally(list: typeof matched) {
+      let inZoneN = 0;
+      let competitiveN = 0;
+      for (const p of list) {
+        const label = pitchLocationLabel(p.plateLocSide, p.plateLocHeight);
+        if (label === 'Yes') inZoneN += 1;
+        if (label === 'Yes' || label === 'Competitive') competitiveN += 1;
+      }
+      return { inZoneN, competitiveN, total: list.length };
+    }
+
+    const byType = new Map<string, ReturnType<typeof tally>>();
+    for (const p of matched) {
+      const key = p.pitchType ?? 'Undefined';
+      if (!byType.has(key)) byType.set(key, tally(matched.filter((m) => (m.pitchType ?? 'Undefined') === key)));
+    }
+
+    return { overall: tally(matched), byType };
+  }, [pitches]);
+
+  const liveDirectionBreakdown = useMemo(() => {
+    const breakdown = emptyIntendedZoneDirectionBreakdown();
+    for (const p of pitches) {
+      if (p.missDirection) breakdown[p.missDirection as MissDirection] += 1;
+    }
+    return breakdown;
   }, [pitches]);
 
   // Compares the pitcher tagged on the TrackMan iPad to who was selected
@@ -393,13 +578,13 @@ export default function IntendedZonePanel({
       <div className={styles.headerRow}>
         <div>
           <p className={styles.eyebrow}>Live Tracking</p>
-          <h3 className={styles.title}>Intended Zones{pitcherName ? ` — ${pitcherName}` : ''}</h3>
+          <h3 className={styles.title}>Intended Target{pitcherName ? ` — ${pitcherName}` : ''}</h3>
           <p className={styles.subtitle}>Tap where the pitcher is aiming before each pitch — TrackMan fills in where it actually went.</p>
         </div>
         {activeSession ? (
           <span className={styles.liveBadge}>
             <span className={styles.liveDot} />
-            Live
+            {modeLabel(activeSession.mode)}
           </span>
         ) : null}
       </div>
@@ -411,45 +596,86 @@ export default function IntendedZonePanel({
       ) : !activeSession ? (
         <div className={styles.setupGrid}>
           <div className={styles.field}>
-            <label className={styles.fieldLabel} htmlFor="iz-session">
-              TrackMan Session (optional — link now, or start untracked and link later)
-            </label>
-            <select
-              id="iz-session"
-              className={styles.select}
-              value={selectedTrackmanSessionId}
-              onChange={(event) => setSelectedTrackmanSessionId(event.target.value)}
-            >
-              <option value="">No session selected</option>
-              {discoveredSessions.map((s) => (
-                <option key={s.sessionId} value={s.sessionId}>
-                  {s.gameDateLocal} ({s.sessionType})
-                </option>
-              ))}
-            </select>
+            <label className={styles.fieldLabel}>Tracking Mode</label>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className={styles.resetButton}
+                style={mode === 'live' ? { borderColor: 'rgb(var(--portal-accent-rgb, 200, 16, 46))', color: '#f8fafc' } : undefined}
+                onClick={() => setMode('live')}
+              >
+                Live (TrackMan API)
+              </button>
+              <button
+                type="button"
+                className={styles.resetButton}
+                style={mode === 'ftp_deferred' ? { borderColor: 'rgb(var(--portal-accent-rgb, 200, 16, 46))', color: '#f8fafc' } : undefined}
+                onClick={() => setMode('ftp_deferred')}
+              >
+                FTP Sync (fills in later)
+              </button>
+              <button
+                type="button"
+                className={styles.resetButton}
+                style={mode === 'manual' ? { borderColor: 'rgb(var(--portal-accent-rgb, 200, 16, 46))', color: '#f8fafc' } : undefined}
+                onClick={() => setMode('manual')}
+              >
+                Manual (no TrackMan)
+              </button>
+            </div>
+            {mode === 'ftp_deferred' ? (
+              <p className={styles.zoneHint} style={{ textAlign: 'left', marginTop: 8 }}>
+                No live TrackMan feed needed. Queue targets now; results fill in automatically once your next FTP/CSV sync ingests this bullpen's
+                data.
+              </p>
+            ) : null}
+            {mode === 'manual' ? (
+              <p className={styles.zoneHint} style={{ textAlign: 'left', marginTop: 8 }}>
+                No TrackMan at all. Click the intended target, then click again where the pitch actually landed.
+              </p>
+            ) : null}
           </div>
 
+          {mode === 'live' ? (
+            <div className={styles.field}>
+              <label className={styles.fieldLabel} htmlFor="iz-session">
+                TrackMan Session (optional — link now, or start untracked and link later)
+              </label>
+              <select
+                id="iz-session"
+                className={styles.select}
+                value={selectedTrackmanSessionId}
+                onChange={(event) => setSelectedTrackmanSessionId(event.target.value)}
+              >
+                <option value="">No session selected</option>
+                {discoveredSessions.map((s) => (
+                  <option key={s.sessionId} value={s.sessionId}>
+                    {s.gameDateLocal} ({s.sessionType})
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+
           <div className={styles.field}>
-            <label className={styles.fieldLabel} htmlFor="iz-radius">
-              Target Size
-            </label>
-            <div className={styles.sliderRow}>
-              <input
-                id="iz-radius"
-                className={styles.slider}
-                type="range"
-                min={TARGET_RADIUS_MIN_FT}
-                max={TARGET_RADIUS_MAX_FT}
-                step={0.05}
-                value={targetRadiusFt}
-                onChange={(event) => setTargetRadiusFt(Number(event.target.value))}
-              />
-              <span className={styles.sliderValue}>{(targetRadiusFt * 12).toFixed(0)}"</span>
+            <label className={styles.fieldLabel}>Target Size</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {TARGET_SIZE_PRESETS.map((preset) => (
+                <button
+                  key={preset.label}
+                  type="button"
+                  className={styles.resetButton}
+                  style={targetRadiusFt === preset.radiusFt ? { borderColor: 'rgb(var(--portal-accent-rgb, 200, 16, 46))', color: '#f8fafc' } : undefined}
+                  onClick={() => setTargetRadiusFt(preset.radiusFt)}
+                >
+                  {preset.label}
+                </button>
+              ))}
             </div>
           </div>
 
           <button type="button" className={styles.startButton} onClick={handleStartSession} disabled={starting}>
-            {starting ? 'Starting…' : 'Start Live Session'}
+            {starting ? 'Starting…' : 'Start Session'}
           </button>
 
           {history.length ? (
@@ -458,9 +684,16 @@ export default function IntendedZonePanel({
               <div style={{ display: 'grid', gap: 6 }}>
                 {history.map((s) => (
                   <div key={s.id} className={styles.historyRow}>
-                    <span>{new Date(s.startedAt).toLocaleDateString()}</span>
+                    <span
+                      style={!s.endedAt ? { cursor: 'pointer', textDecoration: 'underline' } : undefined}
+                      onClick={!s.endedAt ? () => handleResumeSession(s) : undefined}
+                    >
+                      {new Date(s.startedAt).toLocaleDateString()} — {modeLabel(s.mode)}
+                    </span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                      <span className={styles.historyStatus}>{s.endedAt ? 'Completed' : 'In progress'}</span>
+                      <span className={styles.historyStatus}>
+                        {s.endedAt ? 'Completed' : resumingSessionId === s.id ? 'Resuming…' : 'In progress — click to resume'}
+                      </span>
                       <button
                         type="button"
                         className={styles.deleteLink}
@@ -477,7 +710,7 @@ export default function IntendedZonePanel({
           ) : null}
         </div>
       ) : (
-        <div className={styles.liveLayout}>
+        <div className={styles.liveLayout} ref={sessionExportRef}>
           <div className={styles.liveHeader}>
             <p className={styles.pitchCounter}>
               Pitch <strong>#{pitches.length + (pendingTarget ? 1 : 0)}</strong>
@@ -488,6 +721,9 @@ export default function IntendedZonePanel({
               ) : null}
             </p>
             <div style={{ display: 'flex', gap: 8 }}>
+              <button type="button" className={styles.deleteLink} onClick={handleExportSessionPdf} disabled={isExportingSessionPdf}>
+                {isExportingSessionPdf ? 'Exporting…' : 'Export PDF'}
+              </button>
               <button
                 type="button"
                 className={styles.deleteLink}
@@ -517,6 +753,19 @@ export default function IntendedZonePanel({
 
           <div className={styles.contentGrid}>
             <div className={styles.zoneCard}>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {TARGET_SIZE_PRESETS.map((preset) => (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    className={styles.resetButton}
+                    style={targetRadiusFt === preset.radiusFt ? { borderColor: 'rgb(var(--portal-accent-rgb, 200, 16, 46))', color: '#f8fafc' } : undefined}
+                    onClick={() => setTargetRadiusFt(preset.radiusFt)}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
               <div className={styles.zoneFrame}>
                 <svg
                   viewBox={`0 0 ${ZONE_W} ${ZONE_H}`}
@@ -558,11 +807,22 @@ export default function IntendedZonePanel({
 
                   {pendingTarget ? (
                     <IntendedTargetGlove xFt={pendingTarget.sideFt} yFt={pendingTarget.heightFt} radiusFt={targetRadiusFt} />
-                  ) : lastMatchedPitch ? (
+                  ) : activeSession.mode !== 'manual' && lastMatchedPitch ? (
                     <IntendedTargetGlove xFt={lastMatchedPitch.intendedSideFt} yFt={lastMatchedPitch.intendedHeightFt} radiusFt={lastMatchedPitch.targetRadiusFt} />
                   ) : null}
 
-                  {lastMatchedPitch && !pendingTarget && lastMatchedPitch.plateLocSide !== null && lastMatchedPitch.plateLocHeight !== null ? (
+                  {activeSession.mode === 'manual' && manualActual ? (
+                    <circle
+                      cx={zonePx(manualActual.sideFt)}
+                      cy={zonePy(manualActual.heightFt)}
+                      r="9"
+                      fill={PITCH_COLORS[manualPitchType] ?? PITCH_COLORS.Undefined}
+                      stroke={ZONE_STROKE_STRONG}
+                      strokeWidth="2"
+                    />
+                  ) : null}
+
+                  {lastMatchedPitch && !pendingTarget && activeSession.mode !== 'manual' && lastMatchedPitch.plateLocSide !== null && lastMatchedPitch.plateLocHeight !== null ? (
                     <>
                       <line
                         x1={zonePx(lastMatchedPitch.intendedSideFt)}
@@ -588,7 +848,76 @@ export default function IntendedZonePanel({
                 </svg>
               </div>
 
-              {pendingTarget ? (
+              {activeSession.mode === 'manual' ? (
+                pendingTarget && manualActual ? (
+                  <div style={{ display: 'grid', gap: 10, justifyItems: 'center' }}>
+                    <div className={styles.field} style={{ width: 200 }}>
+                      <label className={styles.fieldLabel} htmlFor="iz-manual-pitch-type">
+                        Pitch Type
+                      </label>
+                      <select
+                        id="iz-manual-pitch-type"
+                        className={styles.select}
+                        value={manualPitchType}
+                        onChange={(event) => setManualPitchType(event.target.value)}
+                      >
+                        <option value="">Select pitch type…</option>
+                        {Object.keys(PITCH_COLORS)
+                          .filter((type) => type !== 'Undefined')
+                          .map((type) => (
+                            <option key={type} value={type}>
+                              {type}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <div className={styles.actionRow}>
+                      <button type="button" className={styles.confirmButton} onClick={handleConfirmManualPitch}>
+                        Confirm Pitch
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.resetButton}
+                        onClick={() => {
+                          setPendingTarget(null);
+                          setManualActual(null);
+                          setManualPitchType('');
+                        }}
+                      >
+                        Reset
+                      </button>
+                    </div>
+                  </div>
+                ) : pendingTarget || manualActual ? (
+                  <div className={styles.actionRow}>
+                    <p className={styles.zoneHint} style={{ marginBottom: 0 }}>
+                      Now click where the pitch actually landed.
+                    </p>
+                    <button
+                      type="button"
+                      className={styles.resetButton}
+                      onClick={() => {
+                        setPendingTarget(null);
+                        setManualActual(null);
+                        setManualPitchType('');
+                      }}
+                    >
+                      Reset
+                    </button>
+                  </div>
+                ) : (
+                  <div className={styles.actionRow}>
+                    <p className={styles.zoneHint} style={{ marginBottom: 0 }}>
+                      Click the intended target.
+                    </p>
+                    {lastManualPitchId ? (
+                      <button type="button" className={styles.resetButton} onClick={handleUndoLastManualPitch}>
+                        Undo Last Pitch
+                      </button>
+                    ) : null}
+                  </div>
+                )
+              ) : pendingTarget ? (
                 <div className={styles.actionRow}>
                   <button type="button" className={styles.confirmButton} onClick={handleConfirmTarget}>
                     Confirm Target — Ready for Pitch
@@ -602,6 +931,14 @@ export default function IntendedZonePanel({
                   {activeSession.trackmanSessionId ? 'Tap the zone to set the next target.' : 'No TrackMan session linked — data will not auto-populate.'}
                 </p>
               )}
+
+              {activeSession.mode === 'ftp_deferred' ? (
+                <div className={styles.actionRow} style={{ marginTop: 8 }}>
+                  <button type="button" className={styles.confirmButton} onClick={handleCheckFtpMatch} disabled={checkingFtp}>
+                    {checkingFtp ? 'Checking…' : 'Check for Results'}
+                  </button>
+                </div>
+              ) : null}
             </div>
 
             <div style={{ display: 'grid', gap: 14 }}>
@@ -640,7 +977,78 @@ export default function IntendedZonePanel({
                     <span className={styles.summaryStat}>
                       On target: <strong>{sessionAverages.onTargetPct.toFixed(0)}%</strong>
                     </span>
+                    {zoneTallies ? (
+                      <>
+                        <span className={styles.summaryStat}>
+                          In Zone: <strong>{zoneTallies.overall.inZoneN}/{zoneTallies.overall.total}</strong>
+                        </span>
+                        <span className={styles.summaryStat}>
+                          Competitive: <strong>{zoneTallies.overall.competitiveN}/{zoneTallies.overall.total}</strong>
+                        </span>
+                      </>
+                    ) : null}
                   </div>
+                </div>
+              ) : null}
+
+              {zoneTallies && zoneTallies.byType.size > 1 ? (
+                <div className={styles.logSection}>
+                  <p className={styles.logTitle}>In Zone / Competitive by Pitch Type</p>
+                  <div className={styles.logScroll}>
+                    <table className={styles.logTable}>
+                      <thead>
+                        <tr>
+                          <th>Pitch Type</th>
+                          <th>Pitches</th>
+                          <th>In Zone</th>
+                          <th>Competitive</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr style={{ fontWeight: 700, background: 'rgba(148, 163, 184, 0.06)' }}>
+                          <td>
+                            <span className={styles.logPitchType}>All</span>
+                          </td>
+                          <td>{zoneTallies.overall.total}</td>
+                          <td>
+                            {zoneTallies.overall.inZoneN}/{zoneTallies.overall.total} ({((zoneTallies.overall.inZoneN / zoneTallies.overall.total) * 100).toFixed(0)}%)
+                          </td>
+                          <td>
+                            {zoneTallies.overall.competitiveN}/{zoneTallies.overall.total} ({((zoneTallies.overall.competitiveN / zoneTallies.overall.total) * 100).toFixed(0)}%)
+                          </td>
+                        </tr>
+                        {Array.from(zoneTallies.byType.entries()).map(([pitchType, tally]) => (
+                          <tr key={pitchType}>
+                            <td>
+                              <span className={styles.logPitchType}>
+                                <span className={styles.logPitchDot} style={{ background: PITCH_COLORS[pitchType] ?? PITCH_COLORS.Undefined }} />
+                                {pitchType}
+                              </span>
+                            </td>
+                            <td>{tally.total}</td>
+                            <td>
+                              {tally.inZoneN}/{tally.total} ({((tally.inZoneN / tally.total) * 100).toFixed(0)}%)
+                            </td>
+                            <td>
+                              {tally.competitiveN}/{tally.total} ({((tally.competitiveN / tally.total) * 100).toFixed(0)}%)
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : null}
+
+              {sessionAverages ? (
+                <div className={styles.zoneCard} style={{ marginTop: 4 }}>
+                  <p className={styles.historyTitle} style={{ alignSelf: 'flex-start' }}>
+                    Live Miss Direction
+                  </p>
+                  <p className={styles.zoneHint} style={{ textAlign: 'left', alignSelf: 'flex-start', marginBottom: 8 }}>
+                    Where misses land relative to the target — glove/arm side is from the pitcher&apos;s own throwing-hand perspective.
+                  </p>
+                  <DirectionHeatmap breakdown={liveDirectionBreakdown} />
                 </div>
               ) : null}
             </div>
@@ -660,6 +1068,7 @@ export default function IntendedZonePanel({
                       <th>HB</th>
                       <th>Miss</th>
                       <th>Direction</th>
+                      {activeSession.mode === 'manual' ? <th /> : null}
                     </tr>
                   </thead>
                   <tbody>
@@ -682,6 +1091,13 @@ export default function IntendedZonePanel({
                             {p.missDistanceFt !== null ? `${(p.missDistanceFt * 12).toFixed(1)}"` : '—'}
                           </td>
                           <td>{p.missDirection ? MISS_DIRECTION_LABELS[p.missDirection] ?? p.missDirection : '—'}</td>
+                          {activeSession.mode === 'manual' ? (
+                            <td>
+                              <button type="button" className={styles.deleteLink} onClick={() => handleDeletePitch(p.id)}>
+                                Delete
+                              </button>
+                            </td>
+                          ) : null}
                         </tr>
                       );
                     })}

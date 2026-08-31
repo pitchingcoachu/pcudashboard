@@ -32,6 +32,7 @@ export async function GET(request: Request) {
   const pitcherName = String(url.searchParams.get('pitcherName') ?? '').trim();
   if (!pitcherName) return NextResponse.json({ error: 'pitcherName is required.' }, { status: 400 });
 
-  const stats = await getIntendedZonePitchTypeStats({ organizationId, pitcherName, startDate, endDate, pitchTypes });
+  const splitBy = url.searchParams.get('splitBy') === 'targetSize' ? 'targetSize' : 'pitchType';
+  const stats = await getIntendedZonePitchTypeStats({ organizationId, pitcherName, startDate, endDate, pitchTypes, splitBy });
   return NextResponse.json({ stats });
 }

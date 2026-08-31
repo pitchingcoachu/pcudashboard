@@ -261,8 +261,7 @@ export default function SpinDesignerPanel() {
           />
           <div className={styles.visualHud}>
             <span><b>{tiltClock}</b> release tilt</span>
-            <span><b>{Math.round(simulation.activeSpinRpm).toLocaleString()}</b> active rpm</span>
-            <span><b>{Math.round(simulation.gyroSpinRpm).toLocaleString()}</b> gyro rpm</span>
+            <span><b>{spinEfficiency}%</b> spin efficiency</span>
           </div>
           <div className={styles.visualControls}>
             <button type="button" className={styles.primaryButton} onClick={() => setPlaying((current) => !current)}>{playing ? '❚❚ Pause' : '▶ Play'}</button>
