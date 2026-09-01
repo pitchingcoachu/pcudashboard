@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createConversation, listMessageableUsers, type MessageableUsers } from '../../../lib/messages-client';
 
 type Option = { userId: number; label: string; sublabel: string };
+type PlayerGroupOption = { id: number; name: string; memberCount: number };
 
 export function NewConversationPanel() {
   const router = useRouter();
@@ -14,13 +15,43 @@ export function NewConversationPanel() {
   const [groupName, setGroupName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [query, setQuery] = useState('');
+  const [playerGroups, setPlayerGroups] = useState<PlayerGroupOption[]>([]);
+  const [importGroupId, setImportGroupId] = useState('');
+  const [isImporting, setIsImporting] = useState(false);
 
   useEffect(() => {
     listMessageableUsers()
       .then(setUsers)
       .catch((err) => window.alert(err instanceof Error ? err.message : 'Failed to load. Please try again.'))
       .finally(() => setIsLoading(false));
+    fetch('/api/admin/player-groups')
+      .then((res) => res.json())
+      .then((payload: { groups?: PlayerGroupOption[] }) => setPlayerGroups(payload.groups ?? []))
+      .catch(() => {});
   }, []);
+
+  // "Quick add" -- pulls every player from an already-existing Player Group
+  // (the same groups used for questionnaires/bulk workout assignment) into
+  // this conversation's selection, translating playerId -> userId via the
+  // messageable-users list already loaded above.
+  async function handleImportGroup(groupId: string) {
+    setImportGroupId(groupId);
+    if (!groupId) return;
+    setIsImporting(true);
+    try {
+      const response = await fetch(`/api/admin/player-groups?groupId=${groupId}`);
+      const payload = (await response.json().catch(() => ({}))) as { group?: { members: { playerId: number }[] }; error?: string };
+      if (!response.ok || !payload.group) throw new Error(payload.error ?? 'Failed to load group.');
+      const memberPlayerIds = new Set(payload.group.members.map((m) => m.playerId));
+      const memberUserIds = (users?.players ?? []).filter((p) => memberPlayerIds.has(p.playerId)).map((p) => p.userId);
+      setSelectedIds((prev) => Array.from(new Set([...prev, ...memberUserIds])));
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Failed to import group.');
+    } finally {
+      setIsImporting(false);
+      setImportGroupId('');
+    }
+  }
 
   function toggle(userId: number) {
     setSelectedIds((prev) => (prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]));
@@ -59,6 +90,23 @@ export function NewConversationPanel() {
 
   return (
     <div className="portal-messages-new-conversation">
+      {playerGroups.length ? (
+        <div className="portal-messages-search-wrap">
+          <select
+            value={importGroupId}
+            onChange={(event) => handleImportGroup(event.target.value)}
+            disabled={isImporting}
+            style={{ width: '100%' }}
+          >
+            <option value="">Quick add from existing group…</option>
+            {playerGroups.map((group) => (
+              <option key={group.id} value={String(group.id)}>
+                {group.name} ({group.memberCount})
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
       <div className="portal-messages-search-wrap">
         <input
           type="text"

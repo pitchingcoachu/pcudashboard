@@ -62,13 +62,14 @@ const PITCH_COLORS: Record<string, string> = {
 
 // Fixed target-size presets (diameter in inches -> radius in feet) --
 // replaced the old free-form slider so every session only ever uses one of
-// these four sizes, matching the fixed set mobile offers and keeping the
-// stats page's "N" Target Hit%" columns limited to exactly these four.
+// these sizes, matching the fixed set mobile offers and keeping the
+// stats page's "N" Target Hit%" columns limited to exactly these sizes.
 const TARGET_SIZE_PRESETS: { label: string; radiusFt: number }[] = [
   { label: '4"', radiusFt: 2 / 12 },
   { label: '8"', radiusFt: 4 / 12 },
   { label: '12"', radiusFt: 6 / 12 },
   { label: '16"', radiusFt: 8 / 12 },
+  { label: '20"', radiusFt: 10 / 12 },
 ];
 const TARGET_RADIUS_DEFAULT_FT = TARGET_SIZE_PRESETS[1].radiusFt;
 
@@ -187,6 +188,7 @@ export default function IntendedZonePanel({
   const [lastManualPitchId, setLastManualPitchId] = useState<number | null>(null);
   const [starting, setStarting] = useState(false);
   const [checkingFtp, setCheckingFtp] = useState(false);
+  const [resettingMatches, setResettingMatches] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<IntendedZoneSession[]>([]);
   const [deletingSessionId, setDeletingSessionId] = useState<number | null>(null);
@@ -347,7 +349,23 @@ export default function IntendedZonePanel({
     setResumingSessionId(target.id);
     setError(null);
     try {
-      setActiveSession(target);
+      let sessionToOpen = target;
+      if (target.endedAt) {
+        // Completed sessions are frozen server-side (ended_at set) -- clear
+        // it first so the pitch log becomes editable again (delete a bad
+        // pitch, etc.). Re-ending it when done is the coach's own next step,
+        // same "End Session" button as any other open session.
+        const response = await fetch('/api/dashboard/pitching/intended-zone/sessions', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: target.id, action: 'reopen' }),
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error ?? 'Failed to reopen session.');
+        sessionToOpen = { ...target, endedAt: null };
+        setHistory((prev) => prev.map((s) => (s.id === target.id ? { ...s, endedAt: null } : s)));
+      }
+      setActiveSession(sessionToOpen);
       setPendingTarget(null);
       setManualActual(null);
       setLastManualPitchId(null);
@@ -467,6 +485,30 @@ export default function IntendedZonePanel({
       setError(err instanceof Error ? err.message : 'Failed to check for matches.');
     } finally {
       setCheckingFtp(false);
+    }
+  }
+
+  // Clears already-matched pitches back to pending so "Check for Matches"
+  // can redo them -- for when a session was matched before a matching-logic
+  // fix, or against data that later turned out to be wrong/incomplete.
+  async function handleResetMatches() {
+    if (!activeSession) return;
+    if (!window.confirm('Clear all matched results for this session and re-match from scratch? This cannot be undone.')) return;
+    setResettingMatches(true);
+    setError(null);
+    try {
+      const response = await fetch('/api/dashboard/pitching/intended-zone/sessions', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: activeSession.id, action: 'reset_matches' }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to reset matches.');
+      await poll(activeSession.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to reset matches.');
+    } finally {
+      setResettingMatches(false);
     }
   }
 
@@ -685,14 +727,16 @@ export default function IntendedZonePanel({
                 {history.map((s) => (
                   <div key={s.id} className={styles.historyRow}>
                     <span
-                      style={!s.endedAt ? { cursor: 'pointer', textDecoration: 'underline' } : undefined}
-                      onClick={!s.endedAt ? () => handleResumeSession(s) : undefined}
+                      style={resumingSessionId === s.id ? undefined : { cursor: 'pointer', textDecoration: 'underline' }}
+                      onClick={resumingSessionId === s.id ? undefined : () => handleResumeSession(s)}
                     >
                       {new Date(s.startedAt).toLocaleDateString()} — {modeLabel(s.mode)}
                     </span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                       <span className={styles.historyStatus}>
-                        {s.endedAt ? 'Completed' : resumingSessionId === s.id ? 'Resuming…' : 'In progress — click to resume'}
+                        {resumingSessionId === s.id
+                          ? s.endedAt ? 'Reopening…' : 'Resuming…'
+                          : s.endedAt ? 'Completed — click to edit' : 'In progress — click to resume'}
                       </span>
                       <button
                         type="button"
@@ -937,6 +981,11 @@ export default function IntendedZonePanel({
                   <button type="button" className={styles.confirmButton} onClick={handleCheckFtpMatch} disabled={checkingFtp}>
                     {checkingFtp ? 'Checking…' : 'Check for Results'}
                   </button>
+                  {pitches.some((p) => p.trackmanPlayId) ? (
+                    <button type="button" className={styles.resetButton} onClick={handleResetMatches} disabled={resettingMatches}>
+                      {resettingMatches ? 'Resetting…' : 'Reset Matches'}
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -1068,7 +1117,7 @@ export default function IntendedZonePanel({
                       <th>HB</th>
                       <th>Miss</th>
                       <th>Direction</th>
-                      {activeSession.mode === 'manual' ? <th /> : null}
+                      <th />
                     </tr>
                   </thead>
                   <tbody>
@@ -1091,13 +1140,11 @@ export default function IntendedZonePanel({
                             {p.missDistanceFt !== null ? `${(p.missDistanceFt * 12).toFixed(1)}"` : '—'}
                           </td>
                           <td>{p.missDirection ? MISS_DIRECTION_LABELS[p.missDirection] ?? p.missDirection : '—'}</td>
-                          {activeSession.mode === 'manual' ? (
-                            <td>
-                              <button type="button" className={styles.deleteLink} onClick={() => handleDeletePitch(p.id)}>
-                                Delete
-                              </button>
-                            </td>
-                          ) : null}
+                          <td>
+                            <button type="button" className={styles.deleteLink} onClick={() => handleDeletePitch(p.id)}>
+                              Delete
+                            </button>
+                          </td>
                         </tr>
                       );
                     })}

@@ -6,6 +6,7 @@ import { conversationTitle, conversationPhoto } from './messages-helpers';
 import { MessagesAvatar } from './messages-avatar';
 import { MessageBubble } from './message-bubble';
 import { MessageComposer } from './message-composer';
+import { ManageMembersModal } from './manage-members-modal';
 
 const POLL_INTERVAL_MS = 7000;
 const MAX_GROUP_PHOTO_BYTES = 2_000_000;
@@ -13,10 +14,12 @@ const MAX_GROUP_PHOTO_BYTES = 2_000_000;
 export function ConversationThreadPanel({
   conversationId,
   currentUserId,
+  currentUserRole,
   onBack,
 }: {
   conversationId: number;
   currentUserId: number;
+  currentUserRole: 'admin' | 'coach' | 'player';
   onBack?: () => void;
 }) {
   const [conversation, setConversation] = useState<ConversationMeta | null>(null);
@@ -24,6 +27,7 @@ export function ConversationThreadPanel({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [showManageMembers, setShowManageMembers] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -192,7 +196,21 @@ export function ConversationThreadPanel({
           {isGroup ? <span className="portal-messages-thread-avatar-edit-badge">{uploadingPhoto ? '…' : '📷'}</span> : null}
         </button>
         <h2 className="portal-messages-thread-title">{title}</h2>
+        {isGroup && currentUserRole !== 'player' ? (
+          <button type="button" className="btn btn-ghost" onClick={() => setShowManageMembers(true)}>
+            Members
+          </button>
+        ) : null}
       </div>
+      {showManageMembers && conversation ? (
+        <ManageMembersModal
+          conversationId={conversationId}
+          conversation={conversation}
+          currentUserId={currentUserId}
+          onClose={() => setShowManageMembers(false)}
+          onUpdated={(next) => setConversation(next)}
+        />
+      ) : null}
       <div className="portal-messages-thread-list" ref={listRef}>
         {[...messages].map((message, index) => {
           const isOwn = String(message.senderUserId) === String(currentUserId);

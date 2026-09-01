@@ -1,8 +1,25 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { downloadLeaderboardTablePdf, downloadContentPdf } from '../../../lib/leaderboard-pdf-export';
 import styles from './intended-zone-panel.module.css';
+
+// Same fixed pitch-type ordering used everywhere else in the dashboard
+// (custom-reports-suite.tsx's PITCH_ORDER, spin-visual-panel.tsx's
+// PITCH_TYPE_ORDER) -- not alphabetical, matches how coaches actually
+// group pitch types (fastballs first, then off-speed).
+const PITCH_TYPE_ORDER = ['Fastball', 'Sinker', 'Cutter', 'Slider', 'Sweeper', 'Curveball', 'ChangeUp', 'Splitter', 'Knuckleball'];
+
+function sortByPitchTypeOrder<T extends { pitchType: string }>(rows: T[]): T[] {
+  return [...rows].sort((a, b) => {
+    const indexA = PITCH_TYPE_ORDER.indexOf(a.pitchType);
+    const indexB = PITCH_TYPE_ORDER.indexOf(b.pitchType);
+    if (indexA === -1 && indexB === -1) return a.pitchType.localeCompare(b.pitchType);
+    if (indexA === -1) return 1;
+    if (indexB === -1) return -1;
+    return indexA - indexB;
+  });
+}
 
 export const MISS_DIRECTION_ORDER = [
   'up-glove',
@@ -130,15 +147,6 @@ function sumBreakdown(breakdown: DirectionBreakdown): number {
   return MISS_DIRECTION_ORDER.reduce((sum, key) => sum + (breakdown[key] ?? 0), 0);
 }
 
-function mergeBreakdowns(rows: DirectionBreakdown[]): DirectionBreakdown {
-  const merged = {} as DirectionBreakdown;
-  for (const key of MISS_DIRECTION_ORDER) merged[key] = 0;
-  for (const row of rows) {
-    for (const key of MISS_DIRECTION_ORDER) merged[key] += row[key] ?? 0;
-  }
-  return merged;
-}
-
 export function MiniDirectionGrid({ breakdown, size = 15 }: { breakdown: DirectionBreakdown; size?: number }) {
   const total = sumBreakdown(breakdown);
   const max = Math.max(1, ...MISS_DIRECTION_ORDER.map((key) => breakdown[key] ?? 0));
@@ -182,31 +190,6 @@ export function MiniDirectionGrid({ breakdown, size = 15 }: { breakdown: Directi
 // html2canvas (used for the PDF export) -- html2canvas rasterizes <img>
 // elements (including SVG data URIs) via a plain drawImage instead of
 // trying to re-serialize the SVG DOM tree, so this survives the export.
-function homePlateSvgDataUri(w: number, h: number): string {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polygon points="${w * 0.5},${h * 0.08} ${w * 0.97},${h * 0.62} ${w * 0.97},${h * 0.95} ${w * 0.03},${h * 0.95} ${w * 0.03},${h * 0.62}" fill="rgba(226, 232, 240, 0.12)" stroke="rgba(226, 232, 240, 0.5)" stroke-width="1.5"/></svg>`;
-  return `data:image/svg+xml;base64,${typeof window !== 'undefined' ? window.btoa(svg) : Buffer.from(svg).toString('base64')}`;
-}
-
-function HomePlateIcon({ gridWidth }: { gridWidth: number }) {
-  const w = gridWidth * 0.72;
-  // Foreshortened the same way the real zone graphics draw it (pitching-suite.tsx
-  // / intended-zone-panel.tsx's action-zone SVG both use a plate that's only
-  // ~0.2 units tall against a 1.5-unit-wide strike zone) -- a pitcher looking
-  // down at the plate from the mound sees it as a thin, wide sliver, not a
-  // tall boxy pentagon. Point at the TOP (toward the mound), flat edge at
-  // the BOTTOM (toward the catcher).
-  const h = w * 0.16;
-  return (
-    <img
-      src={homePlateSvgDataUri(w, h)}
-      alt=""
-      width={w}
-      height={h}
-      style={{ display: 'block', margin: '10px auto 0' }}
-    />
-  );
-}
-
 export function DirectionHeatmap({ breakdown }: { breakdown: DirectionBreakdown }) {
   const total = sumBreakdown(breakdown);
   const max = Math.max(1, ...MISS_DIRECTION_ORDER.map((key) => breakdown[key] ?? 0));
@@ -248,7 +231,6 @@ export function DirectionHeatmap({ breakdown }: { breakdown: DirectionBreakdown 
           );
         })}
       </div>
-      <HomePlateIcon gridWidth={3 * cell + 8} />
     </div>
   );
 }
@@ -274,14 +256,19 @@ export default function IntendedZoneStats({
   const [mode, setMode] = useState<'pitcher' | 'leaderboard'>('pitcher');
   const [pitchTypeStats, setPitchTypeStats] = useState<PitchTypeStat[]>([]);
   const [leaderboard, setLeaderboard] = useState<PitcherStat[]>([]);
-  const [sortColumn, setSortColumn] = useState<'pitchCount' | 'avgMissDistanceFt' | 'missDistanceStdDevFt' | 'inZonePct' | 'competitivePct'>('avgMissDistanceFt');
+  const [leaderboardTypeStats, setLeaderboardTypeStats] = useState<PitchTypeStat[]>([]);
+  // Sort column is either a fixed PitcherStat key or a dynamic
+  // `targetHit:{inches}` key for one of the per-target-size Hit% columns
+  // (those columns vary per date range/pitcher pool, so they can't be a
+  // fixed union member) -- see leaderboardSortValue below for how both
+  // kinds resolve to a comparable value.
+  const [sortColumn, setSortColumn] = useState<string>('avgMissDistanceFt');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedPitcherRow, setSelectedPitcherRow] = useState<string | null>(null);
   const [selectedPitcherTypeStats, setSelectedPitcherTypeStats] = useState<PitchTypeStat[]>([]);
   const [selectedPitcherStatsLoading, setSelectedPitcherStatsLoading] = useState(false);
-  const [selectedPitcherPitchType, setSelectedPitcherPitchType] = useState('All');
   const [splitBy, setSplitBy] = useState<'pitchType' | 'targetSize'>('pitchType');
   const [isExportingPitcherPdf, setIsExportingPitcherPdf] = useState(false);
   const [isExportingLeaderboardPdf, setIsExportingLeaderboardPdf] = useState(false);
@@ -317,7 +304,7 @@ export default function IntendedZoneStats({
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams({ leaderboard: '1' });
+      const params = new URLSearchParams({ leaderboard: '1', splitBy });
       if (sidebarStartDate) params.set('startDate', sidebarStartDate);
       if (sidebarEndDate) params.set('endDate', sidebarEndDate);
       if (pitchTypesParam) params.set('pitchTypes', pitchTypesParam);
@@ -325,12 +312,13 @@ export default function IntendedZoneStats({
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error ?? 'Failed to load leaderboard.');
       setLeaderboard(Array.isArray(payload.leaderboard) ? payload.leaderboard : []);
+      setLeaderboardTypeStats(Array.isArray(payload.stats) ? payload.stats : []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load leaderboard.');
     } finally {
       setLoading(false);
     }
-  }, [sidebarStartDate, sidebarEndDate, pitchTypesParam]);
+  }, [sidebarStartDate, sidebarEndDate, pitchTypesParam, splitBy]);
 
   useEffect(() => {
     if (mode === 'pitcher') loadPitcherStats();
@@ -364,18 +352,59 @@ export default function IntendedZoneStats({
     };
   }, [mode, selectedPitcherRow, sidebarStartDate, sidebarEndDate, pitchTypesParam, splitBy]);
 
+  // Resolves any sortable leaderboard column (fixed field or a dynamic
+  // `targetHit:{inches}` Hit% column) to a value comparable by
+  // number-then-string, mirroring lib/table-sort.ts's sortTableRows
+  // approach but working directly off PitcherStat's typed fields instead
+  // of a flattened string-keyed record.
+  function leaderboardSortValue(row: PitcherStat, column: string): number | string | null {
+    if (column.startsWith('targetHit:')) {
+      const inches = Number(column.slice('targetHit:'.length));
+      return row.targetHitRates.find((r) => r.targetInches === inches)?.hitPct ?? null;
+    }
+    switch (column) {
+      case 'pitcherName':
+      case 'bestPitchType':
+        return row[column];
+      case 'topMissDirection':
+        return row.topMissDirection ? MISS_DIRECTION_SHORT_LABELS[row.topMissDirection] : null;
+      case 'pitchCount':
+      case 'avgMissDistanceFt':
+      case 'missDistanceStdDevFt':
+      case 'inZonePct':
+      case 'competitivePct':
+        return row[column];
+      default:
+        return null;
+    }
+  }
+
   const sortedLeaderboard = useMemo(() => {
-    const rows = [...leaderboard];
-    rows.sort((a, b) => {
-      const aVal = a[sortColumn] ?? Infinity;
-      const bVal = b[sortColumn] ?? Infinity;
-      return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+    const withIndex = leaderboard.map((row, idx) => ({ row, idx }));
+    withIndex.sort((a, b) => {
+      const av = leaderboardSortValue(a.row, sortColumn);
+      const bv = leaderboardSortValue(b.row, sortColumn);
+      let cmp: number;
+      if (typeof av === 'number' && typeof bv === 'number') {
+        cmp = av - bv;
+      } else if (av === null && bv === null) {
+        cmp = 0;
+      } else if (av === null) {
+        cmp = 1;
+      } else if (bv === null) {
+        cmp = -1;
+      } else {
+        cmp = String(av).toLowerCase().localeCompare(String(bv).toLowerCase());
+      }
+      if (cmp === 0) cmp = a.idx - b.idx;
+      return sortDirection === 'asc' ? cmp : -cmp;
     });
-    return rows;
+    return withIndex.map((entry) => entry.row);
   }, [leaderboard, sortColumn, sortDirection]);
 
   const allTypeRow = pitchTypeStats.find((s) => s.pitchType === 'All') ?? null;
-  const perTypeRows = pitchTypeStats.filter((s) => s.pitchType !== 'All');
+  const perTypeRowsRaw = pitchTypeStats.filter((s) => s.pitchType !== 'All');
+  const perTypeRows = splitBy === 'pitchType' ? sortByPitchTypeOrder(perTypeRowsRaw) : perTypeRowsRaw;
   // Hidden when split-by-target-size -- each row already IS one target size,
   // so a per-row "N" Target Hit%" column would just be 100%/self or blank,
   // adding noise instead of the miss-distance-by-size comparison that's the
@@ -383,34 +412,48 @@ export default function IntendedZoneStats({
   const perTypeTargetColumns = useMemo(() => (splitBy === 'targetSize' ? [] : collectTargetInchesColumns(perTypeRows)), [perTypeRows, splitBy]);
 
   const selectedPitcherStat = selectedPitcherRow ? leaderboard.find((p) => p.pitcherName === selectedPitcherRow) ?? null : null;
-  const combinedLeaderboardBreakdown = useMemo(() => mergeBreakdowns(leaderboard.map((p) => p.directionBreakdown)), [leaderboard]);
   const leaderboardTargetColumns = useMemo(() => collectTargetInchesColumns(leaderboard), [leaderboard]);
 
+  const leaderboardAllTypeRow = leaderboardTypeStats.find((s) => s.pitchType === 'All') ?? null;
+  const leaderboardPerTypeRowsRaw = leaderboardTypeStats.filter((s) => s.pitchType !== 'All');
+  const leaderboardPerTypeRows = splitBy === 'pitchType' ? sortByPitchTypeOrder(leaderboardPerTypeRowsRaw) : leaderboardPerTypeRowsRaw;
+  const leaderboardPerTypeTargetColumns = useMemo(
+    () => (splitBy === 'targetSize' ? [] : collectTargetInchesColumns(leaderboardPerTypeRows)),
+    [leaderboardPerTypeRows, splitBy]
+  );
+
   const selectedPitcherAllRow = selectedPitcherTypeStats.find((s) => s.pitchType === 'All') ?? null;
-  const selectedPitcherPerTypeRows = selectedPitcherTypeStats.filter((s) => s.pitchType !== 'All');
+  const selectedPitcherPerTypeRowsRaw = selectedPitcherTypeStats.filter((s) => s.pitchType !== 'All');
+  const selectedPitcherPerTypeRows = splitBy === 'pitchType' ? sortByPitchTypeOrder(selectedPitcherPerTypeRowsRaw) : selectedPitcherPerTypeRowsRaw;
   const selectedPitcherTargetColumns = useMemo(
     () => (splitBy === 'targetSize' ? [] : collectTargetInchesColumns(selectedPitcherPerTypeRows)),
     [selectedPitcherPerTypeRows, splitBy]
   );
-  const selectedPitcherPitchTypeRow =
-    selectedPitcherPitchType === 'All' ? selectedPitcherAllRow : selectedPitcherPerTypeRows.find((s) => s.pitchType === selectedPitcherPitchType) ?? null;
 
-  function toggleSort(column: typeof sortColumn) {
+  // Higher-is-better columns (zone/competitive/target-hit rate) default to
+  // descending on first click; lower-is-better (miss distance, std dev) and
+  // text columns (name, pitch type, direction) default to ascending --
+  // matches this page's existing per-column semantics rather than Pitching
+  // Suite leaderboard's simpler "always descending" rule.
+  function toggleSort(column: string) {
     if (sortColumn === column) {
       setSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'));
     } else {
       setSortColumn(column);
-      // Higher is better for zone/competitive rate, so default to
-      // descending; lower is better for miss distance/inconsistency, so
-      // default to ascending.
-      setSortDirection(column === 'inZonePct' || column === 'competitivePct' ? 'desc' : 'asc');
+      const higherIsBetter = column === 'inZonePct' || column === 'competitivePct' || column.startsWith('targetHit:');
+      setSortDirection(higherIsBetter ? 'desc' : 'asc');
     }
   }
 
-  function sortArrow(column: typeof sortColumn) {
+  function sortArrow(column: string) {
     if (sortColumn !== column) return '';
-    return sortDirection === 'asc' ? ' ▲' : ' ▼';
+    return sortDirection === 'asc' ? ' ↑' : ' ↓';
   }
+
+  const sortableHeaderStyle = (column: string): CSSProperties =>
+    sortColumn === column
+      ? { cursor: 'pointer', background: 'rgb(var(--portal-accent-rgb, 200, 16, 46))', color: '#f8fafc' }
+      : { cursor: 'pointer' };
 
   const dateRangeLabel =
     sidebarStartDate && sidebarEndDate
@@ -616,27 +659,36 @@ export default function IntendedZoneStats({
               <table className={styles.logTable}>
                 <thead>
                   <tr>
-                    <th>Pitcher</th>
-                    <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('pitchCount')}>
+                    <th>Rank</th>
+                    <th style={sortableHeaderStyle('pitcherName')} onClick={() => toggleSort('pitcherName')}>
+                      Pitcher{sortArrow('pitcherName')}
+                    </th>
+                    <th style={sortableHeaderStyle('pitchCount')} onClick={() => toggleSort('pitchCount')}>
                       Pitches{sortArrow('pitchCount')}
                     </th>
-                    <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('inZonePct')}>
+                    <th style={sortableHeaderStyle('inZonePct')} onClick={() => toggleSort('inZonePct')}>
                       In Zone%{sortArrow('inZonePct')}
                     </th>
-                    <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('competitivePct')}>
+                    <th style={sortableHeaderStyle('competitivePct')} onClick={() => toggleSort('competitivePct')}>
                       Comp%{sortArrow('competitivePct')}
                     </th>
                     {leaderboardTargetColumns.map((inches) => (
-                      <th key={inches}>{inches}" Target Hit%</th>
+                      <th key={inches} style={sortableHeaderStyle(`targetHit:${inches}`)} onClick={() => toggleSort(`targetHit:${inches}`)}>
+                        {inches}" Target Hit%{sortArrow(`targetHit:${inches}`)}
+                      </th>
                     ))}
-                    <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('avgMissDistanceFt')}>
+                    <th style={sortableHeaderStyle('avgMissDistanceFt')} onClick={() => toggleSort('avgMissDistanceFt')}>
                       Avg Miss Distance{sortArrow('avgMissDistanceFt')}
                     </th>
-                    <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('missDistanceStdDevFt')}>
+                    <th style={sortableHeaderStyle('missDistanceStdDevFt')} onClick={() => toggleSort('missDistanceStdDevFt')}>
                       Consistency (Std Dev){sortArrow('missDistanceStdDevFt')}
                     </th>
-                    <th>Best Pitch Type</th>
-                    <th>Most Common Miss</th>
+                    <th style={sortableHeaderStyle('bestPitchType')} onClick={() => toggleSort('bestPitchType')}>
+                      Best Pitch Type{sortArrow('bestPitchType')}
+                    </th>
+                    <th style={sortableHeaderStyle('topMissDirection')} onClick={() => toggleSort('topMissDirection')}>
+                      Most Common Miss{sortArrow('topMissDirection')}
+                    </th>
                     <th>Direction Spread</th>
                   </tr>
                 </thead>
@@ -646,15 +698,13 @@ export default function IntendedZoneStats({
                     return (
                       <tr
                         key={row.pitcherName}
-                        onClick={() => {
-                          setSelectedPitcherRow(row.pitcherName);
-                          setSelectedPitcherPitchType('All');
-                        }}
+                        onClick={() => setSelectedPitcherRow(row.pitcherName)}
                         style={{ cursor: 'pointer', background: selectedPitcherRow === row.pitcherName ? 'rgba(148, 163, 184, 0.08)' : undefined }}
                       >
+                        <td>{index + 1}</td>
                         <td>
                           <span className={styles.pitchCounter} style={{ fontSize: '0.85rem' }}>
-                            #{index + 1} {row.pitcherName}
+                            {row.pitcherName}
                           </span>
                         </td>
                         <td>{row.pitchCount}</td>
@@ -682,134 +732,90 @@ export default function IntendedZoneStats({
           </div>
 
           <div className={styles.zoneCard} style={{ gridColumn: '1 / -1' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', flexWrap: 'wrap', gap: 10 }}>
-              <p className={styles.historyTitle} style={{ margin: 0 }}>
-                {selectedPitcherStat ? `${selectedPitcherStat.pitcherName} — Miss Direction` : 'All Pitchers — Combined Miss Direction'}
-              </p>
-              {selectedPitcherStat ? (
-                <div className={styles.field} style={{ gap: 4 }}>
-                  <label className={styles.fieldLabel} htmlFor="iz-pitcher-pitch-type">
-                    {splitBy === 'targetSize' ? 'Target Size' : 'Pitch Type'}
-                  </label>
-                  <select
-                    id="iz-pitcher-pitch-type"
-                    className={styles.select}
-                    value={selectedPitcherPitchType}
-                    onChange={(event) => setSelectedPitcherPitchType(event.target.value)}
-                  >
-                    <option value="All">{splitBy === 'targetSize' ? 'All Target Sizes' : 'All Pitch Types'}</option>
-                    {selectedPitcherPerTypeRows.map((row) => (
-                      <option key={row.pitchType} value={row.pitchType}>
-                        {row.pitchType} ({row.pitchCount})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              ) : null}
-            </div>
-            <p className={styles.zoneHint} style={{ textAlign: 'left', marginBottom: 8 }}>
-              Where misses land relative to the target — glove/arm side is from the pitcher&apos;s own throwing-hand perspective.
+            <p className={styles.historyTitle} style={{ margin: 0, alignSelf: 'flex-start' }}>
+              {selectedPitcherStat ? `${selectedPitcherStat.pitcherName} — Miss Direction` : 'All Pitchers — Miss Direction'}
             </p>
 
-            <DirectionHeatmap
-              breakdown={
-                selectedPitcherStat
-                  ? selectedPitcherPitchTypeRow?.directionBreakdown ?? selectedPitcherStat.directionBreakdown
-                  : combinedLeaderboardBreakdown
-              }
-            />
-
-            {selectedPitcherStat && selectedPitcherPitchTypeRow ? (
-              <div className={styles.summaryCard} style={{ width: '100%' }}>
-                <p className={styles.summaryTitle}>{selectedPitcherPitchTypeRow.pitchType}</p>
-                <div className={styles.summaryStats}>
-                  <span className={styles.summaryStat}>
-                    Pitches: <strong>{selectedPitcherPitchTypeRow.pitchCount}</strong>
-                  </span>
-                  <span className={styles.summaryStat}>
-                    In Zone: <strong>{pctLabel(selectedPitcherPitchTypeRow.inZonePct)}</strong>
-                  </span>
-                  <span className={styles.summaryStat}>
-                    Competitive: <strong>{pctLabel(selectedPitcherPitchTypeRow.competitivePct)}</strong>
-                  </span>
-                  {selectedPitcherPitchTypeRow.targetHitRates.map((rate) => (
-                    <span className={styles.summaryStat} key={rate.targetInches}>
-                      {rate.targetInches}" Target Hit: <strong>{rate.hitPct.toFixed(0)}%</strong>
-                    </span>
-                  ))}
-                  <span className={styles.summaryStat}>
-                    Avg Miss: <strong>{missDistanceLabel(selectedPitcherPitchTypeRow.avgMissDistanceFt)}</strong>
-                  </span>
-                  <span className={styles.summaryStat}>
-                    Most Common Miss:{' '}
-                    <strong>{selectedPitcherPitchTypeRow.topMissDirection ? MISS_DIRECTION_SHORT_LABELS[selectedPitcherPitchTypeRow.topMissDirection] : '—'}</strong>
-                  </span>
-                </div>
-              </div>
-            ) : selectedPitcherStat && selectedPitcherStatsLoading ? (
+            {selectedPitcherStat && selectedPitcherStatsLoading ? (
               <div className={styles.waitingCard}>
                 <span className={styles.spinner} />
                 Loading pitch types…
               </div>
-            ) : null}
+            ) : (
+              (() => {
+                const rows = selectedPitcherStat ? selectedPitcherPerTypeRows : leaderboardPerTypeRows;
+                const allRow = selectedPitcherStat ? selectedPitcherAllRow : leaderboardAllTypeRow;
+                const targetColumns = selectedPitcherStat ? selectedPitcherTargetColumns : leaderboardPerTypeTargetColumns;
+                const titleSuffix = selectedPitcherStat ? ` for ${selectedPitcherStat.pitcherName}` : ' — All Pitchers';
+                return (
+                  <div style={{ width: '100%', display: 'grid', gap: 20 }}>
+                    <div className={styles.logSection} style={{ width: '100%' }}>
+                      <p className={styles.logTitle} style={{ marginBottom: 12 }}>
+                        {splitBy === 'targetSize' ? 'By Target Size' : 'By Pitch Type'}
+                        {titleSuffix}
+                      </p>
+                      <div className={styles.logScroll}>
+                        <table className={styles.logTable}>
+                          <thead>
+                            <tr>
+                              <th>{splitBy === 'targetSize' ? 'Target Size' : 'Pitch Type'}</th>
+                              <th>Pitches</th>
+                              <th>In Zone%</th>
+                              <th>Comp%</th>
+                              {targetColumns.map((inches) => (
+                                <th key={inches}>{inches}" Target Hit%</th>
+                              ))}
+                              <th>Avg Miss Distance</th>
+                              <th>Most Common Miss Direction</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {[...rows, ...(allRow ? [allRow] : [])].map((row) => {
+                              const severity = row.avgMissDistanceFt === null ? null : row.avgMissDistanceFt * 12 <= 6 ? 'good' : row.avgMissDistanceFt * 12 <= 14 ? 'warn' : 'bad';
+                              const isAllRow = row.pitchType === 'All';
+                              return (
+                                <tr key={row.pitchType} style={isAllRow ? { fontWeight: 700, background: 'rgba(148, 163, 184, 0.06)' } : undefined}>
+                                  <td>{row.pitchType}</td>
+                                  <td>{row.pitchCount}</td>
+                                  <td>{pctLabel(row.inZonePct)}</td>
+                                  <td>{pctLabel(row.competitivePct)}</td>
+                                  {targetColumns.map((inches) => (
+                                    <td key={inches}>{targetHitCellLabel(row.targetHitRates, inches)}</td>
+                                  ))}
+                                  <td className={severity ? `${styles.logMissDistance} ${styles[severity]}` : undefined}>{missDistanceLabel(row.avgMissDistanceFt)}</td>
+                                  <td>{row.topMissDirection ? MISS_DIRECTION_SHORT_LABELS[row.topMissDirection] : '—'}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
 
-            {selectedPitcherStat && selectedPitcherPerTypeRows.length ? (
-              <div className={styles.logSection} style={{ width: '100%' }}>
-                <p className={styles.logTitle}>
-                  {splitBy === 'targetSize' ? 'All Target Sizes' : 'All Pitch Types'} for {selectedPitcherStat.pitcherName}
-                </p>
-                <div className={styles.logScroll}>
-                  <table className={styles.logTable}>
-                    <thead>
-                      <tr>
-                        <th>{splitBy === 'targetSize' ? 'Target Size' : 'Pitch Type'}</th>
-                        <th>Pitches</th>
-                        <th>In Zone%</th>
-                        <th>Comp%</th>
-                        {selectedPitcherTargetColumns.map((inches) => (
-                          <th key={inches}>{inches}" Target Hit%</th>
-                        ))}
-                        <th>Avg Miss Distance</th>
-                        <th>Most Common Miss Direction</th>
-                        <th>Direction Spread</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {[...selectedPitcherPerTypeRows, ...(selectedPitcherAllRow ? [selectedPitcherAllRow] : [])].map((row) => {
-                        const severity = row.avgMissDistanceFt === null ? null : row.avgMissDistanceFt * 12 <= 6 ? 'good' : row.avgMissDistanceFt * 12 <= 14 ? 'warn' : 'bad';
-                        const isAllRow = row.pitchType === 'All';
-                        return (
-                          <tr
-                            key={row.pitchType}
-                            onClick={() => setSelectedPitcherPitchType(row.pitchType)}
-                            style={{
-                              cursor: 'pointer',
-                              fontWeight: isAllRow ? 700 : undefined,
-                              background: selectedPitcherPitchType === row.pitchType ? 'rgba(148, 163, 184, 0.08)' : isAllRow ? 'rgba(148, 163, 184, 0.06)' : undefined,
-                            }}
-                          >
-                            <td>
-                              <span className={styles.logPitchType}>{row.pitchType}</span>
-                            </td>
-                            <td>{row.pitchCount}</td>
-                            <td>{pctLabel(row.inZonePct)}</td>
-                            <td>{pctLabel(row.competitivePct)}</td>
-                            {selectedPitcherTargetColumns.map((inches) => (
-                              <td key={inches}>{targetHitCellLabel(row.targetHitRates, inches)}</td>
-                            ))}
-                            <td className={severity ? `${styles.logMissDistance} ${styles[severity]}` : undefined}>{missDistanceLabel(row.avgMissDistanceFt)}</td>
-                            <td>{row.topMissDirection ? MISS_DIRECTION_SHORT_LABELS[row.topMissDirection] : '—'}</td>
-                            <td>
-                              <MiniDirectionGrid breakdown={row.directionBreakdown} />
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            ) : null}
+                    {rows.length ? (
+                      <div>
+                        <p className={styles.logTitle} style={{ marginBottom: 4 }}>
+                          Miss Direction by {splitBy === 'targetSize' ? 'Target Size' : 'Pitch Type'}
+                        </p>
+                        <p className={styles.zoneHint} style={{ textAlign: 'left', marginBottom: 12 }}>
+                          Where misses land relative to the target — glove/arm side is from the pitcher&apos;s own throwing-hand perspective.
+                        </p>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 24 }}>
+                          {rows.map((row) => (
+                            <div key={row.pitchType} className={styles.zoneCard} style={{ width: 280 }}>
+                              <p className={styles.historyTitle} style={{ alignSelf: 'flex-start', color: '#f8fafc' }}>
+                                {row.pitchType} ({row.pitchCount})
+                              </p>
+                              <DirectionHeatmap breakdown={row.directionBreakdown} />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })()
+            )}
           </div>
           </div>
         </>

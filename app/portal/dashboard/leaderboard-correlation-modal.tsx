@@ -308,9 +308,12 @@ function numericByColumnAlias(row: LeaderboardRow, column: string): number | nul
     }
   }
   if (tokenSet.has('cswpct') || tokenSet.has('csw')) {
+    // CSW% = (called strikes + whiffs) / total pitches. Called-S% is already
+    // over total pitches, but Whiff% is whiffs/swings -- SwStrk% (whiffs
+    // over total pitches) is the one that's additive with Called-S% here.
     const called = numericFromAliases('Called-S%');
-    const whiff = numericFromAliases('Whiff%');
-    if (called !== null && whiff !== null) return called + whiff;
+    const swStrk = numericFromAliases('SwStrk%');
+    if (called !== null && swStrk !== null) return called + swStrk;
     const calledStrikes = numericFromAliases('CS');
     const whiffs = numericFromAliases('Whiffs');
     const pitches = numericFromAliases('P');

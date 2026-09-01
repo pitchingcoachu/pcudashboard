@@ -333,6 +333,23 @@ export async function getConversationParticipantIds(conversationId: number): Pro
   return result.rows.map((row) => row.user_id);
 }
 
+/** Adds people to an existing group conversation -- same insert used at
+ * creation time (insertParticipants), just callable later. Silently
+ * no-ops for anyone already a participant (ON CONFLICT DO NOTHING). */
+export async function addConversationParticipants(input: { conversationId: number; userIds: number[] }): Promise<void> {
+  await ensureMessagingTablesReady();
+  await insertParticipants(input.conversationId, input.userIds);
+}
+
+/** Removes one person from a group conversation. Their message history
+ * stays (messages.sender_user_id has no FK to conversation_participants),
+ * they just stop appearing as a participant and lose access going forward. */
+export async function removeConversationParticipant(input: { conversationId: number; userId: number }): Promise<void> {
+  await ensureMessagingTablesReady();
+  const pool = getDbPool();
+  await pool.query(`DELETE FROM conversation_participants WHERE conversation_id = $1 AND user_id = $2`, [input.conversationId, input.userId]);
+}
+
 export async function isConversationParticipant(input: { conversationId: number; userId: number }): Promise<boolean> {
   await ensureMessagingTablesReady();
   const pool = getDbPool();

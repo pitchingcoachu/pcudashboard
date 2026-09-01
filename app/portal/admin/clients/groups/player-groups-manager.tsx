@@ -15,6 +15,7 @@ export default function PlayerGroupsManager({ initialGroups, players }: Props) {
   const [memberIds, setMemberIds] = useState<Set<number>>(new Set());
   const [renameValue, setRenameValue] = useState('');
   const [newGroupName, setNewGroupName] = useState('');
+  const [copyFromGroupId, setCopyFromGroupId] = useState('');
   const [playerQuery, setPlayerQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -86,7 +87,20 @@ export default function PlayerGroupsManager({ initialGroups, players }: Props) {
       setNewGroupName('');
       await refreshGroups();
       setMessage(`Created "${payload.group.name}".`);
-      openGroup(payload.group.id);
+      await openGroup(payload.group.id);
+      // Quick add -- seed the new (still-empty) group with another group's
+      // members, so a coach can start from "Varsity Pitchers" instead of
+      // rebuilding the same list by hand. Not saved yet: the coach reviews
+      // the checked list (and can still adjust it) before hitting Save.
+      if (copyFromGroupId) {
+        const sourceId = Number(copyFromGroupId);
+        setCopyFromGroupId('');
+        const sourceResponse = await fetch(`/api/admin/player-groups?groupId=${sourceId}`);
+        const sourcePayload = (await sourceResponse.json().catch(() => ({}))) as { group?: PlayerGroupWithMembersRow };
+        if (sourceResponse.ok && sourcePayload.group) {
+          setMemberIds(new Set(sourcePayload.group.members.map((member) => member.playerId)));
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create group.');
     } finally {
@@ -145,6 +159,19 @@ export default function PlayerGroupsManager({ initialGroups, players }: Props) {
             Group Name
             <input value={newGroupName} onChange={(event) => setNewGroupName(event.target.value)} placeholder="Varsity" required />
           </label>
+          {groups.length ? (
+            <label>
+              Copy Members From (optional)
+              <select value={copyFromGroupId} onChange={(event) => setCopyFromGroupId(event.target.value)}>
+                <option value="">Start empty</option>
+                {groups.map((group) => (
+                  <option key={group.id} value={String(group.id)}>
+                    {group.name} ({group.memberCount})
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <button type="submit" className="btn btn-primary" disabled={isSaving}>
             {isSaving ? 'Creating...' : 'Create Group'}
           </button>

@@ -27,6 +27,7 @@ export function MessageBubble({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [actionsVisible, setActionsVisible] = useState(false);
   const [namesPopoverEmoji, setNamesPopoverEmoji] = useState<string | null>(null);
+  const [zoomedAttachmentId, setZoomedAttachmentId] = useState<number | null>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
@@ -72,12 +73,11 @@ export function MessageBubble({
     );
   }
 
-  // A message that's only a photo/video (no caption) doesn't need the
-  // bubble's own padded fill -- see .portal-messages-bubble.is-media-only.
-  const hasOnlyMedia =
-    !message.body &&
-    message.attachments.length > 0 &&
-    message.attachments.every((attachment) => attachment.kind === 'photo' || attachment.kind === 'video');
+  // Photos/videos always render outside the bubble entirely (see the
+  // attachments block below, rendered as siblings of .portal-messages-bubble
+  // rather than children) -- a caption is its own separate text bubble, not
+  // a background sitting behind the media.
+  const zoomedAttachment = message.attachments.find((a) => a.id === zoomedAttachmentId) ?? null;
 
   return (
     <div ref={wrapRef} className={`portal-messages-bubble-wrap${isOwn ? ' is-own' : ' is-other'}`}>
@@ -135,33 +135,63 @@ export function MessageBubble({
           ) : null}
         </div>
       ) : null}
-      <div
-        className={`portal-messages-bubble${isOwn ? ' is-own' : ' is-other'}${hasOnlyMedia ? ' is-media-only' : ''}`}
-        onPointerDown={onReact ? startLongPress : undefined}
-        onPointerUp={onReact ? clearLongPressTimer : undefined}
-        onPointerLeave={onReact ? clearLongPressTimer : undefined}
-        onPointerCancel={onReact ? clearLongPressTimer : undefined}
-        onContextMenu={
-          onReact
-            ? (event) => {
-                event.preventDefault();
-                setActionsVisible(true);
-                setPickerOpen(true);
-              }
-            : undefined
-        }
-      >
-        {message.attachments.map((attachment) => (
-          <div key={attachment.id} className="portal-messages-attachment">
+      {message.attachments
+        .filter((attachment) => attachment.kind === 'photo' || attachment.kind === 'video')
+        .map((attachment) => (
+          <div
+            key={attachment.id}
+            className="portal-messages-attachment-standalone"
+            onPointerDown={onReact ? startLongPress : undefined}
+            onPointerUp={onReact ? clearLongPressTimer : undefined}
+            onPointerLeave={onReact ? clearLongPressTimer : undefined}
+            onPointerCancel={onReact ? clearLongPressTimer : undefined}
+            onContextMenu={
+              onReact
+                ? (event) => {
+                    event.preventDefault();
+                    setActionsVisible(true);
+                    setPickerOpen(true);
+                  }
+                : undefined
+            }
+          >
             {attachment.kind === 'photo' ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={attachmentSrc(attachment.id)} alt={attachment.fileName} className="portal-messages-attachment-media" />
-            ) : null}
-            {attachment.kind === 'video' ? (
+              <button
+                type="button"
+                className="portal-messages-attachment-zoom-trigger"
+                onClick={() => setZoomedAttachmentId(attachment.id)}
+                aria-label={`View ${attachment.fileName} full size`}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={attachmentSrc(attachment.id)} alt={attachment.fileName} className="portal-messages-attachment-media" />
+              </button>
+            ) : (
               <video src={attachmentSrc(attachment.id)} controls className="portal-messages-attachment-media" />
-            ) : null}
-            {attachment.kind === 'pdf' ? (
+            )}
+          </div>
+        ))}
+      {message.attachments.some((a) => a.kind === 'pdf') || message.body ? (
+        <div
+          className={`portal-messages-bubble${isOwn ? ' is-own' : ' is-other'}`}
+          onPointerDown={onReact ? startLongPress : undefined}
+          onPointerUp={onReact ? clearLongPressTimer : undefined}
+          onPointerLeave={onReact ? clearLongPressTimer : undefined}
+          onPointerCancel={onReact ? clearLongPressTimer : undefined}
+          onContextMenu={
+            onReact
+              ? (event) => {
+                  event.preventDefault();
+                  setActionsVisible(true);
+                  setPickerOpen(true);
+                }
+              : undefined
+          }
+        >
+          {message.attachments
+            .filter((attachment) => attachment.kind === 'pdf')
+            .map((attachment) => (
               <a
+                key={attachment.id}
                 href={attachmentSrc(attachment.id)}
                 target="_blank"
                 rel="noopener noreferrer"
@@ -173,11 +203,29 @@ export function MessageBubble({
                   <span className="portal-messages-pdf-size">{formatBytes(attachment.sizeBytes)}</span>
                 </span>
               </a>
-            ) : null}
-          </div>
-        ))}
-        {message.body ? <p className="portal-messages-bubble-text">{message.body}</p> : null}
-      </div>
+            ))}
+          {message.body ? <p className="portal-messages-bubble-text">{message.body}</p> : null}
+        </div>
+      ) : null}
+      {zoomedAttachment ? (
+        <div className="portal-messages-lightbox-overlay" onClick={() => setZoomedAttachmentId(null)}>
+          <button
+            type="button"
+            className="portal-messages-lightbox-close"
+            onClick={() => setZoomedAttachmentId(null)}
+            aria-label="Close"
+          >
+            ×
+          </button>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={attachmentSrc(zoomedAttachment.id)}
+            alt={zoomedAttachment.fileName}
+            className="portal-messages-lightbox-image"
+            onClick={(event) => event.stopPropagation()}
+          />
+        </div>
+      ) : null}
       {message.reactions.length > 0 ? (
         <div className="portal-messages-reactions" aria-label="Message reactions">
           {message.reactions.map((reaction) => (

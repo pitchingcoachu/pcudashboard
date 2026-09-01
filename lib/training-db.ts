@@ -1077,6 +1077,24 @@ export async function endIntendedZoneSession(input: { organizationId: number; se
   return { ok: true };
 }
 
+/** Un-ends a completed session so its pitch log can be edited (delete a bad
+ * pitch, etc.) -- clears ended_at back to NULL, same as if it had never been
+ * ended. The coach re-ends it (endIntendedZoneSession) when done editing.
+ * Live-mode sessions reopened this way won't resume auto-matching new
+ * TrackMan pitches unless the coach is still on the live-tracking screen --
+ * this is for correcting the existing log, not continuing to track. */
+export async function reopenIntendedZoneSession(input: { organizationId: number; sessionId: number }): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureIntendedZoneSchema();
+  const pool = getDbPool();
+  const result = await pool.query(
+    `UPDATE intended_zone_sessions SET ended_at = NULL WHERE id = $1 AND organization_id = $2 AND ended_at IS NOT NULL`,
+    [input.sessionId, input.organizationId]
+  );
+  if ((result.rowCount ?? 0) === 0) return { ok: false, error: 'Session was not found or is not completed.' };
+  return { ok: true };
+}
+
 /** Deletes a session and all of its pitches (ON DELETE CASCADE) -- for
  * discarding a mistaken/test session entirely, not for ending a real one
  * (use endIntendedZoneSession for that). */
@@ -1440,13 +1458,26 @@ export async function matchIntendedZoneSessionByPitcherAndTime(input: {
     `SELECT pe.id, pe.playid, pe.platelocside, pe.platelocheight, pe.taggedpitchtype, pe.relspeed,
             pe.inducedvertbreak, pe.horzbreak, pe.pitcherthrows, pe.date, pe.time
      FROM pitch_events pe
-     WHERE TRIM(pe.pitcher) = $1
+     WHERE TRIM(pe.pitcher) = ANY($1)
        AND pe.date::date BETWEEN ($2::timestamptz - INTERVAL '1 day')::date AND ($2::timestamptz + INTERVAL '1 day')::date
-       AND pe.platelocside IS NOT NULL
-       AND pe.platelocheight IS NOT NULL
        AND NOT EXISTS (SELECT 1 FROM intended_zone_pitches izp2 WHERE izp2.pitch_events_id = pe.id)
      ORDER BY pe.date ASC, pe.time ASC`,
-    [session.pitcher_name, session.started_at]
+    // TrackMan's FTP feed tags pitchers "Last, First" (e.g. "Bates, Tyler"),
+    // but an Intended Target session's pitcher_name is stored however the
+    // coach's roster picker shows it -- often "First Last" ("Tyler Bates").
+    // An exact-string match here silently matched zero pitches for every
+    // FTP-deferred session, since the two orderings never equal each other.
+    //
+    // Deliberately NOT filtering out NULL platelocside/platelocheight here
+    // (a pitch TrackMan tracked but couldn't compute a plate location for,
+    // e.g. it left the radar's field of view) -- excluding those rows from
+    // this list would shift every later pitch's position up by one, pairing
+    // a coach's Nth queued target with the pitcher's (N+1)th real throw
+    // instead of their actual Nth throw. Pairing against the FULL sequence
+    // (including no-location throws) keeps position aligned with real throw
+    // order; a no-location candidate is still consumed below, just recorded
+    // as "no data" instead of a real miss.
+    [nameOrderingVariants(session.pitcher_name), session.started_at]
   );
 
   const pairCount = Math.min(pendingResult.rows.length, candidatesResult.rows.length);
@@ -1454,9 +1485,16 @@ export async function matchIntendedZoneSessionByPitcherAndTime(input: {
   for (let i = 0; i < pairCount; i++) {
     const pending = pendingResult.rows[i];
     const candidate = candidatesResult.rows[i];
-    const plateLocSide = Number(candidate.platelocside);
-    const plateLocHeight = Number(candidate.platelocheight);
-    if (!Number.isFinite(plateLocSide) || !Number.isFinite(plateLocHeight)) continue;
+    // Number(null) is 0, not NaN -- checking Number.isFinite() on the
+    // already-coerced value can't tell "no location" apart from a real
+    // pitch that happened to land exactly at (0, 0). Check the raw
+    // Postgres value for null/empty first.
+    const hasLocation =
+      candidate.platelocside !== null && candidate.platelocside !== '' &&
+      candidate.platelocheight !== null && candidate.platelocheight !== '' &&
+      Number.isFinite(Number(candidate.platelocside)) && Number.isFinite(Number(candidate.platelocheight));
+    const plateLocSide = hasLocation ? Number(candidate.platelocside) : null;
+    const plateLocHeight = hasLocation ? Number(candidate.platelocheight) : null;
 
     const targetResult = await pool.query<{ intended_side_ft: string; intended_height_ft: string }>(
       `SELECT intended_side_ft, intended_height_ft FROM intended_zone_pitches WHERE id = $1`,
@@ -1465,15 +1503,17 @@ export async function matchIntendedZoneSessionByPitcherAndTime(input: {
     const target = targetResult.rows[0];
     if (!target) continue;
 
-    const missSideFt = plateLocSide - Number(target.intended_side_ft);
-    const missHeightFt = plateLocHeight - Number(target.intended_height_ft);
-    const missDistanceFt = Math.sqrt(missSideFt * missSideFt + missHeightFt * missHeightFt);
-    const missDirection = classifyMissDirection({
-      missSideFt,
-      missHeightFt,
-      targetRadiusFt: Number(pending.target_radius_ft),
-      pitcherThrows: candidate.pitcherthrows,
-    });
+    const missSideFt = plateLocSide !== null && plateLocHeight !== null ? plateLocSide - Number(target.intended_side_ft) : null;
+    const missHeightFt = plateLocSide !== null && plateLocHeight !== null ? plateLocHeight - Number(target.intended_height_ft) : null;
+    const missDistanceFt = missSideFt !== null && missHeightFt !== null ? Math.sqrt(missSideFt * missSideFt + missHeightFt * missHeightFt) : null;
+    const missDirection = missSideFt !== null && missHeightFt !== null
+      ? classifyMissDirection({
+          missSideFt,
+          missHeightFt,
+          targetRadiusFt: Number(pending.target_radius_ft),
+          pitcherThrows: candidate.pitcherthrows,
+        })
+      : null;
 
     await pool.query(
       `UPDATE intended_zone_pitches
@@ -1486,8 +1526,8 @@ export async function matchIntendedZoneSessionByPitcherAndTime(input: {
       [
         pending.id,
         candidate.playid ? String(candidate.playid).trim() : null,
-        plateLocSide,
-        plateLocHeight,
+        hasLocation ? plateLocSide : null,
+        hasLocation ? plateLocHeight : null,
         missDistanceFt,
         missDirection,
         candidate.taggedpitchtype,
@@ -1504,6 +1544,41 @@ export async function matchIntendedZoneSessionByPitcherAndTime(input: {
   }
 
   return { ok: true, matched };
+}
+
+/** Clears every FTP-matched pitch in a session back to "pending" (as if
+ * "Check for Matches" had never run), so it can be re-matched with corrected
+ * logic or against freshly-synced data -- without the coach having to
+ * delete each matched row by hand. Only for ftp_deferred/live sessions;
+ * refuses on manual-mode sessions, where "matches" are the coach's own
+ * direct taps (recordManualIntendedZonePitch), not FTP pairing, and
+ * clearing them would destroy real data with no way to recompute it. */
+export async function resetIntendedZoneSessionMatches(input: {
+  organizationId: number;
+  sessionId: number;
+}): Promise<{ ok: true; reset: number } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureIntendedZoneSchema();
+  const pool = getDbPool();
+
+  const sessionResult = await pool.query<{ mode: string }>(
+    `SELECT mode FROM intended_zone_sessions WHERE id = $1 AND organization_id = $2`,
+    [input.sessionId, input.organizationId]
+  );
+  const session = sessionResult.rows[0];
+  if (!session) return { ok: false, error: 'Session not found.' };
+  if (session.mode === 'manual') return { ok: false, error: 'Manual-mode pitches are entered directly and cannot be reset.' };
+
+  const result = await pool.query(
+    `UPDATE intended_zone_pitches
+     SET trackman_play_id = NULL, plate_loc_side = NULL, plate_loc_height = NULL,
+         miss_distance_ft = NULL, miss_direction = NULL, pitch_type = NULL,
+         rel_speed = NULL, induced_vert_break = NULL, horz_break = NULL,
+         pitch_events_id = NULL, tagged_pitcher_name = NULL, thrown_at = NULL
+     WHERE session_id = $1 AND organization_id = $2`,
+    [input.sessionId, input.organizationId]
+  );
+  return { ok: true, reset: result.rowCount ?? 0 };
 }
 
 export async function listIntendedZoneSessionsForPitcher(input: { organizationId: number; pitcherName: string }): Promise<IntendedZoneSessionRow[]> {
@@ -1711,7 +1786,7 @@ function groupKeyForRow(row: { pitchType: string; targetRadiusFt: number }, spli
  * a label like `8"` instead of a pitch-type name. */
 export async function getIntendedZonePitchTypeStats(input: {
   organizationId: number;
-  pitcherName: string;
+  pitcherName?: string | null;
   startDate?: string | null;
   endDate?: string | null;
   pitchTypes?: string[] | null;
@@ -9909,6 +9984,38 @@ export async function setPlayerStatus(input: {
       RETURNING id
     `,
     [status, input.playerId, input.organizationId]
+  );
+
+  if ((updated.rowCount ?? 0) !== 1) return { ok: false, error: 'Player not found in your organization.' };
+  _invalidateTrainingReadCacheForOrganization(input.organizationId);
+  _invalidateTrainingReadCacheForPlayer(input.playerId);
+  return { ok: true };
+}
+
+/** Assigns (or clears, when coachUserId is null) a single player's coach --
+ * a narrower sibling of updatePlayerProfile that touches only
+ * assigned_coach_user_id, so bulk-assigning a coach to many players doesn't
+ * require fetching and re-submitting each player's full profile first. */
+export async function assignCoachToPlayer(input: {
+  organizationId: number;
+  playerId: number;
+  coachUserId: number | null;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  if (input.coachUserId !== null) {
+    const coachResult = await pool.query<{ id: number }>(
+      `SELECT id FROM auth_users WHERE id = $1 AND organization_id = $2 AND role IN ('admin', 'coach') LIMIT 1`,
+      [input.coachUserId, input.organizationId]
+    );
+    if ((coachResult.rowCount ?? 0) !== 1) return { ok: false, error: 'Assigned coach was not found in your organization.' };
+  }
+
+  const updated = await pool.query<{ id: number }>(
+    `UPDATE players SET assigned_coach_user_id = $1, updated_at = NOW() WHERE id = $2 AND organization_id = $3 RETURNING id`,
+    [input.coachUserId, input.playerId, input.organizationId]
   );
 
   if ((updated.rowCount ?? 0) !== 1) return { ok: false, error: 'Player not found in your organization.' };

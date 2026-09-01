@@ -8,6 +8,8 @@ import {
   getIntendedZoneSession,
   listIntendedZoneSessionsForPitcher,
   matchIntendedZoneSessionByPitcherAndTime,
+  reopenIntendedZoneSession,
+  resetIntendedZoneSessionMatches,
   startIntendedZoneSession,
 } from '../../../../../../lib/training-db';
 import { discoverPracticeSessions } from '../../../../../../lib/trackman-data-api';
@@ -36,7 +38,7 @@ export async function GET(request: Request) {
       const sessions = await discoverPracticeSessions({
         startDate: start.toISOString().slice(0, 10),
         endDate: today.toISOString().slice(0, 10),
-        sessionType: 'Pitching',
+        sessionType: 'All',
       });
       return NextResponse.json({ sessions });
     } catch (error) {
@@ -94,8 +96,11 @@ export async function PATCH(request: Request) {
   if (organizationId <= 0) return NextResponse.json({ error: 'Session context missing.' }, { status: 400 });
 
   const body = (await request.json().catch(() => null)) as { sessionId?: number; action?: string } | null;
-  if (!body || (body.action !== 'end' && body.action !== 'check_ftp_match')) {
-    return NextResponse.json({ error: 'Only { action: "end" } or { action: "check_ftp_match" } are supported.' }, { status: 400 });
+  if (!body || (body.action !== 'end' && body.action !== 'reopen' && body.action !== 'check_ftp_match' && body.action !== 'reset_matches')) {
+    return NextResponse.json(
+      { error: 'Only { action: "end" }, { action: "reopen" }, { action: "check_ftp_match" }, or { action: "reset_matches" } are supported.' },
+      { status: 400 }
+    );
   }
 
   const sessionId = Number(body.sessionId ?? 0);
@@ -105,6 +110,18 @@ export async function PATCH(request: Request) {
     const matchResult = await matchIntendedZoneSessionByPitcherAndTime({ organizationId, sessionId });
     if (!matchResult.ok) return NextResponse.json({ error: matchResult.error }, { status: 400 });
     return NextResponse.json({ ok: true, matched: matchResult.matched });
+  }
+
+  if (body.action === 'reset_matches') {
+    const resetResult = await resetIntendedZoneSessionMatches({ organizationId, sessionId });
+    if (!resetResult.ok) return NextResponse.json({ error: resetResult.error }, { status: 400 });
+    return NextResponse.json({ ok: true, reset: resetResult.reset });
+  }
+
+  if (body.action === 'reopen') {
+    const reopenResult = await reopenIntendedZoneSession({ organizationId, sessionId });
+    if (!reopenResult.ok) return NextResponse.json({ error: reopenResult.error }, { status: 400 });
+    return NextResponse.json({ ok: true });
   }
 
   const result = await endIntendedZoneSession({ organizationId, sessionId });

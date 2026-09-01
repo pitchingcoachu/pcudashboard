@@ -12767,30 +12767,69 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
   color: var(--text-main, #fff);
 }
 
-.portal-messages-attachment {
-  border-radius: 10px;
+/* Photos/videos always render as their own standalone element, never inside
+   the tan/gold .portal-messages-bubble background -- a caption (if any)
+   gets its own separate bubble instead of sharing one with the media. */
+.portal-messages-attachment-standalone {
+  border-radius: 12px;
   overflow: hidden;
-  /* Own-message background otherwise shows through/around a still-loading
-     or letterboxed photo/video as a large tan frame instead of the media
-     just sitting on its own. */
   background: #000;
+  margin: 0.15rem 0;
+}
+
+.portal-messages-attachment-zoom-trigger {
+  display: block;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
 }
 
 .portal-messages-attachment-media {
   max-width: 260px;
   max-height: 220px;
   display: block;
-  border-radius: 10px;
+  border-radius: 12px;
   background: #000;
 }
 
-/* A message that's only a photo/video (no caption, no siblings) doesn't
-   need the bubble's own padded fill at all -- media renders edge-to-edge,
-   matching the mobile app's treatment of media-only messages. */
-.portal-messages-bubble.is-media-only {
-  padding: 0;
-  background: transparent;
+.portal-messages-lightbox-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  cursor: zoom-out;
+}
+
+.portal-messages-lightbox-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+  cursor: default;
+}
+
+.portal-messages-lightbox-close {
+  position: fixed;
+  top: 1rem;
+  right: 1.25rem;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 999px;
   border: none;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.portal-messages-lightbox-close:hover {
+  background: rgba(255, 255, 255, 0.22);
 }
 
 .portal-messages-pdf-chip {

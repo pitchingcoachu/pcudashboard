@@ -171,6 +171,13 @@ export function toggleMessageReaction(conversationId: string, messageId: number,
   );
 }
 
+export function updateConversationParticipants(conversationId: string, input: { addUserIds?: number[]; removeUserIds?: number[] }) {
+  return api<{ ok: true; conversation: ConversationMeta }>(`/api/messaging/conversations/${conversationId}/participants`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+}
+
 export function setConversationPhoto(conversationId: string, photoDataUrl: string | null) {
   return api<{ ok: true; photoDataUrl: string | null }>(`/api/messaging/conversations/${conversationId}/photo`, {
     method: 'POST',

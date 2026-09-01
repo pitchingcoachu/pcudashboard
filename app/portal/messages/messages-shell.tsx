@@ -36,6 +36,7 @@ export function MessagesShell({
           <ConversationThreadPanel
             conversationId={selectedConversationId}
             currentUserId={currentUserId}
+            currentUserRole={currentUserRole}
             onBack={() => router.push('/portal/messages')}
           />
         ) : (

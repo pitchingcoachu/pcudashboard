@@ -179,7 +179,7 @@ function toCell(metric: string, row: AggRow): number | string {
     return Number((kr - bbr).toFixed(1));
   }
   if (metric === 'CSW%') return toRate(cs + whiff, p) ?? '-';
-  if (metric === 'Called-S%') return toRate(cs, take) ?? '-';
+  if (metric === 'Called-S%') return toRate(cs, p) ?? '-';
   if (metric === 'Take%') return toRate(take, p) ?? '-';
   if (metric === 'Chase%') {
     const outOfZone = Math.max(0, p - inzone);

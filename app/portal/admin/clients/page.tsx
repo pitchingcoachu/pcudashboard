@@ -9,6 +9,7 @@ import {
   resolveProgrammingSchoolCode,
 } from '../../../../lib/programming-scope';
 import PlayerRosterCards from './player-roster-cards';
+import BulkCoachAssignTable from './bulk-coach-assign-table';
 
 type ClientPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -215,100 +216,20 @@ export default async function AdminClientsPage({ searchParams }: ClientPageProps
                 status: client.status,
               }))}
             />
-            <div className="portal-roster-table-wrap portal-table-wrap">
-              <table className="portal-table">
-                <thead>
-                  <tr>
-                    <th>Player</th>
-                    <th>Email</th>
-                    <th>Coach</th>
-                    <th>Status</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pagedClients.map((client) => {
-                    const isInactive = String(client.status ?? '').trim().toLowerCase() === 'inactive';
-                    return (
-                    <tr key={client.playerId} className={isInactive ? 'portal-table-row-inactive' : undefined}>
-                      <td>{client.fullName}</td>
-                      <td>{client.email}</td>
-                      <td>{client.assignedCoachName ?? '-'}</td>
-                      <td>{isInactive ? 'Inactive' : 'Active'}</td>
-                      <td className="portal-table-actions">
-                        {canAccessProgramming ? (
-                          <>
-                            <Link className="btn btn-ghost as-link" href={`/portal/player?previewPlayerId=${client.playerId}`}>
-                              Edit Player
-                            </Link>
-                            <Link className="btn btn-ghost as-link" href={`/portal/admin/programs/${client.playerId}`}>
-                              Build Program
-                            </Link>
-                            <Link className="btn btn-ghost as-link" href={`/portal/player?previewPlayerId=${client.playerId}`}>
-                              View Profile
-                            </Link>
-                            <Link className="btn btn-ghost as-link" href={`/portal/player/program?previewPlayerId=${client.playerId}`}>
-                              Preview Program
-                            </Link>
-                            <form method="post" action="/api/admin/clients/manage" style={{ display: 'inline' }}>
-                              <input type="hidden" name="redirectTo" value={pageHref(safePage)} />
-                              <input
-                                type="hidden"
-                                name="action"
-                                value={isInactive ? 'activate' : 'deactivate'}
-                              />
-                              <input type="hidden" name="playerId" value={String(client.playerId)} />
-                              <button type="submit" className="btn btn-ghost">
-                                {isInactive ? 'Activate' : 'Deactivate'}
-                              </button>
-                            </form>
-                            {session.role === 'admin' ? (
-                              <form method="post" action="/api/admin/clients/manage" style={{ display: 'inline' }}>
-                                <input type="hidden" name="redirectTo" value="/portal/admin/clients" />
-                                <input type="hidden" name="action" value="delete" />
-                                <input type="hidden" name="playerId" value={String(client.playerId)} />
-                                <button type="submit" className="btn btn-ghost">
-                                  Delete Player
-                                </button>
-                              </form>
-                            ) : null}
-                          </>
-                        ) : (
-                          <>
-                            <Link className="btn btn-ghost as-link" href={`/portal/player?previewPlayerId=${client.playerId}`}>
-                              Edit Player
-                            </Link>
-                            <form method="post" action="/api/admin/clients/manage" style={{ display: 'inline' }}>
-                              <input type="hidden" name="redirectTo" value={pageHref(safePage)} />
-                              <input
-                                type="hidden"
-                                name="action"
-                                value={isInactive ? 'activate' : 'deactivate'}
-                              />
-                              <input type="hidden" name="playerId" value={String(client.playerId)} />
-                              <button type="submit" className="btn btn-ghost">
-                                {isInactive ? 'Activate' : 'Deactivate'}
-                              </button>
-                            </form>
-                            {session.role === 'admin' ? (
-                              <form method="post" action="/api/admin/clients/manage" style={{ display: 'inline' }}>
-                                <input type="hidden" name="redirectTo" value="/portal/admin/clients" />
-                                <input type="hidden" name="action" value="delete" />
-                                <input type="hidden" name="playerId" value={String(client.playerId)} />
-                                <button type="submit" className="btn btn-ghost">
-                                  Delete Player
-                                </button>
-                              </form>
-                            ) : null}
-                          </>
-                        )}
-                      </td>
-                    </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <BulkCoachAssignTable
+              clients={pagedClients.map((client) => ({
+                playerId: client.playerId,
+                fullName: client.fullName,
+                email: client.email,
+                assignedCoachUserId: client.assignedCoachUserId,
+                assignedCoachName: client.assignedCoachName,
+                status: client.status,
+              }))}
+              coaches={coaches.map((coach) => ({ userId: coach.userId, name: coach.name, role: coach.role }))}
+              canManagePrograms={canAccessProgramming}
+              canDelete={session.role === 'admin'}
+              pageHref={pageHref(safePage)}
+            />
             {totalPages > 1 ? (
               <div className="portal-choice-line-actions" style={{ justifyContent: 'space-between' }}>
                 <Link className="btn btn-ghost as-link" href={safePage > 1 ? pageHref(safePage - 1) : pageHref(1)}>

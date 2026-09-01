@@ -24,15 +24,19 @@ export async function GET(request: Request) {
     .map((value) => value.trim())
     .filter((value) => value && value.toLowerCase() !== 'all');
 
+  const splitBy = url.searchParams.get('splitBy') === 'targetSize' ? 'targetSize' : 'pitchType';
+
   if (url.searchParams.get('leaderboard') === '1') {
-    const leaderboard = await getIntendedZonePitcherLeaderboard({ organizationId, startDate, endDate, pitchTypes });
-    return NextResponse.json({ leaderboard });
+    const [leaderboard, stats] = await Promise.all([
+      getIntendedZonePitcherLeaderboard({ organizationId, startDate, endDate, pitchTypes }),
+      getIntendedZonePitchTypeStats({ organizationId, startDate, endDate, pitchTypes, splitBy }),
+    ]);
+    return NextResponse.json({ leaderboard, stats });
   }
 
   const pitcherName = String(url.searchParams.get('pitcherName') ?? '').trim();
   if (!pitcherName) return NextResponse.json({ error: 'pitcherName is required.' }, { status: 400 });
 
-  const splitBy = url.searchParams.get('splitBy') === 'targetSize' ? 'targetSize' : 'pitchType';
   const stats = await getIntendedZonePitchTypeStats({ organizationId, pitcherName, startDate, endDate, pitchTypes, splitBy });
   return NextResponse.json({ stats });
 }
