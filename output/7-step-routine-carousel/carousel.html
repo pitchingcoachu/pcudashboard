@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>8 Step Routine Carousel</title>
+  <style>
+    :root {
+      --ink: #050505;
+      --ink-2: #11100f;
+      --paper: #ffffff;
+      --muted: #bdb8b1;
+      --sand: #c8102e;
+      --orange: #c8102e;
+      --line: rgba(255,255,255,.16);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: #222; }
+    body { font-family: "Avenir Next", "Helvetica Neue", sans-serif; }
+    .deck { display: grid; gap: 48px; padding: 48px; justify-content: center; }
+    .slide {
+      position: relative;
+      width: 1080px;
+      height: 1350px;
+      overflow: hidden;
+      color: var(--paper);
+      background:
+        radial-gradient(circle at 90% 12%, rgba(200,16,46,.2), transparent 34%),
+        linear-gradient(145deg, var(--ink-2), var(--ink) 55%);
+      isolation: isolate;
+    }
+    .slide::before {
+      content: "";
+      position: absolute; inset: 0; z-index: -1; opacity: .14;
+      background-image:
+        linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
+      background-size: 54px 54px;
+      mask-image: linear-gradient(to bottom, black, transparent 72%);
+    }
+    .slide::after {
+      content: "";
+      position: absolute; left: 0; top: 0; width: 12px; height: 100%;
+      background: var(--orange);
+    }
+    .pad { position: absolute; inset: 82px 76px 76px 88px; }
+    .eyebrow {
+      font-family: "Avenir Next Condensed", "Helvetica Neue", sans-serif;
+      font-size: 25px; font-weight: 800; letter-spacing: .18em; text-transform: uppercase;
+      color: var(--sand);
+    }
+    .kicker { color: var(--orange); }
+    h1, h2, h3, p { margin: 0; }
+    h1, h2, h3 {
+      font-family: "Avenir Next Condensed", "Helvetica Neue", sans-serif;
+      font-weight: 900; letter-spacing: -.035em; line-height: .93;
+    }
+    h1 { font-size: 128px; }
+    h2 { font-size: 88px; }
+    h3 { font-size: 56px; }
+    .body { font-size: 34px; line-height: 1.28; color: #d9dfe8; }
+    .body strong { color: var(--paper); }
+    .rule { height: 2px; background: var(--line); }
+    .accent-rule { height: 8px; width: 118px; background: var(--orange); }
+    .corner-logo { position: absolute; bottom: 42px; z-index: 5; object-fit: contain; }
+    .corner-logo.pearl { left: 82px; width: 56px; height: 56px; }
+    .corner-logo.pcu { right: 60px; width: 66px; height: 66px; }
+    .pill {
+      display: inline-flex; padding: 11px 19px; border: 1px solid rgba(255,255,255,.22);
+      border-radius: 999px; color: var(--paper); background: rgba(255,255,255,.055);
+      font-size: 19px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+    }
+
+    /* Cover */
+    .cover .pad { display: flex; flex-direction: column; justify-content: center; padding-bottom: 90px; }
+    .cover .step-count { font-family: "Avenir Next Condensed", sans-serif; font-weight: 900; font-size: 340px; line-height: .82; color: rgba(255,255,255,.05); position: absolute; right: -30px; top: 60px; }
+    .cover h1 { max-width: 900px; margin-top: 30px; }
+    .cover h1 span { color: var(--orange); }
+    .cover .sub { margin-top: 36px; max-width: 760px; font-size: 36px; line-height: 1.24; color: #d6dce6; }
+    .cover .toc { margin-top: 64px; display: grid; gap: 14px; }
+    .cover .toc-item { display: flex; align-items: baseline; gap: 20px; font-family: "Avenir Next Condensed", sans-serif; }
+    .cover .toc-item .n { color: var(--orange); font-weight: 900; font-size: 30px; width: 48px; }
+    .cover .toc-item .t { font-weight: 800; font-size: 30px; letter-spacing: -.01em; color: #eef1f5; }
+
+    /* Step slides */
+    .step .pad { display: flex; flex-direction: column; justify-content: flex-start; }
+    .step .step-num {
+      font-family: "Avenir Next Condensed", sans-serif; font-weight: 900; font-size: 230px;
+      line-height: .8; color: rgba(255,255,255,.055); position: absolute; right: 40px; top: 60px;
+    }
+    .step .pill { margin-bottom: 26px; }
+    .step h2 { max-width: 880px; margin-top: 4px; }
+    .step .accent-rule { margin-top: 40px; margin-bottom: 40px; }
+    .step .body { max-width: 860px; font-size: 38px; line-height: 1.32; }
+    .step .body + .body { margin-top: 26px; }
+    .step .detail-card {
+      margin-top: 48px; padding: 40px 44px; border: 1px solid rgba(255,255,255,.17);
+      background: rgba(255,255,255,.045); border-radius: 22px; max-width: 860px;
+    }
+    .step .detail-card .label { font-size: 21px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin-bottom: 14px; }
+    .step .detail-card .value { font-size: 32px; line-height: 1.3; font-weight: 700; color: var(--paper); }
+    .step .progress { position: absolute; left: 88px; bottom: 130px; display: flex; gap: 10px; }
+    .step .progress .dot { width: 14px; height: 14px; border-radius: 50%; background: rgba(255,255,255,.18); }
+    .step .progress .dot.active { background: var(--orange); width: 40px; border-radius: 7px; }
+
+    /* Final */
+    .final .pad { display: flex; flex-direction: column; justify-content: center; padding-bottom: 85px; }
+    .final h2 { margin-top: 28px; font-size: 100px; }
+    .final h2 span { color: var(--orange); }
+    .final .thesis { margin-top: 36px; max-width: 830px; font-size: 34px; line-height: 1.28; color: #d8dee8; }
+    .summary-list { margin-top: 50px; display: grid; gap: 14px; }
+    .summary-item { display: grid; grid-template-columns: 64px 1fr; align-items: center; padding: 17px 22px; border: 1px solid rgba(200,16,46,.42); background: rgba(255,255,255,.035); font-size: 27px; font-weight: 750; }
+    .summary-item .num { font-family: "Avenir Next Condensed"; color: var(--sand); font-size: 21px; font-weight: 900; }
+  </style>
+</head>
+<body>
+<main class="deck">
+
+  <section class="slide cover" id="slide-1">
+    <div class="pad">
+      <h1>8 STEP<br/>ROUTINE:<br/><span>BULLPEN DAY.</span></h1>
+      <p class="sub">A detailed approach to making the most of your training session.</p>
+      <div class="toc">
+        <div class="toc-item"><span class="n">01</span><span class="t">Movement Prep</span></div>
+        <div class="toc-item"><span class="n">02</span><span class="t">Dynamic Warm Up</span></div>
+        <div class="toc-item"><span class="n">03</span><span class="t">Pre-Throw Arm Care</span></div>
+        <div class="toc-item"><span class="n">04</span><span class="t">Pre-Throw Plyos</span></div>
+        <div class="toc-item"><span class="n">05</span><span class="t">Throwing</span></div>
+        <div class="toc-item"><span class="n">06</span><span class="t">Bullpen</span></div>
+        <div class="toc-item"><span class="n">07</span><span class="t">Post-Throw Arm Care</span></div>
+        <div class="toc-item"><span class="n">08</span><span class="t">Lifting</span></div>
+      </div>
+    </div>
+    <img class="corner-logo pearl" src="../../public/pearl-mark-transparent.png"/><img class="corner-logo pcu" src="../../public/pitching-coach-u-logo.png"/>
+  </section>
+
+  <section class="slide step" id="slide-2">
+    <div class="step-num">01</div>
+    <div class="pad">
+      <h2>MOVEMENT<br/><span class="kicker">PREP.</span></h2>
+      <div class="accent-rule"></div>
+      <p class="body">5–6 movement and mobility exercises that target <strong>your</strong> deficiencies.</p>
+      <div class="detail-card">
+        <div class="label">Focus Areas</div>
+        <div class="value">T-spine rotation, hip mobility, and whatever else your assessment flags as limited.</div>
+      </div>
+      <div class="progress">
+        <div class="dot active"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div>
+        <div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div>
+      </div>
+    </div>
+    <img class="corner-logo pearl" src="../../public/pearl-mark-transparent.png"/><img class="corner-logo pcu" src="../../public/pitching-coach-u-logo.png"/>
+  </section>
+
+  <section class="slide step" id="slide-3">
+    <div class="step-num">02</div>
+    <div class="pad">
+      <h2>DYNAMIC<br/><span class="kicker">WARM UP.</span></h2>
+      <div class="accent-rule"></div>
+      <p class="body">Elevate your heart rate with athletic, dynamic, full-body movements.</p>
+      <div class="detail-card">
+        <div class="label">Movement Pool</div>
+        <div class="value">World's Greatest Stretch, lunge variations, hops, skips, jumps, sprints.</div>
+      </div>
+      <div class="progress">
+        <div class="dot"></div><div class="dot active"></div><div class="dot"></div><div class="dot"></div>
+        <div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div>
+      </div>
+    </div>
+    <img class="corner-logo pearl" src="../../public/pearl-mark-transparent.png"/><img class="corner-logo pcu" src="../../public/pitching-coach-u-logo.png"/>
+  </section>
+
+  <section class="slide step" id="slide-4">
+    <div class="step-num">03</div>
+    <div class="pad">
+      <h2>PRE-THROW<br/><span class="kicker">ARM CARE.</span></h2>
+      <div class="accent-rule"></div>
+      <p class="body">Total arm activation before a single ball gets thrown.</p>
+      <div class="detail-card">
+        <div class="label">Routine</div>
+        <div class="value">Arm circles, band routine, plyo ball drop catches, shoulder tube.</div>
+      </div>
+      <div class="progress">
+        <div class="dot"></div><div class="dot"></div><div class="dot active"></div><div class="dot"></div>
+        <div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div>
+      </div>
+    </div>
+    <img class="corner-logo pearl" src="../../public/pearl-mark-transparent.png"/><img class="corner-logo pcu" src="../../public/pitching-coach-u-logo.png"/>
+  </section>
+
+  <section class="slide step" id="slide-5">
+    <div class="step-num">04</div>
+    <div class="pad">
+      <h2>PRE-THROW<br/><span class="kicker">PLYOS.</span></h2>
+      <div class="accent-rule"></div>
+      <p class="body">3–5 plyo drills that prepare you to throw and focus on your delivery deficiencies.</p>
+      <div class="detail-card">
+        <div class="label">Progression</div>
+        <div class="value">Mainly overload balls, low-to-medium intent. Flow from most constrained to least constrained drills.</div>
+      </div>
+      <div class="progress">
+        <div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot active"></div>
+        <div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div>
+      </div>
+    </div>
+    <img class="corner-logo pearl" src="../../public/pearl-mark-transparent.png"/><img class="corner-logo pcu" src="../../public/pitching-coach-u-logo.png"/>
+  </section>
+
+  <section class="slide step" id="slide-6">
+    <div class="step-num">05</div>
+    <div class="pad">
+      <h2><span class="kicker">THROWING.</span></h2>
+      <div class="accent-rule"></div>
+      <p class="body">Extension long toss out to <strong>150'+</strong> with 4–6 pulldowns on the way in at <strong>90%+</strong> effort.</p>
+      <p class="body">Finish with light grip work.</p>
+      <div class="progress">
+        <div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div>
+        <div class="dot active"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div>
+      </div>
+    </div>
+    <img class="corner-logo pearl" src="../../public/pearl-mark-transparent.png"/><img class="corner-logo pcu" src="../../public/pitching-coach-u-logo.png"/>
+  </section>
+
+  <section class="slide step" id="slide-7">
+    <div class="step-num">06</div>
+    <div class="pad">
+      <h2><span class="kicker">BULLPEN.</span></h2>
+      <div class="accent-rule"></div>
+      <p class="body">Have a plan of attack based on your player plan goals.</p>
+      <div class="detail-card">
+        <div class="label">The Standard Buckets</div>
+        <div class="value">Command, pitch design, velo, and mechanics.</div>
+      </div>
+      <div class="progress">
+        <div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div>
+        <div class="dot"></div><div class="dot active"></div><div class="dot"></div><div class="dot"></div>
+      </div>
+    </div>
+    <img class="corner-logo pearl" src="../../public/pearl-mark-transparent.png"/><img class="corner-logo pcu" src="../../public/pitching-coach-u-logo.png"/>
+  </section>
+
+  <section class="slide step" id="slide-8">
+    <div class="step-num">07</div>
+    <div class="pad">
+      <h2>POST-THROW<br/><span class="kicker">ARM CARE.</span></h2>
+      <div class="accent-rule"></div>
+      <p class="body">Restore lost range of motion and begin the recovery process.</p>
+      <div class="detail-card">
+        <div class="label">Focus Areas</div>
+        <div class="value">Posterior shoulder, scaps, and forearm/elbow.</div>
+      </div>
+      <div class="progress">
+        <div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div>
+        <div class="dot"></div><div class="dot"></div><div class="dot active"></div><div class="dot"></div>
+      </div>
+    </div>
+    <img class="corner-logo pearl" src="../../public/pearl-mark-transparent.png"/><img class="corner-logo pcu" src="../../public/pitching-coach-u-logo.png"/>
+  </section>
+
+  <section class="slide step" id="slide-9">
+    <div class="step-num">08</div>
+    <div class="pad">
+      <h2><span class="kicker">LIFTING.</span></h2>
+      <div class="accent-rule"></div>
+      <p class="body">Based on your specific plan — could be a lower split, upper split, or a full body lift.</p>
+      <div class="progress">
+        <div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div>
+        <div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot active"></div>
+      </div>
+    </div>
+    <img class="corner-logo pearl" src="../../public/pearl-mark-transparent.png"/><img class="corner-logo pcu" src="../../public/pitching-coach-u-logo.png"/>
+  </section>
+
+  <section class="slide final" id="slide-10">
+    <div class="pad">
+      <div class="eyebrow">Save this for bullpen day</div>
+      <h2>THE FULL<br/><span>ROUTINE.</span></h2>
+      <div class="summary-list">
+        <div class="summary-item"><span class="num">01</span><span>Movement Prep</span></div>
+        <div class="summary-item"><span class="num">02</span><span>Dynamic Warm Up</span></div>
+        <div class="summary-item"><span class="num">03</span><span>Pre-Throw Arm Care</span></div>
+        <div class="summary-item"><span class="num">04</span><span>Pre-Throw Plyos</span></div>
+        <div class="summary-item"><span class="num">05</span><span>Throwing</span></div>
+        <div class="summary-item"><span class="num">06</span><span>Bullpen</span></div>
+        <div class="summary-item"><span class="num">07</span><span>Post-Throw Arm Care</span></div>
+        <div class="summary-item"><span class="num">08</span><span>Lifting</span></div>
+      </div>
+    </div>
+    <img class="corner-logo pearl" src="../../public/pearl-mark-transparent.png"/><img class="corner-logo pcu" src="../../public/pitching-coach-u-logo.png"/>
+  </section>
+
+</main>
+</body>
+</html>
