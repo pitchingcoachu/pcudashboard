@@ -5589,7 +5589,20 @@ export default function HittingSuite({
               </label>
             ) : null}
             {isLeaderboardPage ? (
-              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, flexWrap: 'nowrap', justifySelf: 'end' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  gridColumn: '1 / -1',
+                  width: '100%',
+                  minWidth: 0,
+                  maxWidth: '100%',
+                  alignItems: 'flex-end',
+                  justifyContent: 'flex-start',
+                  justifySelf: 'stretch',
+                  gap: 10,
+                  flexWrap: 'wrap',
+                }}
+              >
                 <div className="portal-color-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '0.32rem 0.55rem' }}>
                   <span className="portal-color-toggle-label">Color Code</span>
                   <button
