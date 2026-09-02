@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { createReadStream } from 'node:fs';
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -290,6 +290,31 @@ export async function getObjectFromR2(key: string): Promise<{ body: AsyncIterabl
       body: response.Body as AsyncIterable<Uint8Array>,
       contentType: response.ContentType ?? 'application/octet-stream',
       contentLength: typeof response.ContentLength === 'number' ? response.ContentLength : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function getObjectMetadataFromR2(key: string): Promise<{ contentType: string; contentLength: number } | null> {
+  if (key.startsWith('local:')) {
+    if (!canUseLocalMotionCaptureStorage()) return null;
+    const localKey = key.slice('local:'.length);
+    try {
+      const info = await stat(path.join(localMotionCaptureRoot(), localKey));
+      return { contentType: inferVideoContentTypeFromKey(localKey), contentLength: info.size };
+    } catch {
+      return null;
+    }
+  }
+  const client = getR2Client();
+  if (!client) return null;
+  try {
+    const response = await client.send(new HeadObjectCommand({ Bucket: getR2Bucket(), Key: key }));
+    if (typeof response.ContentLength !== 'number') return null;
+    return {
+      contentType: response.ContentType ?? 'application/octet-stream',
+      contentLength: response.ContentLength,
     };
   } catch {
     return null;

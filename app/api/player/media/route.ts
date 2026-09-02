@@ -4,7 +4,7 @@ import { getSessionFromRequest } from '../../../../lib/auth';
 import { readActivityRequestMeta } from '../../../../lib/portal-activity';
 import { resolvePlayerContentOrganizationId } from '../../../../lib/player-content-scope';
 import { sendPushNotificationToUsers } from '../../../../lib/push-notifications';
-import { deleteObjectFromR2, getObjectFromR2, getR2Bucket, getR2Client, isR2Configured, uploadPlayerMediaToR2 } from '../../../../lib/biomechanics-storage';
+import { deleteObjectFromR2, getObjectFromR2, getObjectMetadataFromR2, getR2Bucket, getR2Client, isR2Configured, uploadPlayerMediaToR2 } from '../../../../lib/biomechanics-storage';
 import { transcodePlayerVideo } from '../../../../lib/transcode-player-video';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { PutObjectCommand } from '@aws-sdk/client-s3';
@@ -89,6 +89,11 @@ async function triggerVideoTranscode(input: { mediaId: number; organizationId: n
       body: outputBuffer,
     });
     if (!newR2Key) throw new Error('Failed to store the transcoded video.');
+    const stored = await getObjectMetadataFromR2(newR2Key);
+    if (!stored || stored.contentLength !== outputBuffer.length) {
+      await deleteObjectFromR2(newR2Key).catch(() => {});
+      throw new Error('Stored transcoded video did not pass the upload size check.');
+    }
     await markPlayerMediaReady({ mediaId: input.mediaId, r2Key: newR2Key, contentType: 'video/mp4', sizeBytes: outputBuffer.length });
     await deleteObjectFromR2(input.r2Key).catch(() => {});
   } catch (error) {
@@ -303,6 +308,16 @@ export async function POST(request: Request) {
     if (!r2Key.startsWith(expectedKeyPrefix)) {
       return NextResponse.json({ error: 'Upload does not belong to the selected organization and player.' }, { status: 403 });
     }
+    const storedUpload = await getObjectMetadataFromR2(r2Key);
+    if (!storedUpload || storedUpload.contentLength <= 0) {
+      return NextResponse.json({ error: 'The uploaded media file is missing or incomplete. Please upload it again.' }, { status: 400 });
+    }
+    if (storedUpload.contentLength > MAX_PLAYER_MEDIA_BYTES) {
+      return NextResponse.json({ error: 'Media file is too large. Limit is 350 MB.' }, { status: 400 });
+    }
+    if (sizeBytes > 0 && storedUpload.contentLength !== sizeBytes) {
+      return NextResponse.json({ error: 'The uploaded media file is incomplete. Please upload it again.' }, { status: 400 });
+    }
 
     const created = await createPlayerMedia({
       organizationId: allowed.organizationId,
@@ -312,7 +327,7 @@ export async function POST(request: Request) {
       category: String(body.category ?? '').trim() || 'General',
       fileName,
       contentType,
-      sizeBytes,
+      sizeBytes: storedUpload.contentLength,
       r2Key,
       sourceType: String(body.sourceType ?? '').trim() || undefined,
       sourceLabel: String(body.sourceLabel ?? '').trim() || undefined,
