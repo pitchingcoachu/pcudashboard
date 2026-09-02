@@ -8549,7 +8549,7 @@ def _refresh_league_daily_rollup(
                       ELSE NULL
                     END AS break_tilt_deg,
                     COALESCE(NULLIF(TRIM(pe.taggedhittype), ''), '') AS tagged_hit_type,
-                    COALESCE(NULLIF(TRIM(pe.pitchcall), ''), '') AS pitch_call,
+                    """ + BATTED_BALL_PITCH_CALL_SQL.replace("pitchcall", "pe.pitchcall").replace("exitspeed", "pe.exitspeed").replace("taggedhittype", "pe.taggedhittype") + """ AS pitch_call,
                     COALESCE(NULLIF(TRIM(pe.korbb), ''), '') AS korbb,
                     COALESCE(NULLIF(TRIM(pe.playresult), ''), '') AS play_result,
                     COALESCE(
@@ -8852,7 +8852,7 @@ def _refresh_league_daily_rollup(
                       ELSE NULL
                     END AS break_tilt_deg,
                     COALESCE(NULLIF(TRIM(pe.taggedhittype), ''), '') AS tagged_hit_type,
-                    COALESCE(NULLIF(TRIM(pe.pitchcall), ''), '') AS pitch_call,
+                    """ + BATTED_BALL_PITCH_CALL_SQL.replace("pitchcall", "pe.pitchcall").replace("exitspeed", "pe.exitspeed").replace("taggedhittype", "pe.taggedhittype") + """ AS pitch_call,
                     COALESCE(NULLIF(TRIM(pe.korbb), ''), '') AS korbb,
                     COALESCE(NULLIF(TRIM(pe.playresult), ''), '') AS play_result,
                     COALESCE(
@@ -15872,6 +15872,24 @@ CASE
   WHEN regexp_replace(lower(COALESCE(TRIM(taggedpitchtype), '')), '[^a-z0-9]', '', 'g')
        IN ('knuckleball', 'kn') THEN 'Knuckleball'
   ELSE COALESCE(NULLIF(TRIM(taggedpitchtype), ''), 'Undefined')
+END
+"""
+
+# V3 batting-practice exports can contain real contact data while leaving both
+# PitchCall and TaggedPitchType as Undefined. Treat a row as in play when the
+# batted-ball payload itself proves contact; this preserves EV/LA/BIP metrics
+# without turning empty toss or swing rows into batted balls.
+BATTED_BALL_PITCH_CALL_SQL = """
+CASE
+  WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitchcall), ''), '')), '[^a-z0-9]', '', 'g')
+       IN ('', 'unknown', 'undefined')
+       AND (
+         regexp_match(COALESCE(exitspeed, ''), '[-+]?[0-9]*\\.?[0-9]+') IS NOT NULL
+         OR regexp_replace(lower(COALESCE(NULLIF(TRIM(taggedhittype), ''), '')), '[^a-z0-9]', '', 'g')
+              NOT IN ('', 'unknown', 'undefined')
+       )
+    THEN 'InPlay'
+  ELSE COALESCE(NULLIF(TRIM(pitchcall), ''), '')
 END
 """
 
@@ -26533,7 +26551,6 @@ def hitting_overview(
                 "pe.session_date >= %(start_date)s::date" if start_date else "TRUE",
                 "pe.session_date <= %(end_date)s::date" if end_date else "TRUE",
                 "(" + SCHOOL_RELEVANT_TEAM_SQL + ")",
-                "(" + PITCH_TYPE_NORMALIZE_SQL + ") <> 'Undefined'",
                 "(%(hitter_count)s::int = 0 OR " + BATTER_NAME_NORM_SQL + " = ANY(%(hitters_norm)s::text[]))",
                 "(%(opp_pitcher_count)s::int = 0 OR " + PITCHER_NAME_NORM_SQL + " = ANY(%(opp_pitchers_norm)s::text[]))",
                 "(%(pitch_types_count)s::int = 0 OR " + PITCH_TYPE_NORMALIZE_SQL + " = ANY(%(pitch_types)s::text[]))",
@@ -26576,7 +26593,7 @@ def hitting_overview(
                               COALESCE(NULLIF(TRIM(pe.pitcherthrows), ''), '') AS pitcherthrows,
                               COALESCE(NULLIF(TRIM(pe.batterside), ''), '') AS batterside,
                               {PITCH_TYPE_NORMALIZE_SQL} AS pitch_type,
-                              COALESCE(NULLIF(TRIM(pe.pitchcall), ''), '') AS pitch_call,
+                              {BATTED_BALL_PITCH_CALL_SQL.replace("pitchcall", "pe.pitchcall").replace("exitspeed", "pe.exitspeed").replace("taggedhittype", "pe.taggedhittype")} AS pitch_call,
                               COALESCE(NULLIF(TRIM(pe.playresult), ''), '') AS play_result,
                               COALESCE(NULLIF(TRIM(pe.korbb), ''), '') AS korbb,
                               COALESCE(NULLIF(TRIM(pe.session_type), ''), NULLIF(TRIM(pe.sessiontype), ''), 'Unknown') AS session_type_norm,
@@ -26734,7 +26751,7 @@ def hitting_overview(
                   """
                 + PITCH_TYPE_NORMALIZE_SQL
                 + """ AS pitch_type,
-                  COALESCE(NULLIF(TRIM(pitchcall), ''), '') AS pitch_call,
+                  """ + BATTED_BALL_PITCH_CALL_SQL + """ AS pitch_call,
                   COALESCE(NULLIF(TRIM(playresult), ''), '') AS play_result,
                   COALESCE(NULLIF(TRIM(korbb), ''), '') AS korbb,
                   COALESCE(NULLIF(TRIM(taggedhittype), ''), '') AS tagged_hit_type,
