@@ -43,8 +43,9 @@ export default async function PlayerThrowingPage({ searchParams }: ThrowingPageP
     cache: 'no-store',
   }).catch(() => null);
   const payload = response ? await response.json().catch(() => ({})) : {};
-  const byDate = ((payload as { byDate?: Record<string, { intensity: string; distance: string; throwsText: string; drills: string; bullpen: string }> }).byDate ?? {});
+  const byDate = ((payload as { byDate?: Record<string, Record<string, string>> }).byDate ?? {});
   const weekNotes = ((payload as { weekNotes?: Record<string, string> }).weekNotes ?? {});
+  const fieldSchema = ((payload as { fieldSchema?: { key: string; label: string }[] }).fieldSchema ?? []);
   const programmingOrganizationId = await resolveProgrammingOrganizationId(session);
   const previewClients = canPreview && programmingOrganizationId > 0
     ? await listPlayerChoicesByOrganization({ organizationId: programmingOrganizationId })
@@ -126,7 +127,7 @@ export default async function PlayerThrowingPage({ searchParams }: ThrowingPageP
       {Object.keys(byDate).length === 0 ? (
         <p className="portal-muted-text">No throwing calendar data yet.</p>
       ) : (
-        <ThrowingReadonly byDate={byDate} weekNotes={weekNotes} initialDate={initialDate} />
+        <ThrowingReadonly byDate={byDate} weekNotes={weekNotes} fieldSchema={fieldSchema} initialDate={initialDate} />
       )}
     </PortalChrome>
   );

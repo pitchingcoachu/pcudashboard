@@ -1,10 +1,11 @@
 import { cookies } from 'next/headers';
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 import { getSessionFromRequest } from '../../../../lib/auth';
 import { readActivityRequestMeta } from '../../../../lib/portal-activity';
 import { resolvePlayerContentOrganizationId } from '../../../../lib/player-content-scope';
 import { sendPushNotificationToUsers } from '../../../../lib/push-notifications';
-import { deleteObjectFromR2, getR2Bucket, getR2Client, isR2Configured, uploadPlayerMediaToR2 } from '../../../../lib/biomechanics-storage';
+import { deleteObjectFromR2, getObjectFromR2, getR2Bucket, getR2Client, isR2Configured, uploadPlayerMediaToR2 } from '../../../../lib/biomechanics-storage';
+import { transcodePlayerVideo } from '../../../../lib/transcode-player-video';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { PutObjectCommand } from '@aws-sdk/client-s3';
 import {
@@ -14,13 +15,21 @@ import {
   getPlayerNotificationContext,
   listPlayerMediaCategoriesByOrganization,
   listPlayerMedia,
+  markPlayerMediaFailed,
+  markPlayerMediaProcessing,
+  markPlayerMediaReady,
   notifyPlayerForStaffActivity,
   notifyStaffForPlayerActivity,
   recordPortalActivityEvent,
   updatePlayerMedia,
 } from '../../../../lib/training-db';
 
-export const maxDuration = 60;
+// Video uploads trigger a background ffmpeg transcode (see
+// triggerVideoTranscode below) that can run for minutes on a large file --
+// same justification/precedent as the pitching video-export route's
+// maxDuration=1800 (Vercel Pro + Fluid Compute supports long-running
+// media-processing invocations via after()).
+export const maxDuration = 1800;
 
 const MAX_PLAYER_MEDIA_BYTES = 350 * 1024 * 1024;
 
@@ -49,6 +58,46 @@ function buildR2Key(organizationId: number, playerId: number, fileName: string, 
   const safeName = String(fileName ?? 'media').replace(/[^a-zA-Z0-9._-]+/g, '-');
   const kind = inferMediaType(contentType) ?? 'file';
   return `player-media/org-${organizationId}/player-${playerId}/${kind}-${Date.now()}-${safeName}`;
+}
+
+async function bufferFromAsyncIterable(body: AsyncIterable<Uint8Array>): Promise<Buffer> {
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of body) chunks.push(chunk);
+  return Buffer.concat(chunks);
+}
+
+/**
+ * Fires the background transcode for a just-created video media row. Called
+ * from inside after() by both POST branches -- the response has already
+ * gone out by the time this runs, so a slow/failed transcode can't hold up
+ * the upload itself. See lib/transcode-player-video.ts for why this exists:
+ * neither upload path normalizes the source file, and mobile's native video
+ * player is far stricter about container/codec than a browser's <video> tag.
+ */
+async function triggerVideoTranscode(input: { mediaId: number; organizationId: number; playerId: number; fileName: string; r2Key: string }): Promise<void> {
+  try {
+    await markPlayerMediaProcessing(input.mediaId);
+    const original = await getObjectFromR2(input.r2Key);
+    if (!original) throw new Error('Could not read the uploaded video back from storage.');
+    const inputBuffer = await bufferFromAsyncIterable(original.body);
+    const outputBuffer = await transcodePlayerVideo(inputBuffer);
+    const newR2Key = await uploadPlayerMediaToR2({
+      organizationId: input.organizationId,
+      playerId: input.playerId,
+      fileName: input.fileName.replace(/\.[^./]+$/, '') + '.mp4',
+      contentType: 'video/mp4',
+      body: outputBuffer,
+    });
+    if (!newR2Key) throw new Error('Failed to store the transcoded video.');
+    await markPlayerMediaReady({ mediaId: input.mediaId, r2Key: newR2Key, contentType: 'video/mp4', sizeBytes: outputBuffer.length });
+    await deleteObjectFromR2(input.r2Key).catch(() => {});
+  } catch (error) {
+    console.error('[player-media] video transcode failed', error);
+    await markPlayerMediaFailed({
+      mediaId: input.mediaId,
+      error: error instanceof Error ? error.message : 'Transcode failed.',
+    }).catch(() => {});
+  }
 }
 
 function sanitizeBreakdownAnnotations(value: unknown): unknown[] | null {
@@ -268,8 +317,14 @@ export async function POST(request: Request) {
       sourceType: String(body.sourceType ?? '').trim() || undefined,
       sourceLabel: String(body.sourceLabel ?? '').trim() || undefined,
       createdByUserId: allowed.session.userId ?? 0,
+      processingStatus: mediaType === 'video' ? 'processing' : 'ready',
     });
     if (!created.ok) return NextResponse.json({ error: `DB error: ${created.error}` }, { status: 400 });
+    if (mediaType === 'video') {
+      const mediaId = created.id;
+      const { organizationId, playerId } = allowed;
+      after(() => triggerVideoTranscode({ mediaId, organizationId, playerId, fileName, r2Key }));
+    }
     await recordMediaNotification(request, {
       allowed,
       mediaType,
@@ -335,8 +390,16 @@ export async function POST(request: Request) {
     sourceType: String(form.get('sourceType') ?? '').trim() || undefined,
     sourceLabel: String(form.get('sourceLabel') ?? '').trim() || undefined,
     createdByUserId: allowed.session.userId ?? 0,
+    processingStatus: mediaType === 'video' ? 'processing' : 'ready',
   });
   if (!created.ok) return NextResponse.json({ error: `DB error: ${created.error}` }, { status: 400 });
+  if (mediaType === 'video') {
+    const mediaId = created.id;
+    const { organizationId, playerId } = allowed;
+    const uploadedFileName = file.name;
+    const uploadedR2Key = r2Key;
+    after(() => triggerVideoTranscode({ mediaId, organizationId, playerId, fileName: uploadedFileName, r2Key: uploadedR2Key }));
+  }
   await recordMediaNotification(request, {
     allowed,
     mediaType,

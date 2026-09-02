@@ -1,5 +1,10 @@
 import Link from 'next/link';
 import {
+  DEFAULT_MASTER_CALENDAR_TITLE,
+  DEFAULT_THROWING_FIELDS,
+  getMasterCalendarTitle,
+  getScheduleThrowingState,
+  getThrowingFieldSchema,
   listPlayerChoicesByOrganization,
   listProgramItemsForPlayerByDateRange,
   resolveOrganizationIdForSchool,
@@ -11,6 +16,8 @@ import {
   resolveProgrammingOrganizationId,
   resolveProgrammingSchoolCode,
 } from '../../../../lib/programming-scope';
+import { resolveSchoolBrand } from '../../../../lib/school-brand';
+import MasterCalendarTabs from './master-calendar-tabs';
 
 type MasterCalendarPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -36,17 +43,7 @@ function addDays(value: string, days: number): string {
 function parseDays(value: string | string[] | undefined): 1 | 3 | 7 {
   const raw = typeof value === 'string' ? Number(value) : Number.NaN;
   if (raw === 1 || raw === 3 || raw === 7) return raw;
-  return 3;
-}
-
-function labelDate(value: string): string {
-  const date = new Date(`${value}T00:00:00Z`);
-  return date.toLocaleDateString(undefined, {
-    weekday: 'short',
-    month: 'numeric',
-    day: 'numeric',
-    timeZone: 'UTC',
-  });
+  return 7;
 }
 
 export default async function MasterCalendarPage({ searchParams }: MasterCalendarPageProps) {
@@ -72,6 +69,8 @@ export default async function MasterCalendarPage({ searchParams }: MasterCalenda
   const startDate = /^\d{4}-\d{2}-\d{2}$/.test(startDateRaw) ? startDateRaw : todayIsoDate();
   const endDate = addDays(startDate, days);
   const dayKeys = Array.from({ length: days }, (_, i) => addDays(startDate, i));
+  const previousStartDate = addDays(startDate, -days);
+  const nextStartDate = addDays(startDate, days);
 
   const players =
     programmingOrganizationId > 0
@@ -83,35 +82,62 @@ export default async function MasterCalendarPage({ searchParams }: MasterCalenda
       : [];
 
   const itemsByPlayer = new Map<number, Awaited<ReturnType<typeof listProgramItemsForPlayerByDateRange>>>();
+  const throwingByPlayer = new Map<number, Record<string, unknown>>();
   await Promise.all(
     players.map(async (player) => {
-      const rows = await listProgramItemsForPlayerByDateRange({
-        playerId: player.playerId,
-        startDate,
-        endDate,
-      }).catch(() => []);
+      const [rows, throwingState] = await Promise.all([
+        listProgramItemsForPlayerByDateRange({
+          playerId: player.playerId,
+          startDate,
+          endDate,
+        }).catch(() => []),
+        programmingOrganizationId > 0
+          ? getScheduleThrowingState({ organizationId: programmingOrganizationId, playerId: player.playerId }).catch(() => ({
+              byDate: {},
+              weekNotes: {},
+              templates: [],
+            }))
+          : Promise.resolve({ byDate: {}, weekNotes: {}, templates: [] }),
+      ]);
       itemsByPlayer.set(player.playerId, rows);
+      throwingByPlayer.set(player.playerId, throwingState.byDate ?? {});
     })
   );
 
-  const sortedPlayers = [...players].sort((a, b) => {
-    const aRows = itemsByPlayer.get(a.playerId) ?? [];
-    const bRows = itemsByPlayer.get(b.playerId) ?? [];
-    const aMissingCount = dayKeys.reduce((count, day) => count + (aRows.some((row) => row.dayDate === day) ? 0 : 1), 0);
-    const bMissingCount = dayKeys.reduce((count, day) => count + (bRows.some((row) => row.dayDate === day) ? 0 : 1), 0);
-    if (aMissingCount !== bMissingCount) return bMissingCount - aMissingCount;
-    return a.fullName.localeCompare(b.fullName);
-  });
+  const throwingFieldSchema =
+    programmingOrganizationId > 0
+      ? await getThrowingFieldSchema({ organizationId: programmingOrganizationId }).catch(() => DEFAULT_THROWING_FIELDS)
+      : DEFAULT_THROWING_FIELDS;
+
+  const initialTitle =
+    programmingOrganizationId > 0
+      ? await getMasterCalendarTitle({ organizationId: programmingOrganizationId }).catch(() => DEFAULT_MASTER_CALENDAR_TITLE)
+      : DEFAULT_MASTER_CALENDAR_TITLE;
+
+  const schoolBrand = resolveSchoolBrand(programmingSchoolCode);
+
+  const sortedPlayers = [...players].sort((a, b) => a.fullName.localeCompare(b.fullName));
+
+  const itemsByPlayerPlain: Record<number, { dayDate: string; itemType: 'exercise' | 'workout'; itemName: string }[]> = {};
+  for (const [playerId, rows] of itemsByPlayer.entries()) {
+    itemsByPlayerPlain[playerId] = rows.map((row) => ({ dayDate: row.dayDate, itemType: row.itemType, itemName: row.itemName }));
+  }
+  const throwingByPlayerPlain: Record<number, Record<string, Record<string, string>>> = {};
+  for (const [playerId, byDate] of throwingByPlayer.entries()) {
+    const out: Record<string, Record<string, string>> = {};
+    for (const day of dayKeys) {
+      const entry = (byDate[day] ?? {}) as Record<string, unknown>;
+      const normalized: Record<string, string> = {};
+      for (const field of throwingFieldSchema) normalized[field.key] = String(entry[field.key] ?? '');
+      out[day] = normalized;
+    }
+    throwingByPlayerPlain[playerId] = out;
+  }
 
   return (
     <div className="portal-admin-stack">
-      <div className="portal-admin-headline">
-        <h2>Master Calendar</h2>
-        <p>Read-only snapshot of every player schedule.</p>
-      </div>
-
       <article className="portal-admin-card">
-        <form method="get" className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(4, minmax(160px, 1fr))' }}>
+        <form method="get" className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(5, minmax(140px, 1fr))' }}>
           <label>
             Start Date
             <input type="date" name="startDate" defaultValue={startDate} />
@@ -125,57 +151,40 @@ export default async function MasterCalendarPage({ searchParams }: MasterCalenda
             </select>
           </label>
           <div style={{ display: 'flex', alignItems: 'end', gap: 8 }}>
+            <Link
+              href={`/portal/admin/master-calendar?startDate=${previousStartDate}&days=${days}`}
+              className="btn btn-ghost as-link"
+              aria-label="Previous period"
+            >
+              ← Prev
+            </Link>
+            <Link
+              href={`/portal/admin/master-calendar?startDate=${nextStartDate}&days=${days}`}
+              className="btn btn-ghost as-link"
+              aria-label="Next period"
+            >
+              Next →
+            </Link>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'end', gap: 8 }}>
             <button type="submit" className="btn btn-primary">Load</button>
             <Link href="/portal/admin/schedule" className="btn btn-ghost as-link">Back to Schedule</Link>
           </div>
         </form>
       </article>
 
-      <article className="portal-admin-card" style={{ overflowX: 'auto' }}>
-        <table className="portal-table" style={{ minWidth: 980 }}>
-          <thead>
-            <tr>
-              <th>Player</th>
-              {dayKeys.map((day) => (
-                <th key={`head-${day}`}>{labelDate(day)}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {sortedPlayers.map((player) => {
-              const rows = itemsByPlayer.get(player.playerId) ?? [];
-              return (
-                <tr key={player.playerId}>
-                  <td>
-                    <Link href={`/portal/admin/schedule?playerId=${player.playerId}`} className="portal-inline-link">
-                      <strong>{player.fullName}</strong>
-                    </Link>
-                  </td>
-                  {dayKeys.map((day) => {
-                    const names = rows
-                      .filter((row) => row.dayDate === day)
-                      .map((row) => row.itemName)
-                      .filter(Boolean);
-                    return (
-                      <td key={`${player.playerId}-${day}`}>
-                        {names.length ? (
-                          <div style={{ display: 'grid', gap: 4 }}>
-                            {names.map((name, idx) => (
-                              <span key={`${player.playerId}-${day}-${idx}`} className="portal-muted-text">{name}</span>
-                            ))}
-                          </div>
-                        ) : (
-                          <span style={{ color: 'rgba(248,113,113,0.95)' }}>None</span>
-                        )}
-                      </td>
-                    );
-                  })}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </article>
+      <MasterCalendarTabs
+        players={sortedPlayers.map((player) => ({ playerId: player.playerId, fullName: player.fullName }))}
+        dayKeys={dayKeys}
+        itemsByPlayer={itemsByPlayerPlain}
+        throwingByPlayer={throwingByPlayerPlain}
+        throwingFieldSchema={throwingFieldSchema}
+        defaultTab="throwing"
+        initialTitle={initialTitle}
+        schoolLogoSrc={schoolBrand.logoSrc}
+        schoolLogoAlt={schoolBrand.logoAlt}
+        dateRangeLabel={`${startDate} to ${dayKeys[dayKeys.length - 1]}`}
+      />
     </div>
   );
 }

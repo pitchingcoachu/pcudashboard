@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
-import type { ProgramItemRow, ProgramPlanSection } from '../../../../lib/training-db';
+import type { ProgramItemRow, ProgramPlanSection, ThrowingFieldDef } from '../../../../lib/training-db';
 import {
   DEFAULT_DRILL_ROW_COUNT,
   emptyDrillRow,
@@ -32,7 +32,18 @@ type BuilderMode = 'schedule' | 'template';
 type PaletteMode = 'workouts' | 'templates';
 type WorkoutPaletteView = 'all' | 'categories';
 type WorkoutLibraryFolder = 'all' | 'mine' | 'pcu';
-type ThrowingDayEntry = { intensity: string; distance: string; throwsText: string; drills: string; bullpen: string };
+type ThrowingDayEntry = Record<string, string>;
+// Mirrors lib/training-db.ts's DEFAULT_THROWING_FIELDS (not imported directly
+// since that module pulls in server-only `pg` deps) -- keys match the
+// original hardcoded ThrowingDayEntry properties so existing byDate data
+// keeps working for any org that hasn't customized its field schema.
+const DEFAULT_THROWING_FIELDS: ThrowingFieldDef[] = [
+  { key: 'intensity', label: 'Intensity' },
+  { key: 'distance', label: 'Distance' },
+  { key: 'throwsText', label: 'Throws' },
+  { key: 'drills', label: 'Drills' },
+  { key: 'bullpen', label: 'Bullpen' },
+];
 type ThrowingTemplate = {
   id: string;
   name: string;
@@ -424,6 +435,10 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const [throwingMenu, setThrowingMenu] = useState<ThrowingMenuState | null>(null);
   const [throwingByDate, setThrowingByDate] = useState<Record<string, ThrowingDayEntry>>({});
   const [throwingWeekNotes, setThrowingWeekNotes] = useState<Record<string, string>>({});
+  const [throwingFieldSchema, setThrowingFieldSchema] = useState<ThrowingFieldDef[]>(DEFAULT_THROWING_FIELDS);
+  const [showThrowingFieldsConfig, setShowThrowingFieldsConfig] = useState(false);
+  const [throwingFieldsDraft, setThrowingFieldsDraft] = useState<ThrowingFieldDef[]>(DEFAULT_THROWING_FIELDS);
+  const [savingThrowingFields, setSavingThrowingFields] = useState(false);
   const [throwingBuilderMode, setThrowingBuilderMode] = useState<ThrowingBuilderMode>('month');
   const [throwingCalendarView, setThrowingCalendarView] = useState<ThrowingCalendarView>('month');
   const [throwingTemplates, setThrowingTemplates] = useState<ThrowingTemplate[]>([]);
@@ -921,12 +936,16 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           hittingDrillTemplates?: DrillTemplate[];
           catchPlayNotes?: { highDay?: string; mediumDay?: string; lowDay?: string };
           cycleNotes?: string;
+          fieldSchema?: ThrowingFieldDef[];
           error?: string;
         };
         if (!response.ok) throw new Error(payload.error ?? 'Failed to load throwing calendar.');
         if (cancelled) return;
         setThrowingByDate(payload.byDate ?? {});
         setThrowingWeekNotes(payload.weekNotes ?? {});
+        const nextFieldSchema = Array.isArray(payload.fieldSchema) && payload.fieldSchema.length ? payload.fieldSchema : DEFAULT_THROWING_FIELDS;
+        setThrowingFieldSchema(nextFieldSchema);
+        setThrowingFieldsDraft(nextFieldSchema);
         const nextPreDrillTemplates = normalizeDrillTemplates(payload.preThrowDrillTemplates);
         const nextPostDrillTemplates = normalizeDrillTemplates(payload.postThrowDrillTemplates);
         setPreThrowDrillTemplates(nextPreDrillTemplates);
@@ -1399,7 +1418,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   }, [anchorDate, throwingBuilderMode, throwingCalendarView, view]);
 
   const getThrowingTemplateCellKey = (weekIndex: number, dayIndex: number) => `w${weekIndex + 1}-d${dayIndex}`;
-  const emptyThrowingEntry: ThrowingDayEntry = { intensity: '', distance: '', throwsText: '', drills: '', bullpen: '' };
+  const emptyThrowingEntry: ThrowingDayEntry = Object.fromEntries(throwingFieldSchema.map((field) => [field.key, '']));
 
   const resizeDrillsNoteTextarea = useCallback(() => {
     const textarea = drillsNoteTextareaRef.current;
@@ -1411,26 +1430,14 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   useEffect(() => {
     resizeDrillsNoteTextarea();
   }, [drillsNotes, resizeDrillsNoteTextarea]);
-  const normalizeThrowingEntry = (entry: Partial<ThrowingDayEntry> | undefined | null): ThrowingDayEntry => ({
-    intensity: String(entry?.intensity ?? ''),
-    distance: String(entry?.distance ?? ''),
-    throwsText: String(entry?.throwsText ?? ''),
-    drills: String(entry?.drills ?? ''),
-    bullpen: String(entry?.bullpen ?? ''),
-  });
+  const normalizeThrowingEntry = (entry: Partial<ThrowingDayEntry> | undefined | null): ThrowingDayEntry =>
+    Object.fromEntries(throwingFieldSchema.map((field) => [field.key, String(entry?.[field.key] ?? '')]));
   const normalizeThrowingTemplateCells = (cells: Record<string, Partial<ThrowingDayEntry>> | undefined | null): Record<string, ThrowingDayEntry> =>
     Object.fromEntries(
       Object.entries(cells ?? {}).map(([key, entry]) => [key, normalizeThrowingEntry(entry)])
     );
   const hasThrowingEntry = (entry: ThrowingDayEntry | undefined): boolean =>
-    Boolean(
-      entry &&
-        (String(entry.intensity ?? '').trim() ||
-          String(entry.distance ?? '').trim() ||
-          String(entry.throwsText ?? '').trim() ||
-          String(entry.drills ?? '').trim() ||
-          String(entry.bullpen ?? '').trim())
-    );
+    Boolean(entry && Object.values(entry).some((value) => String(value ?? '').trim()));
   const libraryFilteredWorkouts = useMemo(() => {
     if (workoutLibraryFolder === 'pcu') return workouts.filter((workout) => workout.isShared);
     if (workoutLibraryFolder === 'mine') return workouts.filter((workout) => !workout.isShared);
@@ -2966,12 +2973,28 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     return <p className="portal-muted-text">Create a client first before scheduling workouts.</p>;
   }
 
+  const renderThrowingFieldsBody = (entry: ThrowingDayEntry, setField: (field: string, value: string) => void) => (
+    <div className="portal-schedule-day-body" style={{ display: 'grid', gap: '0.28rem' }}>
+      {throwingFieldSchema.map((field) => (
+        <div key={field.key} style={throwingRowStyle}>
+          <span style={throwingLabelStyle}>{field.label}:</span>
+          <input
+            className="portal-throwing-field"
+            value={String(entry[field.key] ?? '')}
+            onChange={(event) => setField(field.key, event.target.value)}
+            style={throwingInputBaseStyle}
+          />
+        </div>
+      ))}
+    </div>
+  );
+
   const renderThrowingDay = (date: string, key: string) => {
-    const entry = throwingByDate[date] ?? { intensity: '', distance: '', throwsText: '', drills: '', bullpen: '' };
-    const setField = (field: keyof ThrowingDayEntry, value: string) => {
+    const entry = throwingByDate[date] ?? emptyThrowingEntry;
+    const setField = (field: string, value: string) => {
       setThrowingByDate((prev) => ({
         ...prev,
-        [date]: { ...(prev[date] ?? { intensity: '', distance: '', throwsText: '', drills: '', bullpen: '' }), [field]: value },
+        [date]: { ...(prev[date] ?? emptyThrowingEntry), [field]: value },
       }));
     };
     return (
@@ -3001,28 +3024,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         <div className="portal-schedule-day-head">
           <span className="portal-schedule-day-num">{dayNumber(date)}</span>
         </div>
-        <div className="portal-schedule-day-body" style={{ display: 'grid', gap: '0.28rem' }}>
-          <div style={throwingRowStyle}>
-            <span style={throwingLabelStyle}>Intensity:</span>
-            <input className="portal-throwing-field" value={String(entry.intensity ?? '')} onChange={(event) => setField('intensity', event.target.value)} style={throwingInputBaseStyle} />
-          </div>
-          <div style={throwingRowStyle}>
-            <span style={throwingLabelStyle}>Distance:</span>
-            <input className="portal-throwing-field" value={String(entry.distance ?? '')} onChange={(event) => setField('distance', event.target.value)} style={throwingInputBaseStyle} />
-          </div>
-          <div style={throwingRowStyle}>
-            <span style={throwingLabelStyle}>Throws:</span>
-            <input className="portal-throwing-field" value={String(entry.throwsText ?? '')} onChange={(event) => setField('throwsText', event.target.value)} style={throwingInputBaseStyle} />
-          </div>
-          <div style={throwingRowStyle}>
-            <span style={throwingLabelStyle}>Drills:</span>
-            <input className="portal-throwing-field" value={String(entry.drills ?? '')} onChange={(event) => setField('drills', event.target.value)} style={throwingInputBaseStyle} />
-          </div>
-          <div style={throwingRowStyle}>
-            <span style={throwingLabelStyle}>Bullpen:</span>
-            <input className="portal-throwing-field" value={String(entry.bullpen ?? '')} onChange={(event) => setField('bullpen', event.target.value)} style={throwingInputBaseStyle} />
-          </div>
-        </div>
+        {renderThrowingFieldsBody(entry, setField)}
       </article>
     );
   };
@@ -3162,13 +3164,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         const source = template.byCell?.[sourceKey];
         if (!hasThrowingEntry(source)) continue;
         const targetDate = addDays(throwingApplyStartDate, weekIdx * 7 + dayIdx);
-        nextByDate[targetDate] = {
-          intensity: String(source?.intensity ?? ''),
-          distance: String(source?.distance ?? ''),
-          throwsText: String(source?.throwsText ?? ''),
-          drills: String(source?.drills ?? ''),
-          bullpen: String(source?.bullpen ?? ''),
-        };
+        nextByDate[targetDate] = normalizeThrowingEntry(source);
       }
       const note = String(template.weekNotes?.[`week-${weekIdx + 1}`] ?? '').trim();
       if (note) {
@@ -3185,7 +3181,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const renderThrowingTemplateDay = (weekIndex: number, dayIndex: number) => {
     const cellKey = getThrowingTemplateCellKey(weekIndex, dayIndex);
     const entry = normalizeThrowingEntry(throwingTemplateByCell[cellKey]);
-    const setField = (field: keyof ThrowingDayEntry, value: string) => {
+    const setField = (field: string, value: string) => {
       setThrowingTemplateByCell((prev) => ({
         ...prev,
         [cellKey]: { ...normalizeThrowingEntry(prev[cellKey]), [field]: value },
@@ -3215,28 +3211,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         <div className="portal-schedule-day-head">
           <span className="portal-schedule-day-num" />
         </div>
-        <div className="portal-schedule-day-body" style={{ display: 'grid', gap: '0.28rem' }}>
-          <div style={throwingRowStyle}>
-            <span style={throwingLabelStyle}>Intensity:</span>
-            <input className="portal-throwing-field" value={String(entry.intensity ?? '')} onChange={(event) => setField('intensity', event.target.value)} style={throwingInputBaseStyle} />
-          </div>
-          <div style={throwingRowStyle}>
-            <span style={throwingLabelStyle}>Distance:</span>
-            <input className="portal-throwing-field" value={String(entry.distance ?? '')} onChange={(event) => setField('distance', event.target.value)} style={throwingInputBaseStyle} />
-          </div>
-          <div style={throwingRowStyle}>
-            <span style={throwingLabelStyle}>Throws:</span>
-            <input className="portal-throwing-field" value={String(entry.throwsText ?? '')} onChange={(event) => setField('throwsText', event.target.value)} style={throwingInputBaseStyle} />
-          </div>
-          <div style={throwingRowStyle}>
-            <span style={throwingLabelStyle}>Drills:</span>
-            <input className="portal-throwing-field" value={String(entry.drills ?? '')} onChange={(event) => setField('drills', event.target.value)} style={throwingInputBaseStyle} />
-          </div>
-          <div style={throwingRowStyle}>
-            <span style={throwingLabelStyle}>Bullpen:</span>
-            <input className="portal-throwing-field" value={String(entry.bullpen ?? '')} onChange={(event) => setField('bullpen', event.target.value)} style={throwingInputBaseStyle} />
-          </div>
-        </div>
+        {renderThrowingFieldsBody(entry, setField)}
       </article>
     );
   };
@@ -4304,6 +4279,16 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                       Download PDF
                     </button>
                   )}
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => {
+                      setThrowingFieldsDraft(throwingFieldSchema);
+                      setShowThrowingFieldsConfig(true);
+                    }}
+                  >
+                    Configure Fields
+                  </button>
                 </div>
                 {throwingBuilderMode === 'month' && (
                   <div className="portal-schedule-view-switch" role="group" aria-label="Throwing calendar view">
@@ -6623,6 +6608,101 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                     </div>
                   </div>
                 ))}
+              </div>
+            </div>
+          </article>
+        </div>
+      ) : null}
+      {showThrowingFieldsConfig ? (
+        <div
+          className="portal-modal-backdrop"
+          role="presentation"
+          onClick={() => setShowThrowingFieldsConfig(false)}
+        >
+          <article
+            className="portal-modal-card"
+            role="dialog"
+            aria-modal="true"
+            onClick={(event) => event.stopPropagation()}
+            style={{ maxWidth: '520px', width: '92vw' }}
+          >
+            <div className="portal-modal-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+              <h3 style={{ margin: 0 }}>Configure Throwing Calendar Fields</h3>
+              <button type="button" className="btn btn-ghost" onClick={() => setShowThrowingFieldsConfig(false)}>
+                Close
+              </button>
+            </div>
+            <p style={{ marginTop: 6, fontSize: '0.85rem', opacity: 0.75 }}>
+              These fields apply to every player&apos;s throwing calendar at your school. Renaming a field keeps its existing data; removing one just stops showing it going forward.
+            </p>
+            <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
+              {throwingFieldsDraft.map((field, index) => (
+                <div key={field.key || `new-${index}`} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input
+                    className="portal-schedule-control"
+                    style={{ flex: 1 }}
+                    value={field.label}
+                    onChange={(event) => {
+                      const nextLabel = event.target.value;
+                      setThrowingFieldsDraft((prev) => prev.map((item, idx) => (idx === index ? { ...item, label: nextLabel } : item)));
+                    }}
+                    placeholder="Field name"
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    style={{ minHeight: 32, padding: '0 10px' }}
+                    disabled={throwingFieldsDraft.length <= 1}
+                    onClick={() => setThrowingFieldsDraft((prev) => prev.filter((_, idx) => idx !== index))}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={throwingFieldsDraft.length >= 12}
+                onClick={() => setThrowingFieldsDraft((prev) => [...prev, { key: '', label: '' }])}
+              >
+                Add Field
+              </button>
+              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={savingThrowingFields}
+                  onClick={async () => {
+                    const cleaned = throwingFieldsDraft.map((field) => ({ key: field.key, label: field.label.trim() })).filter((field) => field.label);
+                    if (!cleaned.length) {
+                      setError('At least one field is required.');
+                      return;
+                    }
+                    setSavingThrowingFields(true);
+                    try {
+                      const response = await fetchWithTimeout('/api/admin/schedule/throwing-fields', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ fields: cleaned }),
+                      });
+                      const payload = (await response.json().catch(() => ({}))) as { fields?: ThrowingFieldDef[]; error?: string };
+                      if (!response.ok) throw new Error(payload.error ?? 'Failed to save fields.');
+                      const nextFields = Array.isArray(payload.fields) && payload.fields.length ? payload.fields : DEFAULT_THROWING_FIELDS;
+                      setThrowingFieldSchema(nextFields);
+                      setThrowingFieldsDraft(nextFields);
+                      setShowThrowingFieldsConfig(false);
+                    } catch (requestError) {
+                      setError(requestError instanceof Error ? requestError.message : 'Failed to save fields.');
+                    } finally {
+                      setSavingThrowingFields(false);
+                    }
+                  }}
+                >
+                  {savingThrowingFields ? 'Saving…' : 'Save Fields'}
+                </button>
+                <button type="button" className="btn btn-ghost" onClick={() => setShowThrowingFieldsConfig(false)}>
+                  Cancel
+                </button>
               </div>
             </div>
           </article>

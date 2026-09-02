@@ -227,6 +227,8 @@ export type PlayerMediaRow = {
   createdAt: string;
   updatedAt: string;
   createdByUserId: number | null;
+  processingStatus: 'ready' | 'processing' | 'failed';
+  processingError: string | null;
 };
 
 export type PortalActivityUserSummaryRow = {
@@ -662,6 +664,8 @@ export async function ensureTrainingDbReady(): Promise<void> {
     await pool.query(`ALTER TABLE player_media ADD COLUMN IF NOT EXISTS source_type TEXT;`);
     await pool.query(`ALTER TABLE player_media ADD COLUMN IF NOT EXISTS source_label TEXT;`);
     await pool.query(`ALTER TABLE player_media ADD COLUMN IF NOT EXISTS breakdown_annotations_json JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+    await pool.query(`ALTER TABLE player_media ADD COLUMN IF NOT EXISTS processing_status TEXT NOT NULL DEFAULT 'ready';`);
+    await pool.query(`ALTER TABLE player_media ADD COLUMN IF NOT EXISTS processing_error TEXT;`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_media_player_created ON player_media (player_id, created_at DESC);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_media_org_player_category ON player_media (organization_id, player_id, lower(category));`);
     await pool.query(`ALTER TABLE body_weight_logs ADD COLUMN IF NOT EXISTS media_id BIGINT REFERENCES player_media(id) ON DELETE SET NULL;`);
@@ -777,6 +781,41 @@ export async function ensureTrainingDbReady(): Promise<void> {
       );
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_hitting_log_entries_player ON hitting_log_entries (organization_id, player_id, template_id, hitting_date DESC);`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS master_calendar_notes (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        note_date DATE NOT NULL,
+        note_text TEXT NOT NULL DEFAULT '',
+        updated_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (organization_id, player_id, note_date)
+      );
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_master_calendar_notes_org_range ON master_calendar_notes (organization_id, note_date);`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS throwing_field_schema (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        fields_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        updated_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (organization_id)
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS master_calendar_title (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        title TEXT NOT NULL DEFAULT 'Master Calendar',
+        updated_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (organization_id)
+      );
+    `);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS bubble_category_defs (
         id BIGSERIAL PRIMARY KEY,
@@ -894,8 +933,8 @@ export async function ensureTrainingDbReady(): Promise<void> {
 }
 
 // Live "Intended Zone" tracking: a coach taps where a pitcher is aiming
-// before each pitch, then the actual TrackMan location (pulled from the
-// Data API's practice-session endpoints, polled during the live session) is
+// before each pitch, then the actual TrackMan location (pushed by the live
+// webhook feed, with the Data API retained as a fallback) is
 // matched to that intent and the miss distance/direction is computed and
 // stored. One session groups pitches thrown in one sitting; one pitch row
 // per tracked throw. pitcher_name (not a players.id FK) matches how the
@@ -1021,7 +1060,7 @@ export type IntendedZonePitchRow = {
  * pitcherThrows should be 'Right' or 'Left'; defaults to 'Right' framing
  * (i.e. raw +side = arm side) if unknown, since that's the TrackMan/
  * scoreboard-standard sign convention coaches are used to reading raw. */
-function classifyMissDirection(input: {
+export function classifyMissDirection(input: {
   missSideFt: number;
   missHeightFt: number;
   targetRadiusFt: number;
@@ -1185,6 +1224,7 @@ export async function matchIntendedZonePitch(input: {
   pitcherThrows: string | null;
   taggedPitcherName: string | null;
   thrownAt: string | null;
+  targetCreatedBefore?: string | null;
 }): Promise<{ ok: true; pitch: IntendedZonePitchRow } | { ok: false; error: string }> {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureIntendedZoneSchema();
@@ -1200,9 +1240,10 @@ export async function matchIntendedZonePitch(input: {
     `SELECT id, pitch_index, intended_side_ft, intended_height_ft, target_radius_ft
      FROM intended_zone_pitches
      WHERE session_id = $1 AND organization_id = $2 AND trackman_play_id IS NULL
+       AND ($3::timestamptz IS NULL OR created_at <= $3::timestamptz)
      ORDER BY pitch_index ASC
      LIMIT 1`,
-    [input.sessionId, input.organizationId]
+    [input.sessionId, input.organizationId, input.targetCreatedBefore ?? null]
   );
   const target = pending.rows[0];
   if (!target) return { ok: false, error: 'No pending intended target to match this pitch to.' };
@@ -6310,6 +6351,107 @@ export async function deleteScheduleTemplate(input: {
   return { ok: true };
 }
 
+export type ThrowingFieldDef = { key: string; label: string };
+
+// The 5 fields every throwing-calendar day entry has always had. Keys match
+// the legacy ThrowingDayEntry property names so existing byDate data (keyed
+// by these exact strings) keeps working with zero migration when an org has
+// never customized its schema.
+export const DEFAULT_THROWING_FIELDS: ThrowingFieldDef[] = [
+  { key: 'intensity', label: 'Intensity' },
+  { key: 'distance', label: 'Distance' },
+  { key: 'throwsText', label: 'Throws' },
+  { key: 'drills', label: 'Drills' },
+  { key: 'bullpen', label: 'Bullpen' },
+];
+
+export async function getThrowingFieldSchema(input: { organizationId: number }): Promise<ThrowingFieldDef[]> {
+  if (!isDatabaseConfigured()) return DEFAULT_THROWING_FIELDS;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{ fields_json: ThrowingFieldDef[] | null }>(
+    `SELECT fields_json FROM throwing_field_schema WHERE organization_id = $1 LIMIT 1`,
+    [input.organizationId]
+  );
+  const rows = result.rows[0]?.fields_json;
+  if (!Array.isArray(rows) || rows.length === 0) return DEFAULT_THROWING_FIELDS;
+  const fields = rows
+    .map((row) => ({ key: String(row?.key ?? '').trim(), label: String(row?.label ?? '').trim() }))
+    .filter((field) => field.key && field.label);
+  return fields.length ? fields : DEFAULT_THROWING_FIELDS;
+}
+
+export async function saveThrowingFieldSchema(input: {
+  organizationId: number;
+  fields: { key?: string; label: string }[];
+  userId: number;
+}): Promise<{ ok: true; fields: ThrowingFieldDef[] } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const seenKeys = new Set<string>();
+  const fields: ThrowingFieldDef[] = [];
+  for (const raw of input.fields) {
+    const label = String(raw.label ?? '').trim();
+    if (!label) continue;
+    let key = String(raw.key ?? '').trim();
+    if (!key || seenKeys.has(key)) {
+      key = `field_${Math.random().toString(36).slice(2, 10)}`;
+    }
+    seenKeys.add(key);
+    fields.push({ key, label });
+  }
+  if (fields.length === 0) return { ok: false, error: 'At least one field is required.' };
+  if (fields.length > 12) return { ok: false, error: 'A maximum of 12 fields is allowed.' };
+
+  await pool.query(
+    `
+      INSERT INTO throwing_field_schema (organization_id, fields_json, updated_by_user_id)
+      VALUES ($1, $2::jsonb, $3)
+      ON CONFLICT (organization_id)
+      DO UPDATE SET fields_json = EXCLUDED.fields_json, updated_by_user_id = EXCLUDED.updated_by_user_id, updated_at = NOW()
+    `,
+    [input.organizationId, JSON.stringify(fields), input.userId]
+  );
+  return { ok: true, fields };
+}
+
+export const DEFAULT_MASTER_CALENDAR_TITLE = 'Master Calendar';
+
+export async function getMasterCalendarTitle(input: { organizationId: number }): Promise<string> {
+  if (!isDatabaseConfigured()) return DEFAULT_MASTER_CALENDAR_TITLE;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{ title: string }>(
+    `SELECT title FROM master_calendar_title WHERE organization_id = $1 LIMIT 1`,
+    [input.organizationId]
+  );
+  const title = String(result.rows[0]?.title ?? '').trim();
+  return title || DEFAULT_MASTER_CALENDAR_TITLE;
+}
+
+export async function saveMasterCalendarTitle(input: {
+  organizationId: number;
+  title: string;
+  userId: number;
+}): Promise<{ ok: true; title: string } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const title = input.title.trim().slice(0, 120) || DEFAULT_MASTER_CALENDAR_TITLE;
+  await pool.query(
+    `
+      INSERT INTO master_calendar_title (organization_id, title, updated_by_user_id)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (organization_id)
+      DO UPDATE SET title = EXCLUDED.title, updated_by_user_id = EXCLUDED.updated_by_user_id, updated_at = NOW()
+    `,
+    [input.organizationId, title, input.userId]
+  );
+  return { ok: true, title };
+}
+
 export async function getScheduleThrowingState(input: {
   organizationId: number;
   playerId: number;
@@ -6469,6 +6611,119 @@ export async function saveScheduleThrowingState(input: {
 
 export async function getPcuSharedThrowingState(): Promise<{ byDate: Record<string, unknown>; weekNotes: Record<string, unknown>; templates: unknown }> {
   return getScheduleThrowingState({ organizationId: PCU_TEMPLATE_ORGANIZATION_ID, playerId: 0 });
+}
+
+// Targeted single-field write for one player/date, used by Master Calendar's
+// inline editing -- deliberately NOT built on saveScheduleThrowingState,
+// which overwrites the entire byDate/weekNotes/templates blob and would risk
+// clobbering unrelated days or another coach's concurrent edit if fed a
+// stale full copy. jsonb_set on one dotted path is safe under concurrent
+// writers regardless of what else changed in the row.
+export async function updateThrowingDayField(input: {
+  organizationId: number;
+  playerId: number;
+  dayDate: string;
+  fieldKey: string;
+  value: string;
+  userId: number;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.dayDate)) return { ok: false, error: 'dayDate must be YYYY-MM-DD.' };
+  if (!input.fieldKey.trim()) return { ok: false, error: 'fieldKey is required.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  try {
+    await pool.query(
+      `
+        INSERT INTO schedule_throwing_state (organization_id, player_id, by_date_json, created_by_user_id, updated_by_user_id)
+        VALUES ($1, $2, jsonb_build_object($3::text, jsonb_build_object($4::text, $5::text)), $6, $6)
+        ON CONFLICT (organization_id, player_id)
+        DO UPDATE SET
+          -- jsonb_set's create_missing only creates the FINAL path segment,
+          -- not intermediate ones -- if by_date_json has no key for this
+          -- date yet, a single 2-level jsonb_set silently no-ops instead of
+          -- creating the date's object. Ensure the date-level object exists
+          -- first (defaulting to '{}'), then set the field within it.
+          by_date_json = jsonb_set(
+            jsonb_set(
+              COALESCE(schedule_throwing_state.by_date_json, '{}'::jsonb),
+              ARRAY[$3::text],
+              COALESCE(schedule_throwing_state.by_date_json -> $3::text, '{}'::jsonb),
+              true
+            ),
+            ARRAY[$3::text, $4::text],
+            to_jsonb($5::text),
+            true
+          ),
+          updated_by_user_id = $6,
+          updated_at = NOW()
+      `,
+      [input.organizationId, input.playerId, input.dayDate, input.fieldKey, input.value, input.userId]
+    );
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Failed to save throwing field.' };
+  }
+}
+
+export type MasterCalendarNoteRow = {
+  playerId: number;
+  noteDate: string;
+  noteText: string;
+};
+
+export async function listMasterCalendarNotesForRange(input: {
+  organizationId: number;
+  startDate: string;
+  endDate: string;
+}): Promise<MasterCalendarNoteRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{ player_id: number; note_date: string; note_text: string }>(
+    `
+      SELECT player_id, note_date::text, note_text
+      FROM master_calendar_notes
+      WHERE organization_id = $1 AND note_date >= $2::date AND note_date < $3::date
+    `,
+    [input.organizationId, input.startDate, input.endDate]
+  );
+  return result.rows.map((row) => ({ playerId: row.player_id, noteDate: row.note_date, noteText: row.note_text }));
+}
+
+export async function upsertMasterCalendarNote(input: {
+  organizationId: number;
+  playerId: number;
+  noteDate: string;
+  noteText: string;
+  userId: number;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.noteDate)) return { ok: false, error: 'noteDate must be YYYY-MM-DD.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const trimmed = input.noteText.trim();
+  try {
+    if (!trimmed) {
+      await pool.query(
+        `DELETE FROM master_calendar_notes WHERE organization_id = $1 AND player_id = $2 AND note_date = $3::date`,
+        [input.organizationId, input.playerId, input.noteDate]
+      );
+      return { ok: true };
+    }
+    await pool.query(
+      `
+        INSERT INTO master_calendar_notes (organization_id, player_id, note_date, note_text, updated_by_user_id)
+        VALUES ($1, $2, $3::date, $4, $5)
+        ON CONFLICT (organization_id, player_id, note_date)
+        DO UPDATE SET note_text = EXCLUDED.note_text, updated_by_user_id = EXCLUDED.updated_by_user_id, updated_at = NOW()
+      `,
+      [input.organizationId, input.playerId, input.noteDate, trimmed, input.userId]
+    );
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Failed to save note.' };
+  }
 }
 
 export async function applyScheduleTemplateToPlayer(input: {
@@ -10474,13 +10729,16 @@ export async function listMediaForNotes(noteIds: number[]): Promise<Map<number, 
     created_at: string;
     updated_at: string;
     created_by_user_id: number | null;
+    processing_status: string | null;
+    processing_error: string | null;
   }>(
     `
       SELECT
         nm.note_id,
         m.id, m.organization_id, m.player_id, m.media_type, m.title, m.category,
         m.file_name, m.content_type, m.size_bytes, m.r2_key, m.source_type, m.source_label,
-        m.breakdown_annotations_json, m.created_at::text, m.updated_at::text, m.created_by_user_id
+        m.breakdown_annotations_json, m.created_at::text, m.updated_at::text, m.created_by_user_id,
+        m.processing_status, m.processing_error
       FROM note_media nm
       JOIN player_media m ON m.id = nm.media_id
       WHERE nm.note_id = ANY($1::bigint[])
@@ -10507,6 +10765,8 @@ export async function listMediaForNotes(noteIds: number[]): Promise<Map<number, 
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       createdByUserId: row.created_by_user_id,
+      processingStatus: row.processing_status === 'processing' || row.processing_status === 'failed' ? row.processing_status : 'ready',
+      processingError: row.processing_error,
     };
     const list = byNote.get(row.note_id) ?? [];
     list.push(media);
@@ -10665,6 +10925,8 @@ export async function listPlayerMedia(input: {
     created_at: string;
     updated_at: string;
     created_by_user_id: number | null;
+    processing_status: string | null;
+    processing_error: string | null;
   }>(
     `
       SELECT
@@ -10683,7 +10945,9 @@ export async function listPlayerMedia(input: {
         COALESCE(breakdown_annotations_json, '[]'::jsonb) AS breakdown_annotations_json,
         created_at::text,
         updated_at::text,
-        created_by_user_id
+        created_by_user_id,
+        processing_status,
+        processing_error
       FROM player_media
       WHERE organization_id = $1
         AND player_id = $2
@@ -10696,6 +10960,7 @@ export async function listPlayerMedia(input: {
     .map((row) => {
       const mediaTypeValue = row.media_type === 'photo' || row.media_type === 'video' || row.media_type === 'pdf' ? row.media_type : null;
       if (!mediaTypeValue) return null;
+      const processingStatus = row.processing_status === 'processing' || row.processing_status === 'failed' ? row.processing_status : 'ready';
       return {
         id: Number(row.id),
         organizationId: Number(row.organization_id),
@@ -10713,6 +10978,8 @@ export async function listPlayerMedia(input: {
         createdAt: row.created_at,
         updatedAt: row.updated_at,
         createdByUserId: row.created_by_user_id,
+        processingStatus,
+        processingError: row.processing_error,
       } satisfies PlayerMediaRow;
     })
     .filter((row): row is PlayerMediaRow => Boolean(row));
@@ -10774,6 +11041,7 @@ export async function createPlayerMedia(input: {
   sourceType?: string;
   sourceLabel?: string;
   createdByUserId: number;
+  processingStatus?: 'ready' | 'processing';
 }): Promise<{ ok: true; id: number; media: PlayerMediaRow } | { ok: false; error: string }> {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureTrainingDbReady();
@@ -10802,6 +11070,8 @@ export async function createPlayerMedia(input: {
     created_at: string;
     updated_at: string;
     created_by_user_id: number | null;
+    processing_status: string | null;
+    processing_error: string | null;
   }>(
     `
       INSERT INTO player_media (
@@ -10816,13 +11086,15 @@ export async function createPlayerMedia(input: {
         r2_key,
         source_type,
         source_label,
-        created_by_user_id
+        created_by_user_id,
+        processing_status
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       RETURNING
         id, organization_id, player_id, media_type, title, category,
         file_name, content_type, size_bytes, r2_key, source_type, source_label,
-        breakdown_annotations_json, created_at::text, updated_at::text, created_by_user_id
+        breakdown_annotations_json, created_at::text, updated_at::text, created_by_user_id,
+        processing_status, processing_error
     `,
     [
       input.organizationId,
@@ -10837,6 +11109,7 @@ export async function createPlayerMedia(input: {
       String(input.sourceType ?? '').trim() || null,
       String(input.sourceLabel ?? '').trim() || null,
       input.createdByUserId,
+      input.processingStatus === 'processing' ? 'processing' : 'ready',
     ]
   );
   const row = result.rows[0];
@@ -10858,8 +11131,43 @@ export async function createPlayerMedia(input: {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     createdByUserId: row.created_by_user_id,
+    processingStatus: row.processing_status === 'processing' || row.processing_status === 'failed' ? row.processing_status : 'ready',
+    processingError: row.processing_error,
   };
   return { ok: true, id: media.id, media };
+}
+
+export async function markPlayerMediaProcessing(mediaId: number): Promise<void> {
+  if (!isDatabaseConfigured()) return;
+  const pool = getDbPool();
+  await pool.query(`UPDATE player_media SET processing_status = 'processing', processing_error = NULL WHERE id = $1`, [mediaId]);
+}
+
+export async function markPlayerMediaReady(input: {
+  mediaId: number;
+  r2Key: string;
+  contentType: string;
+  sizeBytes: number;
+}): Promise<void> {
+  if (!isDatabaseConfigured()) return;
+  const pool = getDbPool();
+  await pool.query(
+    `
+      UPDATE player_media
+      SET r2_key = $2, content_type = $3, size_bytes = $4, processing_status = 'ready', processing_error = NULL, updated_at = NOW()
+      WHERE id = $1
+    `,
+    [input.mediaId, input.r2Key, input.contentType, Math.max(0, Math.round(input.sizeBytes))]
+  );
+}
+
+export async function markPlayerMediaFailed(input: { mediaId: number; error: string }): Promise<void> {
+  if (!isDatabaseConfigured()) return;
+  const pool = getDbPool();
+  await pool.query(
+    `UPDATE player_media SET processing_status = 'failed', processing_error = $2, updated_at = NOW() WHERE id = $1`,
+    [input.mediaId, input.error.slice(0, 2000)]
+  );
 }
 
 export async function updatePlayerMedia(input: {

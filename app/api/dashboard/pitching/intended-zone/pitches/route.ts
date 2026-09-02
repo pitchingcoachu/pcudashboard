@@ -11,6 +11,7 @@ import {
   recordManualIntendedZonePitch,
 } from '../../../../../../lib/training-db';
 import { getPracticeBalls, getPracticePlays, type TrackmanPitchBall } from '../../../../../../lib/trackman-data-api';
+import { listBufferedTrackmanPitches } from '../../../../../../lib/trackman-live-webhook';
 
 function isTrackedPitch(ball: unknown): ball is TrackmanPitchBall {
   return Boolean(ball) && typeof ball === 'object' && (ball as { trackType?: string }).trackType === 'Pitch';
@@ -42,6 +43,42 @@ export async function GET(request: Request) {
   if (!izSession) return NextResponse.json({ error: 'Session was not found.' }, { status: 404 });
 
   if (izSession.trackmanSessionId) {
+    // The B1 webhook feed is the primary live path. Events are persisted as
+    // soon as TrackMan pushes them, including when the coach's browser is
+    // briefly offline; polling this route only drains that durable buffer.
+    try {
+      const buffered = await listBufferedTrackmanPitches(izSession.trackmanSessionId);
+      const existing = await listIntendedZonePitches({ organizationId, sessionId });
+      const alreadyMatchedPlayIds = new Set(existing.map((p) => p.trackmanPlayId).filter((id): id is string => Boolean(id)));
+      const sessionStartedAtMs = new Date(izSession.startedAt).getTime();
+      for (const pitch of buffered.filter((item) => {
+        if (alreadyMatchedPlayIds.has(item.playId)) return false;
+        const trackedAtMs = item.trackedAt ? new Date(item.trackedAt).getTime() : Number.NaN;
+        return !Number.isFinite(trackedAtMs) || trackedAtMs >= sessionStartedAtMs;
+      })) {
+        const matched = await matchIntendedZonePitch({
+          organizationId,
+          sessionId,
+          trackmanPlayId: pitch.playId,
+          plateLocSide: pitch.plateLocSideFt,
+          plateLocHeight: pitch.plateLocHeightFt,
+          pitchType: pitch.pitchType,
+          relSpeed: pitch.relSpeedMph,
+          inducedVertBreak: pitch.inducedVertBreakIn,
+          horzBreak: pitch.horzBreakIn,
+          pitcherThrows: pitch.pitcherThrows,
+          taggedPitcherName: pitch.taggedPitcherName,
+          thrownAt: pitch.trackedAt,
+          targetCreatedBefore: pitch.trackedAt,
+        });
+        if (matched.ok) alreadyMatchedPlayIds.add(pitch.playId);
+      }
+    } catch (error) {
+      console.error('[intended-zone] webhook buffer read failed:', error);
+    }
+
+    // Keep the existing Data API as a fallback/backfill path. This covers
+    // any delivery missed while the B1 iPad or webhook endpoint was offline.
     try {
       const [balls, plays] = await Promise.all([
         getPracticeBalls(izSession.trackmanSessionId),

@@ -16,7 +16,9 @@ async function requireAdminSession() {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
   if (!session) return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) } as const;
-  if (session.role !== 'admin') return { error: NextResponse.json({ error: 'Only admins can upload dashboard data.' }, { status: 403 }) } as const;
+  if (session.role !== 'admin' && session.role !== 'coach') {
+    return { error: NextResponse.json({ error: 'Only coaches and admins can upload dashboard data.' }, { status: 403 }) } as const;
+  }
   return { session } as const;
 }
 
@@ -35,7 +37,7 @@ function selectedSchoolCode(session: {
     userId: session.userId ?? 0,
     email: session.email,
     name: session.name,
-    role: 'admin',
+    role: session.role ?? 'admin',
     organizationId: session.organizationId ?? 0,
     playerId: session.playerId ?? null,
     dashboardSchoolCode: session.dashboardSchoolCode ?? null,

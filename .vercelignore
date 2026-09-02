@@ -1,5 +1,18 @@
 Axioforce/
 trackman files/
+.venv/
+dashboard_api/.venv/
+dashboard_api/command_training/
+dashboard_api/stuff2_training/
+data/pro_savant_raw/
+.tmp/
 *.log
+/Biomechanics.mov
+/Correlations.MOV
+/Custom tables and reports.MOV
+/Edger and Spin.MOV
+/Notes.mov
+/Pitch Edit.MOV
+contacts_names_phone_numbers.csv
 coverage/
 __pycache__/

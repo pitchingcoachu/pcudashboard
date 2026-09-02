@@ -160,6 +160,8 @@ type TrackmanDiscoveredSession = {
   sessionId: string;
   gameDateLocal: string;
   sessionType: string;
+  location?: string | null;
+  state?: string | null;
 };
 
 const POLL_INTERVAL_MS = 4000;
@@ -646,7 +648,7 @@ export default function IntendedZonePanel({
                 style={mode === 'live' ? { borderColor: 'rgb(var(--portal-accent-rgb, 200, 16, 46))', color: '#f8fafc' } : undefined}
                 onClick={() => setMode('live')}
               >
-                Live (TrackMan API)
+                Live (TrackMan webhook)
               </button>
               <button
                 type="button"
@@ -667,7 +669,7 @@ export default function IntendedZonePanel({
             </div>
             {mode === 'ftp_deferred' ? (
               <p className={styles.zoneHint} style={{ textAlign: 'left', marginTop: 8 }}>
-                No live TrackMan feed needed. Queue targets now; results fill in automatically once your next FTP/CSV sync ingests this bullpen's
+                No live TrackMan feed needed. Queue targets now; results fill in automatically once your next FTP/CSV sync ingests this bullpen&apos;s
                 data.
               </p>
             ) : null}
@@ -692,7 +694,7 @@ export default function IntendedZonePanel({
                 <option value="">No session selected</option>
                 {discoveredSessions.map((s) => (
                   <option key={s.sessionId} value={s.sessionId}>
-                    {s.gameDateLocal} ({s.sessionType})
+                    {new Date(s.gameDateLocal).toLocaleString()} ({s.sessionType}){s.location ? ` — ${s.location}` : ''}
                   </option>
                 ))}
               </select>
@@ -784,7 +786,7 @@ export default function IntendedZonePanel({
 
           {pitcherMismatch ? (
             <div className={styles.mismatchBanner}>
-              <strong>Pitcher mismatch:</strong> TrackMan's data is tagged for{' '}
+              <strong>Pitcher mismatch:</strong> TrackMan&apos;s data is tagged for{' '}
               {pitcherMismatch.map((name, i) => (
                 <span key={name}>
                   {i > 0 ? ', ' : ''}
@@ -1021,7 +1023,7 @@ export default function IntendedZonePanel({
                   <p className={styles.summaryTitle}>Session So Far — {sessionAverages.count} Pitches</p>
                   <div className={styles.summaryStats}>
                     <span className={styles.summaryStat}>
-                      Avg miss: <strong>{(sessionAverages.avgMiss * 12).toFixed(1)}"</strong>
+                      Avg miss: <strong>{(sessionAverages.avgMiss * 12).toFixed(1)}&quot;</strong>
                     </span>
                     <span className={styles.summaryStat}>
                       On target: <strong>{sessionAverages.onTargetPct.toFixed(0)}%</strong>

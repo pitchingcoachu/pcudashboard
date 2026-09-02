@@ -7,6 +7,7 @@ import {
   getRecoverableThrowingTemplates,
   getRecoverableVelocityScripts,
   getScheduleThrowingState,
+  getThrowingFieldSchema,
   getPcuSharedThrowingState,
   playerExistsInOrganization,
   saveScheduleThrowingState,
@@ -352,10 +353,11 @@ export async function GET(request: Request) {
   const PCU_ORG_ID = 1;
   const isNonPcuOrg = organizationId !== PCU_ORG_ID;
 
-  const [playerState, sharedState, pcuSharedState] = await Promise.all([
+  const [playerState, sharedState, pcuSharedState, fieldSchema] = await Promise.all([
     isSharedOnly ? Promise.resolve({ templates: {}, byDate: {}, weekNotes: {} }) : getScheduleThrowingState({ organizationId, playerId }),
     getScheduleThrowingState({ organizationId, playerId: SHARED_PLAYER_ID }),
     isNonPcuOrg ? getPcuSharedThrowingState() : Promise.resolve(null),
+    getThrowingFieldSchema({ organizationId }),
   ]);
 
   const playerTemplatesObj = parseTemplatesObject(playerState.templates);
@@ -442,6 +444,7 @@ export async function GET(request: Request) {
       hittingDrillTemplates,
       catchPlayNotes: normalizeCatchPlayNotes(playerTemplatesObj.catchPlayNotes),
       cycleNotes: normalizeCycleNotes(playerTemplatesObj.cycleNotes),
+      fieldSchema,
     },
     { organizationId, playerId }
   );

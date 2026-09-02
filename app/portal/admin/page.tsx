@@ -252,7 +252,7 @@ export default async function AdminHomePage() {
           </Link>
         </article>
       ) : null}
-      {!isTrialSchool && session.role === 'admin' ? (
+      {!isTrialSchool && (session.role === 'admin' || session.role === 'coach') ? (
         <article className="portal-admin-card">
           <h2>CSV Uploads</h2>
           <p>Import Rapsodo pitching exports directly into this school&apos;s dashboard.</p>

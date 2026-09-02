@@ -5,7 +5,7 @@ import CsvUploadsWorkspace from './csv-uploads-workspace';
 
 export default async function CsvUploadsPage() {
   const session = await requirePortalSession();
-  if (session.role !== 'admin') notFound();
+  if (session.role !== 'admin' && session.role !== 'coach') notFound();
   const schoolCode = resolveDashboardSchoolCode(session);
 
   return <CsvUploadsWorkspace schoolCode={schoolCode} />;

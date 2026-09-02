@@ -13,6 +13,8 @@ type PlayerMedia = {
   contentType: string;
   createdAt: string;
   breakdownAnnotations?: BreakdownAnnotation[];
+  processingStatus?: 'ready' | 'processing' | 'failed';
+  processingError?: string | null;
 };
 
 type MediaPreview = {
@@ -302,16 +304,34 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
         {filtered.map((m) => {
           const url = `/api/player/media/${m.id}`;
           const mimeType = playerMediaContentType(m);
+          const isProcessing = m.mediaType === 'video' && m.processingStatus === 'processing';
+          const isFailed = m.mediaType === 'video' && m.processingStatus === 'failed';
           return (
             <div key={m.id} style={{ border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, padding: 10, background: 'rgba(0,0,0,0.16)', display: 'grid', gap: 6 }}>
-              <button
-                type="button"
-                onClick={() => openMediaPreview(m)}
-                className="portal-media-tile-preview"
-              >
-                <MediaTilePreview url={url} title={m.title} contentType={mimeType} mediaType={m.mediaType} />
-                <span className="portal-media-tile-kind">{mediaKindLabel(m)}</span>
-              </button>
+              {isProcessing || isFailed ? (
+                <div
+                  className="portal-media-tile-preview"
+                  style={{ display: 'grid', placeItems: 'center', minHeight: 90, gap: 4, cursor: 'default' }}
+                >
+                  {isProcessing ? (
+                    <>
+                      <span className="portal-muted-text" style={{ fontSize: 12 }}>Processing…</span>
+                      <span className="portal-muted-text" style={{ fontSize: 10 }}>Video will play once ready</span>
+                    </>
+                  ) : (
+                    <span style={{ color: 'rgba(248,113,113,0.95)', fontSize: 12 }}>Processing failed</span>
+                  )}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => openMediaPreview(m)}
+                  className="portal-media-tile-preview"
+                >
+                  <MediaTilePreview url={url} title={m.title} contentType={mimeType} mediaType={m.mediaType} />
+                  <span className="portal-media-tile-kind">{mediaKindLabel(m)}</span>
+                </button>
+              )}
               <strong style={{ color: '#f8fafc', fontSize: 13 }}>{m.title}</strong>
               <span className="portal-muted-text" style={{ fontSize: 12 }}>{m.category}</span>
               <span className="portal-muted-text" style={{ fontSize: 11 }}>{new Date(m.createdAt).toLocaleDateString()}</span>

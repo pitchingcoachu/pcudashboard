@@ -13,6 +13,7 @@ import {
   startIntendedZoneSession,
 } from '../../../../../../lib/training-db';
 import { discoverPracticeSessions } from '../../../../../../lib/trackman-data-api';
+import { listLiveTrackmanSessions } from '../../../../../../lib/trackman-live-webhook';
 
 // GET ?pitcherName= -> this pitcher's past intended-zone sessions.
 // GET ?discover=1 -> today's TrackMan practice sessions, to pick which one
@@ -34,14 +35,17 @@ export async function GET(request: Request) {
     const today = new Date();
     const start = new Date(today);
     start.setUTCDate(start.getUTCDate() - 1);
+    const liveSessions = await listLiveTrackmanSessions().catch(() => []);
     try {
-      const sessions = await discoverPracticeSessions({
+      const apiSessions = await discoverPracticeSessions({
         startDate: start.toISOString().slice(0, 10),
         endDate: today.toISOString().slice(0, 10),
         sessionType: 'All',
       });
-      return NextResponse.json({ sessions });
+      const liveIds = new Set(liveSessions.map((item) => item.sessionId));
+      return NextResponse.json({ sessions: [...liveSessions, ...apiSessions.filter((item) => !liveIds.has(item.sessionId))] });
     } catch (error) {
+      if (liveSessions.length) return NextResponse.json({ sessions: liveSessions });
       return NextResponse.json(
         { error: error instanceof Error ? error.message : 'Failed to reach TrackMan.' },
         { status: 502 }

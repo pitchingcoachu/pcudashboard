@@ -2,7 +2,16 @@
 
 import { useMemo, useState } from 'react';
 
-type ThrowingDayEntry = { intensity: string; distance: string; throwsText: string; drills: string; bullpen: string };
+type ThrowingDayEntry = Record<string, string>;
+type ThrowingFieldDef = { key: string; label: string };
+
+const DEFAULT_THROWING_FIELDS: ThrowingFieldDef[] = [
+  { key: 'intensity', label: 'Intensity' },
+  { key: 'distance', label: 'Distance' },
+  { key: 'throwsText', label: 'Throws' },
+  { key: 'drills', label: 'Drills' },
+  { key: 'bullpen', label: 'Bullpen' },
+];
 
 const WEEKDAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -44,12 +53,15 @@ function makeMonthGrid(anchor: string): Array<string> {
 export default function ThrowingReadonly({
   byDate,
   weekNotes,
+  fieldSchema,
   initialDate,
 }: {
   byDate: Record<string, ThrowingDayEntry>;
   weekNotes: Record<string, string>;
+  fieldSchema?: ThrowingFieldDef[];
   initialDate?: string;
 }) {
+  const fields = fieldSchema && fieldSchema.length ? fieldSchema : DEFAULT_THROWING_FIELDS;
   const [view, setView] = useState<'month' | 'week' | 'day'>(initialDate ? 'day' : 'month');
   const [anchorDate, setAnchorDate] = useState(() => {
     if (initialDate) return initialDate;
@@ -128,7 +140,7 @@ export default function ThrowingReadonly({
     return Number.isFinite(value) ? value : null;
   };
   const getThrowingCellHighlightStyle = (entry: ThrowingDayEntry) => {
-    const intensity = parseIntensityValue(entry.intensity);
+    const intensity = parseIntensityValue(entry.intensity ?? '');
     if (intensity == null) return {};
     if (intensity <= 60) return { background: 'rgba(153, 27, 27, 0.30)', boxShadow: 'inset 0 0 0 1px rgba(239, 68, 68, 0.55)' };
     if (intensity >= 65 && intensity <= 85) return { background: 'rgba(202, 138, 4, 0.28)', boxShadow: 'inset 0 0 0 1px rgba(250, 204, 21, 0.55)' };
@@ -137,7 +149,7 @@ export default function ThrowingReadonly({
   };
 
   const cell = (date: string) => {
-    const entry = byDate[date] ?? { intensity: '', distance: '', throwsText: '', drills: '', bullpen: '' };
+    const entry = byDate[date] ?? {};
     return (
       <article
         key={date}
@@ -148,26 +160,12 @@ export default function ThrowingReadonly({
           <span className="portal-schedule-day-num">{fromIsoDate(date).getUTCDate()}</span>
         </div>
         <div className="portal-schedule-day-body" style={{ display: 'grid', gap: '0.28rem', ...getThrowingCellHighlightStyle(entry) }}>
-          <div style={throwingRowStyle}>
-            <span style={throwingLabelStyle}>Intensity:</span>
-            <input className="portal-throwing-field" readOnly value={entry.intensity} style={throwingInputBaseStyle} />
-          </div>
-          <div style={throwingRowStyle}>
-            <span style={throwingLabelStyle}>Distance:</span>
-            <input className="portal-throwing-field" readOnly value={entry.distance} style={throwingInputBaseStyle} />
-          </div>
-          <div style={throwingRowStyle}>
-            <span style={throwingLabelStyle}>Throws:</span>
-            <input className="portal-throwing-field" readOnly value={entry.throwsText} style={throwingInputBaseStyle} />
-          </div>
-          <div style={throwingRowStyle}>
-            <span style={throwingLabelStyle}>Drills:</span>
-            <input className="portal-throwing-field" readOnly value={entry.drills} style={throwingInputBaseStyle} />
-          </div>
-          <div style={throwingRowStyle}>
-            <span style={throwingLabelStyle}>Bullpen:</span>
-            <input className="portal-throwing-field" readOnly value={entry.bullpen} style={throwingInputBaseStyle} />
-          </div>
+          {fields.map((field) => (
+            <div key={field.key} style={throwingRowStyle}>
+              <span style={throwingLabelStyle}>{field.label}:</span>
+              <input className="portal-throwing-field" readOnly value={entry[field.key] ?? ''} style={throwingInputBaseStyle} />
+            </div>
+          ))}
         </div>
       </article>
     );

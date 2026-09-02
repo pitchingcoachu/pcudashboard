@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromRequest } from '../../../../lib/auth';
 import { resolveProgrammingOrganizationId } from '../../../../lib/programming-scope';
-import { getPlayerForUser, getRecoverableVelocityScripts, getScheduleThrowingState, listExercisesByOrganization, playerExistsInOrganization } from '../../../../lib/training-db';
+import { getPlayerForUser, getRecoverableVelocityScripts, getScheduleThrowingState, getThrowingFieldSchema, listExercisesByOrganization, playerExistsInOrganization } from '../../../../lib/training-db';
 import { canManagePlayer } from '../../../../lib/portal-access';
 import { normalizeDrillsState } from '../../../../lib/drills-program';
 import { normalizeHittingDrillsState, normalizeDrillTemplates as normalizeHittingDrillTemplates } from '../../../../lib/hitting-drills-program';
@@ -197,10 +197,11 @@ export async function GET(request: Request) {
   const exists = await playerExistsInOrganization({ organizationId, playerId });
   if (!exists) return NextResponse.json({ error: 'Player not found in this organization.' }, { status: 404 });
 
-  const [playerState, sharedState, exercises] = await Promise.all([
+  const [playerState, sharedState, exercises, fieldSchema] = await Promise.all([
     getScheduleThrowingState({ organizationId, playerId }),
     getScheduleThrowingState({ organizationId, playerId: SHARED_PLAYER_ID }),
     listExercisesByOrganization(organizationId),
+    getThrowingFieldSchema({ organizationId }),
   ]);
   // Drill rows don't carry their own video URL -- a drill's video is
   // resolved by matching its name against the Exercise library, same as
@@ -250,5 +251,6 @@ export async function GET(request: Request) {
     drillVideos,
     catchPlayNotes: normalizeCatchPlayNotes(playerTemplatesObj.catchPlayNotes),
     cycleNotes: normalizeCycleNotes(playerTemplatesObj.cycleNotes),
+    fieldSchema,
   });
 }

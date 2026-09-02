@@ -215,18 +215,14 @@ const RESULT_COLOR_PALETTE: Record<string, string> = {
   'Foul Ball': '#94a3b8',
   Unknown: '#94a3b8',
 };
-const EV_BINS = ['<70', '70-75', '75-80', '80-85', '85-90', '90-95', '95-100', '>100', 'Unknown'] as const;
+const EV_BINS = ['<85 mph', '85–94 mph', '95+ mph', 'Unknown'] as const;
 const EV_COLOR_PALETTE: Record<(typeof EV_BINS)[number], string> = {
-  '<70': '#1f4e79',
-  '70-75': '#2f6fa3',
-  '75-80': '#3f8fc6',
-  '80-85': '#59b4d8',
-  '85-90': '#7ccf9b',
-  '90-95': '#f4d35e',
-  '95-100': '#f59e0b',
-  '>100': '#ef4444',
+  '<85 mph': '#38bdf8',
+  '85–94 mph': '#fbbf24',
+  '95+ mph': '#f43f5e',
   Unknown: '#94a3b8',
 };
+const EXIT_VELOCITY_BANDS = EV_BINS.slice(0, 3).map((label) => ({ label, color: EV_COLOR_PALETTE[label] }));
 const RESULT_LABELS: Record<string, string> = {
   'Called Strike': 'Called Strike',
   Ball: 'Ball',
@@ -254,6 +250,10 @@ const SPRAY_RESULT_COLORS: Record<(typeof SPRAY_RESULT_ORDER)[number], string> =
   Out: '#e5e7eb',
   Error: '#f59e0b',
 };
+function sprayExitVelocityColor(exitSpeed: number | null): string {
+  if (exitSpeed === null || !Number.isFinite(exitSpeed)) return '#9ca3af';
+  return EV_COLOR_PALETTE[evBin(exitSpeed)];
+}
 const SPLIT_BY_DEFAULT = 'Pitch Types';
 const TABLE_MODE_DEFAULT = 'Results';
 
@@ -917,14 +917,9 @@ function resultLabelForSwing(playResult: string): string {
 function evBin(value: number | null | undefined): (typeof EV_BINS)[number] {
   if (!Number.isFinite(value as number)) return 'Unknown';
   const v = Number(value);
-  if (v < 70) return '<70';
-  if (v < 75) return '70-75';
-  if (v < 80) return '75-80';
-  if (v < 85) return '80-85';
-  if (v < 90) return '85-90';
-  if (v < 95) return '90-95';
-  if (v < 100) return '95-100';
-  return '>100';
+  if (v < 85) return '<85 mph';
+  if (v < 95) return '85–94 mph';
+  return '95+ mph';
 }
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -1751,13 +1746,6 @@ function SprayChart({
     if (normalized === 'HomeRun') return '#f87171';
     return '#e5e7eb';
   };
-  const exitVelocityColor = (exitSpeed: number | null) => {
-    if (exitSpeed === null || !Number.isFinite(exitSpeed)) return '#9ca3af';
-    if (exitSpeed < 85) return '#38bdf8';
-    if (exitSpeed < 95) return '#fbbf24';
-    return '#f43f5e';
-  };
-
   const fence: Array<{ x: number; y: number }> = [];
   const rAt = (deg: number) => {
     if (deg <= -22.5) return 330 + ((deg + 45) / 22.5) * 40;
@@ -1812,8 +1800,7 @@ function SprayChart({
     <div className="dashboard-panel" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <h4 style={{ margin: 0, textAlign: 'center' }}>Spray Chart</h4>
       <div style={{ width: '100%', display: 'grid', gridTemplateColumns: view === 'Batted Balls' ? 'repeat(2, minmax(0, 1fr))' : 'minmax(0, 240px)', gap: 8, justifyContent: 'center' }}>
-        <label style={{ minWidth: 0 }}>
-          View
+        <div style={{ minWidth: 0 }}>
           <SearchableSingleSelect
             options={[
               { value: 'Batted Balls', label: 'Batted Balls' },
@@ -1823,10 +1810,9 @@ function SprayChart({
             onChange={(next) => onViewChange(next as 'Batted Balls' | 'Bins')}
             placeholder="Batted Balls"
           />
-        </label>
+        </div>
         {view === 'Batted Balls' ? (
-          <label style={{ minWidth: 0 }}>
-            Color Dots By
+          <div style={{ minWidth: 0 }}>
             <SearchableSingleSelect
               options={[
                 { value: 'Results', label: 'Results' },
@@ -1836,23 +1822,9 @@ function SprayChart({
               onChange={(next) => onColorByChange(next as 'Results' | 'Exit Velocity')}
               placeholder="Results"
             />
-          </label>
+          </div>
         ) : null}
       </div>
-      {view === 'Batted Balls' && colorBy === 'Exit Velocity' ? (
-        <div style={{ display: 'flex', justifyContent: 'center', gap: 12, flexWrap: 'wrap', fontSize: '0.76rem' }}>
-          {[
-            { label: '<85', color: '#38bdf8' },
-            { label: '85–94', color: '#fbbf24' },
-            { label: '95+', color: '#f43f5e' },
-          ].map((item) => (
-            <span key={item.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-              <span aria-hidden="true" style={{ width: 9, height: 9, borderRadius: '50%', background: item.color, boxShadow: `0 0 0 1px ${item.color}` }} />
-              {item.label} mph
-            </span>
-          ))}
-        </div>
-      ) : null}
       <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 340, border: '1px solid rgba(255,255,255,0.14)', borderRadius: 10 }}>
         {view === 'Bins'
           ? binStats.map((bin) => (
@@ -1894,7 +1866,7 @@ function SprayChart({
           ? livePoints.map((p, idx) => {
               const normalizedPlayResult = resultLabelForSwing(p.play_result || 'Out');
               const color = colorBy === 'Exit Velocity'
-                ? exitVelocityColor(parseNumber(p.exit_speed))
+                ? sprayExitVelocityColor(parseNumber(p.exit_speed))
                 : outcomeColor(normalizedPlayResult);
               const tip = [
                 `Pitcher: ${formatNameFirstLast(String(p.pitcher || '')) || '-'}`,
@@ -4863,8 +4835,14 @@ export default function HittingSuite({
   );
   const swingLegend = useMemo(() => {
     const map = new Map<string, string>();
+    const addExitVelocityKey = (source: ChartPoint[]) => {
+      for (const band of EXIT_VELOCITY_BANDS) map.set(band.label, band.color);
+      if (source.some((p) => evBin(p.exit_speed) === 'Unknown')) map.set('Unknown', EV_COLOR_PALETTE.Unknown);
+    };
     if (swingTab === '2D Contact' && contact2dDisplay !== 'individual' && contact2dDisplay !== 'average_pitch_type') {
-      if (contact2dDisplay === 'heat_result') {
+      if (contact2dDisplay === 'heat_exit_velocity') {
+        addExitVelocityKey(swingContactPoints);
+      } else if (contact2dDisplay === 'heat_result') {
         map.set('Outs / weak results', divergingColor(0.18, 0.15, 0.5, 1));
         map.set('Average results', divergingColor(0.5, 0.15, 0.5, 1));
         map.set('Hits / damage', divergingColor(0.9, 0.15, 0.5, 1));
@@ -4875,20 +4853,23 @@ export default function HittingSuite({
     } else if (swingTab === '2D Contact' || swingTab === '3D Contact') {
       const mode = swingTab === '2D Contact' ? contact2dColorBy : contact3dColorBy;
       const base = swingTab === '2D Contact' ? swingContactPoints : swingContact3dPoints;
-      for (const p of base) {
-        const key =
-          mode === 'pitch_type' ? (p.pitch_type || 'Unknown') : mode === 'exit_velocity' ? evBin(p.exit_speed) : resultLabelForSwing(p.play_result);
-        if (!map.has(key)) map.set(key, swingColorFor(p, mode));
+      if (mode === 'exit_velocity') {
+        addExitVelocityKey(base);
+      } else {
+        for (const p of base) {
+          const key = mode === 'pitch_type' ? (p.pitch_type || 'Unknown') : resultLabelForSwing(p.play_result);
+          if (!map.has(key)) map.set(key, swingColorFor(p, mode));
+        }
       }
     } else if (swingTab === 'Bat Speed') {
-      for (const p of points.filter((x) => Number.isFinite(x.bat_speed as number))) {
-        const key =
-          batSpeedColorBy === 'pitch_type'
-            ? (p.pitch_type || 'Unknown')
-            : batSpeedColorBy === 'exit_velocity'
-              ? evBin(p.exit_speed)
-              : resultLabelForSwing(p.play_result);
-        if (!map.has(key)) map.set(key, swingColorFor(p, batSpeedColorBy));
+      const base = points.filter((x) => Number.isFinite(x.bat_speed as number));
+      if (batSpeedColorBy === 'exit_velocity') {
+        addExitVelocityKey(base);
+      } else {
+        for (const p of base) {
+          const key = batSpeedColorBy === 'pitch_type' ? (p.pitch_type || 'Unknown') : resultLabelForSwing(p.play_result);
+          if (!map.has(key)) map.set(key, swingColorFor(p, batSpeedColorBy));
+        }
       }
     } else if (swingTab === 'EV and LA') {
       for (const p of swingEvlaPoints) {
@@ -5338,17 +5319,30 @@ export default function HittingSuite({
                 </div>
               </div>
               {dashboardPage === 'Summary' ? (
-                <div className="dashboard-panel">
-                  <h4 style={{ margin: '0 0 10px 0', textAlign: 'center' }}>Spray Results</h4>
-                  <div style={{ display: 'grid', gap: 8 }}>
-                    {SPRAY_RESULT_ORDER.map((result) => (
-                      <div key={result} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ width: 12, height: 12, borderRadius: '999px', background: SPRAY_RESULT_COLORS[result], display: 'inline-block' }} />
-                        <span>{SPRAY_RESULT_LABELS[result]}</span>
-                      </div>
-                    ))}
+                <>
+                  <div className="dashboard-panel">
+                    <h4 style={{ margin: '0 0 10px 0', textAlign: 'center' }}>Spray Results</h4>
+                    <div style={{ display: 'grid', gap: 8 }}>
+                      {SPRAY_RESULT_ORDER.map((result) => (
+                        <div key={result} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ width: 12, height: 12, borderRadius: '999px', background: SPRAY_RESULT_COLORS[result], display: 'inline-block' }} />
+                          <span>{SPRAY_RESULT_LABELS[result]}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                  <div className="dashboard-panel">
+                    <h4 style={{ margin: '0 0 10px 0', textAlign: 'center' }}>Exit Velocity</h4>
+                    <div style={{ display: 'grid', gap: 8 }}>
+                      {EXIT_VELOCITY_BANDS.map((item) => (
+                        <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ width: 12, height: 12, borderRadius: '999px', background: item.color, display: 'inline-block' }} />
+                          <span>{item.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
               ) : null}
             </div>
           </article>
@@ -6894,7 +6888,7 @@ export default function HittingSuite({
                                     format: (value: number) => value.toFixed(1),
                                   };
                           const heatColorFor = (cell: HeatCell) => {
-                            if (contact2dDisplay === 'heat_exit_velocity') return divergingColor(cell.value, heatScale.min, heatScale.mid, heatScale.max);
+                            if (contact2dDisplay === 'heat_exit_velocity') return sprayExitVelocityColor(cell.value);
                             if (contact2dDisplay === 'heat_result') return divergingColor(cell.value, 0.15, 0.5, 1);
                             return sequentialColor(cell.density, 0, maxDensity);
                           };
@@ -6976,16 +6970,31 @@ export default function HittingSuite({
                               {isHeatMode ? (
                                 <g>
                                   <rect x={198} y={8} width={324} height={56} fill="rgba(0,0,0,0.58)" stroke="rgba(255,255,255,0.14)" rx={6} />
-                                  <rect x={210} y={16} width={300} height={18} fill="url(#contact-2d-heat-scale)" stroke="rgba(255,255,255,0.22)" />
-                                  <text x={210} y={47} fill="rgba(255,255,255,0.82)" fontSize={12} fontWeight={700} textAnchor="start">
-                                    {heatScale.format(heatScale.min)}
-                                  </text>
-                                  <text x={360} y={47} fill="rgba(255,255,255,0.82)" fontSize={12} fontWeight={700} textAnchor="middle">
-                                    {heatScale.format(heatScale.mid)}
-                                  </text>
-                                  <text x={510} y={47} fill="rgba(255,255,255,0.82)" fontSize={12} fontWeight={700} textAnchor="end">
-                                    {heatScale.format(heatScale.max)}
-                                  </text>
+                                  {contact2dDisplay === 'heat_exit_velocity' ? (
+                                    <>
+                                      {EXIT_VELOCITY_BANDS.map((band, index) => (
+                                        <g key={band.label}>
+                                          <rect x={210 + index * 100} y={16} width={100} height={18} fill={band.color} stroke="rgba(255,255,255,0.22)" />
+                                          <text x={260 + index * 100} y={47} fill="rgba(255,255,255,0.82)" fontSize={12} fontWeight={700} textAnchor="middle">
+                                            {band.label}
+                                          </text>
+                                        </g>
+                                      ))}
+                                    </>
+                                  ) : (
+                                    <>
+                                      <rect x={210} y={16} width={300} height={18} fill="url(#contact-2d-heat-scale)" stroke="rgba(255,255,255,0.22)" />
+                                      <text x={210} y={47} fill="rgba(255,255,255,0.82)" fontSize={12} fontWeight={700} textAnchor="start">
+                                        {heatScale.format(heatScale.min)}
+                                      </text>
+                                      <text x={360} y={47} fill="rgba(255,255,255,0.82)" fontSize={12} fontWeight={700} textAnchor="middle">
+                                        {heatScale.format(heatScale.mid)}
+                                      </text>
+                                      <text x={510} y={47} fill="rgba(255,255,255,0.82)" fontSize={12} fontWeight={700} textAnchor="end">
+                                        {heatScale.format(heatScale.max)}
+                                      </text>
+                                    </>
+                                  )}
                                   <text x={360} y={61} fill="rgba(255,255,255,0.9)" fontSize={12} fontWeight={800} textAnchor="middle">
                                     {heatScale.label}
                                   </text>
