@@ -74,6 +74,12 @@ jobs:
           echo "SYNC_START_DATE=${START_DATE}" >> "$GITHUB_ENV"
           echo "SYNC_END_DATE=${END_DATE}" >> "$GITHUB_ENV"
           echo "SYNC_LOOKBACK_DAYS=${LOOKBACK_DAYS}" >> "$GITHUB_ENV"
+          # TrackMan can publish a session CSV in the following day's FTP
+          # directory (for example, an Aug 20 session under /Aug/21/CSV).
+          # Refresh one extra source-data day so newly ingested backdated
+          # sessions cannot be omitted from the dashboard rollups.
+          ROLLUP_START_DATE="$(date -u -d "${START_DATE} - 1 day" +%F)"
+          echo "ROLLUP_START_DATE=${ROLLUP_START_DATE}" >> "$GITHUB_ENV"
 
       - name: Sync UNM TrackMan pitch data
         shell: bash
@@ -102,5 +108,5 @@ jobs:
           # The shared league rollup can legitimately hold its advisory lock for
           # several minutes. Keep retrying long enough for that rebuild to finish.
           ARGS=(--school UNM --keep-pooler --batch-days 1 --retries 30)
-          ARGS+=(--window-start "${SYNC_START_DATE}" --window-end "${SYNC_END_DATE}")
+          ARGS+=(--window-start "${ROLLUP_START_DATE}" --window-end "${SYNC_END_DATE}")
           python scripts/refresh_college_rollups.py "${ARGS[@]}"

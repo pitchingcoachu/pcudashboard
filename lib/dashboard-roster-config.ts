@@ -53,6 +53,16 @@ export function loadRosterVectorsFromConfig(schoolCode: string): { allowedPitche
         allowedHitters: uniqueNames([...base.allowedHitters, ...additions]),
       };
     }
+    if (upper === 'UNM') {
+      // UNM manages one active-player roster. A player may appear as a
+      // pitcher, hitter, or both in V3 sessions, so nobody approved for the
+      // pitching dashboard should disappear from hitting solely because the
+      // two legacy R vectors drifted apart.
+      return {
+        allowedPitchers: base.allowedPitchers,
+        allowedHitters: uniqueNames([...base.allowedHitters, ...base.allowedPitchers]),
+      };
+    }
     return base;
   } catch {
     return null;

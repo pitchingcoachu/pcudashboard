@@ -6728,6 +6728,12 @@ def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
     allowed_pitchers = _extract_r_vector(text, "allowed_pitchers")
     allowed_hitters = _extract_r_vector(text, "allowed_hitters")
     allowed_campers = _extract_r_vector(text, "allowed_campers")
+    if school_code.upper() == "UNM":
+        # UNM's approved roster is shared across pitching and hitting. Keep
+        # the historical hitter entries, but always include every approved
+        # pitcher so two-way players and pitchers taking V3 at-bats are not
+        # silently filtered out of the hitting dashboard.
+        allowed_hitters = sorted({*allowed_hitters, *allowed_pitchers})
     if school_code.upper() == "PCU":
         pcu_additions = [
             "Heather, Connor",
@@ -8759,7 +8765,6 @@ def _refresh_league_daily_rollup(
                   COALESCE(SUM(b.balls_num), 0.0)::double precision AS balls_sum,
                   COALESCE(SUM(b.strikes_num), 0.0)::double precision AS strikes_sum
                 FROM base b
-                WHERE b.pitch_type <> 'Undefined'
                 GROUP BY
                   b.session_date, b.pitch_type, b.pitcher_norm, b.batter_norm, b.catcher_norm,
                   b.level_bucket, b.pitcher_team_norm, b.batter_team_norm_eff, b.pitcherthrows_norm, b.batterside_norm, b.session_bucket
@@ -8929,7 +8934,6 @@ def _refresh_league_daily_rollup(
                   WHERE pe.school_code = %(school_code)s
                     AND pe.session_date >= %(refresh_start)s::date
                     AND pe.session_date <= %(max_date)s::date
-                    AND """ + PITCH_TYPE_NORMALIZE_SQL.replace("taggedpitchtype", "pe.taggedpitchtype").replace("autopitchtype", "pe.autopitchtype") + """ <> 'Undefined'
                 ),
                 pitch_metrics AS MATERIALIZED (
                   SELECT
@@ -10472,6 +10476,7 @@ def _try_pitching_overview_daily_rollup(
         "(%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)",
         "(%(pitchers_count)s::int = 0 OR pitcher_norm = ANY(%(pitchers_norm)s::text[]))",
         "(%(pitch_types_count)s::int = 0 OR pitch_type = ANY(%(pitch_types)s::text[]))",
+        "pitch_type <> 'Undefined'",
     ]
     if school_code == "LEAGUE":
         where_parts.append(LEAGUE_ROLLUP_TEAM_EXCLUSION_SQL)
@@ -26849,7 +26854,6 @@ def hitting_overview(
                   )
                   AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                   AND """ + _college_level_where_sql("pe") + """
-                  AND (""" + PITCH_TYPE_NORMALIZE_SQL + """) <> 'Undefined'
                   AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
                   AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
                   AND (%(hitter_count)s::int = 0 OR """ + BATTER_NAME_NORM_SQL + """ = ANY(%(hitters_norm)s::text[]))
@@ -26889,7 +26893,7 @@ def hitting_overview(
                     **({"chart_source_scan_limit": chart_source_scan_limit} if chart_source_scan_limit is not None else {}),
                 },
             )
-            rows = [dict(row) for row in cur.fetchall() if str(row.get("pitch_type") or "") != "Undefined"]
+            rows = [dict(row) for row in cur.fetchall()]
             rows = _resolve_college_opp_placeholders(
                 rows,
                 school_code=school_code,

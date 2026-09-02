@@ -195,6 +195,14 @@ school_config <- list(
   )
 )
 
+# UNM uses one approved active-player roster across both dashboard domains.
+# Preserve legacy hitter-only entries while ensuring every approved pitcher is
+# also visible when that player records V3 hitting data.
+school_config$allowed_hitters <- unique(c(
+  school_config$allowed_hitters,
+  school_config$allowed_pitchers
+))
+
 colorize_css <- function(css, accent, accent_secondary, background, background_secondary) {
   accent_rgb <- paste(grDevices::col2rgb(accent), collapse = ",")
   accent_secondary_rgb <- paste(grDevices::col2rgb(accent_secondary), collapse = ",")
