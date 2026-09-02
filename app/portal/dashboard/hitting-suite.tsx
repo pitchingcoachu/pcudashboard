@@ -2484,6 +2484,7 @@ export default function HittingSuite({
       setBatterSide('All');
       setVenue('All');
       setSessionType('All');
+      setSummarySprayColorBy('Results');
       setPitchTypes([]);
       setZoneLocations([]);
       setPitchResults([]);
@@ -5143,7 +5144,10 @@ export default function HittingSuite({
                       <SearchableSingleSelect
                         options={toOptions(filters.session_types ?? ['All', 'Batting Practice', 'Game'])}
                         value={sessionType}
-                        onChange={setSessionType}
+                        onChange={(next) => {
+                          setSessionType(next);
+                          setSummarySprayColorBy(next === 'Batting Practice' ? 'Exit Velocity' : 'Results');
+                        }}
                         placeholder="All"
                       />
                     </label>
