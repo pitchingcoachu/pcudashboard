@@ -1607,12 +1607,16 @@ function SprayChart({
   points,
   view,
   onViewChange,
+  colorBy,
+  onColorByChange,
   onPointHover,
   onPointLeave,
 }: {
   points: ChartPoint[];
   view: 'Batted Balls' | 'Bins';
   onViewChange: (next: 'Batted Balls' | 'Bins') => void;
+  colorBy: 'Results' | 'Exit Velocity';
+  onColorByChange: (next: 'Results' | 'Exit Velocity') => void;
   onPointHover: (hover: Exclude<ChartHover, null>) => void;
   onPointLeave: () => void;
 }) {
@@ -1747,6 +1751,12 @@ function SprayChart({
     if (normalized === 'HomeRun') return '#f87171';
     return '#e5e7eb';
   };
+  const exitVelocityColor = (exitSpeed: number | null) => {
+    if (exitSpeed === null || !Number.isFinite(exitSpeed)) return '#9ca3af';
+    if (exitSpeed < 85) return '#38bdf8';
+    if (exitSpeed < 95) return '#fbbf24';
+    return '#f43f5e';
+  };
 
   const fence: Array<{ x: number; y: number }> = [];
   const rAt = (deg: number) => {
@@ -1801,17 +1811,48 @@ function SprayChart({
   return (
     <div className="dashboard-panel" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <h4 style={{ margin: 0, textAlign: 'center' }}>Spray Chart</h4>
-      <div style={{ width: '100%', maxWidth: 240, margin: '0 auto' }}>
-        <SearchableSingleSelect
-          options={[
-            { value: 'Batted Balls', label: 'Batted Balls' },
-            { value: 'Bins', label: 'Bins' },
-          ]}
-          value={view}
-          onChange={(next) => onViewChange(next as 'Batted Balls' | 'Bins')}
-          placeholder="Batted Balls"
-        />
+      <div style={{ width: '100%', display: 'grid', gridTemplateColumns: view === 'Batted Balls' ? 'repeat(2, minmax(0, 1fr))' : 'minmax(0, 240px)', gap: 8, justifyContent: 'center' }}>
+        <label style={{ minWidth: 0 }}>
+          View
+          <SearchableSingleSelect
+            options={[
+              { value: 'Batted Balls', label: 'Batted Balls' },
+              { value: 'Bins', label: 'Bins' },
+            ]}
+            value={view}
+            onChange={(next) => onViewChange(next as 'Batted Balls' | 'Bins')}
+            placeholder="Batted Balls"
+          />
+        </label>
+        {view === 'Batted Balls' ? (
+          <label style={{ minWidth: 0 }}>
+            Color Dots By
+            <SearchableSingleSelect
+              options={[
+                { value: 'Results', label: 'Results' },
+                { value: 'Exit Velocity', label: 'Exit Velocity' },
+              ]}
+              value={colorBy}
+              onChange={(next) => onColorByChange(next as 'Results' | 'Exit Velocity')}
+              placeholder="Results"
+            />
+          </label>
+        ) : null}
       </div>
+      {view === 'Batted Balls' && colorBy === 'Exit Velocity' ? (
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 12, flexWrap: 'wrap', fontSize: '0.76rem' }}>
+          {[
+            { label: '<85', color: '#38bdf8' },
+            { label: '85–94', color: '#fbbf24' },
+            { label: '95+', color: '#f43f5e' },
+          ].map((item) => (
+            <span key={item.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <span aria-hidden="true" style={{ width: 9, height: 9, borderRadius: '50%', background: item.color, boxShadow: `0 0 0 1px ${item.color}` }} />
+              {item.label} mph
+            </span>
+          ))}
+        </div>
+      ) : null}
       <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 340, border: '1px solid rgba(255,255,255,0.14)', borderRadius: 10 }}>
         {view === 'Bins'
           ? binStats.map((bin) => (
@@ -1852,7 +1893,9 @@ function SprayChart({
         {view === 'Batted Balls'
           ? livePoints.map((p, idx) => {
               const normalizedPlayResult = resultLabelForSwing(p.play_result || 'Out');
-              const color = outcomeColor(normalizedPlayResult);
+              const color = colorBy === 'Exit Velocity'
+                ? exitVelocityColor(parseNumber(p.exit_speed))
+                : outcomeColor(normalizedPlayResult);
               const tip = [
                 `Pitcher: ${formatNameFirstLast(String(p.pitcher || '')) || '-'}`,
                 `Batter: ${formatNameFirstLast(String(p.batter || '')) || '-'}`,
@@ -2331,6 +2374,7 @@ export default function HittingSuite({
   const summaryRhpLocationViewTouchedRef = useRef(false);
   const summaryLhpLocationViewTouchedRef = useRef(false);
   const [summarySprayView, setSummarySprayView] = useState<'Batted Balls' | 'Bins'>('Batted Balls');
+  const [summarySprayColorBy, setSummarySprayColorBy] = useState<'Results' | 'Exit Velocity'>('Results');
   const [leaderboardSortColumn, setLeaderboardSortColumn] = useState('');
   const [leaderboardSortDirection, setLeaderboardSortDirection] = useState<SortDirection>('desc');
   const [leaderboardStatView, setLeaderboardStatView] = useState<'Stats' | 'Percentile'>('Stats');
@@ -5432,6 +5476,8 @@ export default function HittingSuite({
                   points={points}
                   view={summarySprayView}
                   onViewChange={setSummarySprayView}
+                  colorBy={summarySprayColorBy}
+                  onColorByChange={setSummarySprayColorBy}
                   onPointHover={setChartHover}
                   onPointLeave={() => setChartHover(null)}
                 />
