@@ -54,51 +54,6 @@ function hasValue(value: string): boolean {
   return String(value ?? '').trim().length > 0;
 }
 
-function isValidPitchTypeValue(value: unknown): boolean {
-  const token = String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-  return !!token && !['unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null'].includes(token);
-}
-
-function filterInvalidPitchTypeRows<T>(rows: T): T {
-  if (!Array.isArray(rows)) return rows;
-  return rows.filter((row) => {
-    if (!row || typeof row !== 'object') return true;
-    const pitchValue = (row as { pitch_type?: unknown; pitchType?: unknown; Pitch?: unknown }).pitch_type
-      ?? (row as { pitchType?: unknown }).pitchType
-      ?? (row as { Pitch?: unknown }).Pitch;
-    return pitchValue === undefined || isValidPitchTypeValue(pitchValue);
-  }) as T;
-}
-
-function scrubInvalidPitchTypePayload(payload: unknown): unknown {
-  if (!payload || typeof payload !== 'object') return payload;
-  const next: Record<string, unknown> = { ...(payload as Record<string, unknown>) };
-  next.chart_points = filterInvalidPitchTypeRows(next.chart_points);
-  next.heatmap_points = filterInvalidPitchTypeRows(next.heatmap_points);
-  next.row_pitches = filterInvalidPitchTypeRows(next.row_pitches);
-  if (Array.isArray(next.pitch_type_legend)) {
-    next.pitch_type_legend = next.pitch_type_legend.filter(isValidPitchTypeValue);
-  }
-  if (Array.isArray(next.pitch_types)) {
-    next.pitch_types = next.pitch_types.filter((row) => {
-      if (typeof row === 'string') return isValidPitchTypeValue(row);
-      if (!row || typeof row !== 'object') return true;
-      const record = row as Record<string, unknown>;
-      const pitchValue = record.pitch_type ?? record.Pitch ?? record['Pitch Type'];
-      return pitchValue === undefined || isValidPitchTypeValue(pitchValue);
-    });
-  }
-  if (Array.isArray(next.table_rows)) {
-    next.table_rows = next.table_rows.filter((row) => {
-      if (!row || typeof row !== 'object') return true;
-      const record = row as Record<string, unknown>;
-      const pitchValue = record.pitch_type ?? record.Pitch ?? record['Pitch Type'];
-      return pitchValue === undefined || isValidPitchTypeValue(pitchValue);
-    });
-  }
-  return next;
-}
-
 async function maybeAttachHittingHeatmapRollup(params: {
   request: Request;
   schoolCode: string;
@@ -663,7 +618,7 @@ export async function GET(request: Request) {
       inputUrl,
       payload: result.payload,
     });
-    return NextResponse.json(scrubInvalidPitchTypePayload(payloadWithRollupHeatmaps), {
+    return NextResponse.json(payloadWithRollupHeatmaps, {
       headers: {
         ...RESPONSE_CACHE_HEADERS,
         'x-dashboard-cache': result.cached ? 'HIT' : 'MISS',

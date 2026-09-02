@@ -5787,12 +5787,12 @@ export default function PitchingSuite({
   const filteredPitchers = useMemo(() => {
     if (!filters) return [];
     if (teamType === 'All') return filters.pitchers ?? [];
-    return filters.pitchers_by_team_code?.[teamType] ?? filters.pitchers ?? [];
+    return filters.pitchers_by_team_code?.[teamType] ?? [];
   }, [filters, teamType]);
   const filteredOppHitters = useMemo(() => {
     if (!filters) return [];
     if (teamType === 'All') return filters.opp_hitters ?? [];
-    return filters.opp_hitters_by_team_code?.[teamType] ?? filters.opp_hitters ?? [];
+    return filters.opp_hitters_by_team_code?.[teamType] ?? [];
   }, [filters, teamType]);
   const pitcherOptions = useMemo(() => (filters ? [{ value: 'All', label: 'All' }, ...toOptions(filteredPitchers, true)] : []), [filters, filteredPitchers]);
   const hitterOptions = useMemo(() => (filters ? [{ value: 'All', label: 'All' }, ...toOptions(filteredOppHitters, true)] : []), [filters, filteredOppHitters]);

@@ -1380,7 +1380,27 @@ def _normalize_session_type_filter(value: Optional[str]) -> Optional[str]:
     return None
 
 
-def _session_bucket_for_row(row: Dict[str, Any], team_markers_norm) -> Optional[str]:
+def _session_bucket_for_row(
+    row: Dict[str, Any],
+    team_markers_norm,
+    *,
+    classify_hitting_csv: bool = False,
+) -> Optional[str]:
+    source_file = str(row.get("source_file_name") or "").strip()
+    if classify_hitting_csv and source_file:
+        source_basename = re.split(r"[/\\]", source_file)[-1]
+        source_tokens = {
+            token
+            for token in re.split(r"[^a-z0-9]+", source_basename.lower())
+            if token
+        }
+        # TrackMan V3 batting-practice exports are identified by the BP token
+        # in the filename. Their SessionType column is commonly just "Live",
+        # so the filename is the authoritative discriminator for hitting.
+        if "bp" in source_tokens:
+            return "Bullpen"
+        if source_basename.lower().endswith(".csv"):
+            return "Live"
     st_compact = re.sub(r"\s+", "", str(row.get("session_type_norm") or "").strip().lower())
     if "bull" in st_compact or "prac" in st_compact or st_compact == "bp":
         return "Bullpen"
@@ -22038,8 +22058,10 @@ def pitching_filters(
         for name in csv_pitcher_names
         if _normalize_name_key(name)
     )
-    if allowed_pitcher_keys:
-        pitchers = [name for name in pitchers if _normalize_name_key(name) in allowed_pitcher_keys]
+    roster_pitchers = [
+        name for name in pitchers
+        if not allowed_pitcher_keys or _normalize_name_key(name) in allowed_pitcher_keys
+    ]
     known_hitter_keys = set(hitter_norm | campers_norm)
     if known_hitter_keys:
         opp_hitters = [name for name in opp_hitters if _normalize_name_key(name) not in known_hitter_keys]
@@ -22048,13 +22070,18 @@ def pitching_filters(
             pitchers_by_team_code,
             school_code=school_code,
             team_markers_norm=set(team_markers_norm or []),
-            roster_names=set(pitchers),
+            roster_names=set(roster_pitchers),
         )
         opp_hitters_by_team_code = _add_school_team_filter_keys(
             opp_hitters_by_team_code,
             school_code=school_code,
             team_markers_norm=set(team_markers_norm or []),
         )
+        if school_code == "UNM":
+            pitchers_by_team_code[school_code] = sorted(roster_pitchers)
+            pitchers_by_team_code["Opponents"] = sorted(
+                name for name in pitchers if _normalize_name_key(name) not in allowed_pitcher_keys
+            )
 
     response_payload = _merge_dashboard_csv_pitchers_into_filters_payload(
         {
@@ -25912,20 +25939,27 @@ def hitting_filters(
         raise HTTPException(status_code=500, detail=f"hitting filters query failed: {exc}") from exc
 
     allowed_hitter_keys = set(team_hitter_norm)
-    if allowed_hitter_keys:
-        hitters = [name for name in hitters if _normalize_name_key(name) in allowed_hitter_keys]
+    roster_hitters = [
+        name for name in hitters
+        if not allowed_hitter_keys or _normalize_name_key(name) in allowed_hitter_keys
+    ]
     if school_code not in {"LEAGUE", "PRO"}:
         hitters_by_team_code = _add_school_team_filter_keys(
             hitters_by_team_code,
             school_code=school_code,
             team_markers_norm=set(team_markers_norm or []),
-            roster_names=set(hitters),
+            roster_names=set(roster_hitters),
         )
         opp_pitchers_by_team_code = _add_school_team_filter_keys(
             opp_pitchers_by_team_code,
             school_code=school_code,
             team_markers_norm=set(team_markers_norm or []),
         )
+        if school_code == "UNM":
+            hitters_by_team_code[school_code] = sorted(roster_hitters)
+            hitters_by_team_code["Opponents"] = sorted(
+                name for name in hitters if _normalize_name_key(name) not in allowed_hitter_keys
+            )
 
     response = {
         "school_code": school_code,
@@ -25936,6 +25970,7 @@ def hitting_filters(
         "team_types": team_types,
         "hands": ["All", "Left", "Right"],
         "batter_sides": ["All", "Left", "Right"],
+        "session_types": ["All", "Batting Practice", "Game"],
         "pitch_types": pitch_types,
         "zone_locations": ZONE_LOCATION_CHOICES,
         "in_zone_options": ["All", "Yes", "No", "Competitive"],
@@ -26110,6 +26145,7 @@ def hitting_overview(
         league_rollup_candidate = (
             league_all_selection
             and (not chart_only)
+            and (not session_type_filter)
             and mode_raw in {"Results", "Swing Decisions", "Swing Metrics", "Batted Ball Data", "Custom"}
             and college_level_filter == "All"
         )
@@ -26139,6 +26175,7 @@ def hitting_overview(
         league_leaderboard_rollup_candidate = (
             (not chart_only)
             and (not include_chart_points)
+            and (not session_type_filter)
             and split_by in {"Batter", "Batter Team"}
             and mode_raw in {"Results", "Swing Decisions", "Swing Metrics", "Batted Ball Data", "Custom"}
             and (not league_leaderboard_has_narrowing_filters)
@@ -26923,7 +26960,11 @@ def hitting_overview(
     out_rows: List[Dict[str, Any]] = []
     for row in rows:
         row["_venue_context"] = "hitting"
-        row_session_bucket = _session_bucket_for_row(row, team_markers_norm)
+        row_session_bucket = _session_bucket_for_row(
+            row,
+            team_markers_norm,
+            classify_hitting_csv=True,
+        )
         if session_type_filter and row_session_bucket != session_type_filter:
             continue
         if venue_filter and not _venue_filter_match(row, venue_filter):

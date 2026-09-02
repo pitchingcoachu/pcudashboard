@@ -30,6 +30,7 @@ type HittingFiltersPayload = {
   opp_pitchers: string[];
   hands: string[];
   batter_sides: string[];
+  session_types?: string[];
   pitch_types: string[];
   zone_locations: string[];
   in_zone_options: string[];
@@ -2267,11 +2268,11 @@ export default function HittingSuite({
     targetValue: string;
     startDate: string;
     endDate: string;
-    page?: 'Summary' | 'Leaderboard' | 'Game Log';
+    page?: 'Summary' | 'Leaderboard' | 'Game Log' | 'Pitch Log';
     navigationSource?: 'search' | 'home_leaderboard';
   } | null;
 }) {
-  const [dashboardPage, setDashboardPage] = useState<'Summary' | 'Leaderboard' | 'Game Log' | 'AB Report' | 'HeatMaps' | 'Swing Data'>('Summary');
+  const [dashboardPage, setDashboardPage] = useState<'Summary' | 'Leaderboard' | 'Game Log' | 'Pitch Log' | 'AB Report' | 'HeatMaps' | 'Swing Data'>('Summary');
   const [isSidebarHidden, setIsSidebarHidden] = useState(false);
   const [isMobileView, setIsMobileView] = useState(false);
   const [filters, setFilters] = useState<HittingFiltersPayload | null>(null);
@@ -2296,6 +2297,7 @@ export default function HittingSuite({
   const [hand, setHand] = useState('All');
   const [batterSide, setBatterSide] = useState('All');
   const [venue, setVenue] = useState('All');
+  const [sessionType, setSessionType] = useState('All');
   const [tableMode, setTableMode] = useState(TABLE_MODE_DEFAULT);
   const [splitBy, setSplitBy] = useState(SPLIT_BY_DEFAULT);
   const [customTables, setCustomTables] = useState<CustomTableConfig[]>([]);
@@ -2347,6 +2349,8 @@ export default function HittingSuite({
   const [gameLogSortColumn, setGameLogSortColumn] = useState('Date');
   const [gameLogSortDirection, setGameLogSortDirection] = useState<SortDirection>('desc');
   const [pinnedGameLogKeys, setPinnedGameLogKeys] = useState<Set<string>>(new Set());
+  const [pitchLogSortColumn, setPitchLogSortColumn] = useState('Date');
+  const [pitchLogSortDirection, setPitchLogSortDirection] = useState<SortDirection>('desc');
   const [enableTableColors, setEnableTableColors] = useState(false);
   const [showCellPercentiles, setShowCellPercentiles] = useState(false);
   const [percentileBaselineRequestKey, setPercentileBaselineRequestKey] = useState('');
@@ -2425,7 +2429,9 @@ export default function HittingSuite({
     suppressNextFilterDateAutofillRef.current =
       homeNavigateRequest.navigationSource === 'search' ||
       homeNavigateRequest.navigationSource === 'home_leaderboard';
-    setDashboardPage(homeNavigateRequest.page ?? 'Summary');
+    const requestedPage = homeNavigateRequest.page ?? 'Summary';
+    setDashboardPage(requestedPage);
+    if (requestedPage === 'Pitch Log') setTableMode('Swing Metrics');
     setStartDate(homeNavigateRequest.startDate);
     setEndDate(homeNavigateRequest.endDate);
     if (homeNavigateRequest.navigationSource === 'home_leaderboard') {
@@ -2433,6 +2439,7 @@ export default function HittingSuite({
       setHand('All');
       setBatterSide('All');
       setVenue('All');
+      setSessionType('All');
       setPitchTypes([]);
       setZoneLocations([]);
       setPitchResults([]);
@@ -2486,6 +2493,7 @@ export default function HittingSuite({
   const showSecondarySidebar = !isSidebarHidden && dashboardPage !== 'Swing Data' && dashboardPage !== 'Leaderboard';
   const hasSpecificHitterSelection = hitter && hitter !== 'All';
   const canRunGameLog = Boolean(hasSpecificHitterSelection || (teamType && teamType !== 'All'));
+  const canRunPitchLog = canRunGameLog;
   const effectiveSplitBy = isLeaderboardPage ? (leaderboardViewBy === 'Team' ? 'Batter Team' : 'Batter') : splitBy;
   const canLoadOverview = useMemo(() => !!filters && !!startDate && !!endDate, [filters, startDate, endDate]);
   const effectiveSchoolCode = String(filters?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();
@@ -2522,12 +2530,12 @@ export default function HittingSuite({
   }, [filters?.school_code, filters?.team_types, isPro]);
   const hitterOptions = useMemo(() => {
     if (!filters) return [{ value: 'All', label: 'All' }];
-    const values = teamType === 'All' ? (filters.hitters ?? []) : (filters.hitters_by_team_code?.[teamType] ?? filters.hitters ?? []);
+    const values = teamType === 'All' ? (filters.hitters ?? []) : (filters.hitters_by_team_code?.[teamType] ?? []);
     return [{ value: 'All', label: 'All' }, ...toOptions(values, true)];
   }, [filters, teamType]);
   const oppPitcherOptions = useMemo(() => {
     if (!filters) return [{ value: 'All', label: 'All' }];
-    const values = teamType === 'All' ? (filters.opp_pitchers ?? []) : (filters.opp_pitchers_by_team_code?.[teamType] ?? filters.opp_pitchers ?? []);
+    const values = teamType === 'All' ? (filters.opp_pitchers ?? []) : (filters.opp_pitchers_by_team_code?.[teamType] ?? []);
     return [{ value: 'All', label: 'All' }, ...toOptions(values, true)];
   }, [filters, teamType]);
 
@@ -2767,6 +2775,7 @@ export default function HittingSuite({
     if (hand && hand !== 'All') params.set('hand', hand);
     if (batterSide && batterSide !== 'All') params.set('batter_side', batterSide);
     if (venue && venue !== 'All') params.set('venue', venue);
+    if (!isPro && sessionType && sessionType !== 'All') params.set('session_type', sessionType);
     params.set('table_mode', tableMode);
     params.set('split_by', effectiveSplitBy);
     if (tableMode === 'Custom' && customTableColumns.length) {
@@ -2789,15 +2798,16 @@ export default function HittingSuite({
     if (pcMax.trim()) params.set('pc_max', pcMax.trim());
     const isSummaryPage = dashboardPage === 'Summary';
     const isGameLogPage = dashboardPage === 'Game Log';
+    const isPitchLogPage = dashboardPage === 'Pitch Log';
     const shouldDeferCharts = isSummaryPage;
     const shouldForceProFastSummary = isPro && isSummaryPage && !summarySelectedHitter;
     const shouldIncludeCharts = dashboardPage !== 'Leaderboard' && !shouldForceProFastSummary && !shouldForceLeagueFastTable;
     const shouldScheduleCompanionCharts = shouldForceProFastSummary || (shouldDeferCharts && shouldIncludeCharts);
     params.set('include_chart_points', shouldDeferCharts && shouldIncludeCharts ? '0' : (shouldIncludeCharts ? '1' : '0'));
-    if (isGameLogPage) {
+    if (isGameLogPage || isPitchLogPage) {
       params.set('include_chart_points', '1');
-      params.set('chart_only', '1');
-      params.set('chart_points_limit', isPro ? '6000' : '5000');
+      if (isPitchLogPage) params.set('chart_only', '1');
+      params.set('chart_points_limit', '6000');
     }
     const shouldLoadLeaderboardBaseline =
       isLeaderboardPage &&
@@ -3095,7 +3105,7 @@ export default function HittingSuite({
       window.clearTimeout(timeoutId);
       controller.abort();
     };
-  }, [appliedFilterVersion, canLoadOverview, startDate, endDate, hitter, teamType, level, oppPitcher, hand, batterSide, venue, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax, dashboardPage, isPro, isPlayerRole, isLeague, enableTableColors, enableGameLogColors, leaderboardPercentileScope, summaryPercentileScope, showCellPercentiles, summaryStatView, filters?.school_code, selectedSchoolCode]);
+  }, [appliedFilterVersion, canLoadOverview, startDate, endDate, hitter, teamType, level, oppPitcher, hand, batterSide, venue, sessionType, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax, dashboardPage, isPro, isPlayerRole, isLeague, enableTableColors, enableGameLogColors, leaderboardPercentileScope, summaryPercentileScope, showCellPercentiles, summaryStatView, filters?.school_code, selectedSchoolCode]);
 
   useEffect(() => {
     if (!percentileBaselineRequestKey) {
@@ -3353,6 +3363,7 @@ export default function HittingSuite({
       if (hand && hand !== 'All') params.set('hand', hand);
       if (batterSide && batterSide !== 'All') params.set('batter_side', batterSide);
       if (venue && venue !== 'All') params.set('venue', venue);
+      if (!isPro && sessionType && sessionType !== 'All') params.set('session_type', sessionType);
       params.set('table_mode', tableMode);
       params.set('split_by', 'Game');
       if (tableMode === 'Custom' && customTableColumns.length) params.set('custom_columns', customTableColumns.join(','));
@@ -3503,6 +3514,7 @@ export default function HittingSuite({
     hand,
     batterSide,
     venue,
+    sessionType,
     tableMode,
     customTableColumns,
     pitchTypes,
@@ -3656,13 +3668,17 @@ export default function HittingSuite({
     };
   }, [dashboardPage, selectedSingleHitter, abGameKey, startDate, endDate, teamType, oppPitcher, hand, batterSide, pitchTypes, isLeague]);
 
-  const points = overview?.chart_points ?? [];
+  const points = useMemo(() => overview?.chart_points ?? [], [overview?.chart_points]);
   const heatmapPoints = useMemo(() => {
     const source = overview?.heatmap_points;
     return source && source.length ? source : points;
   }, [overview?.heatmap_points, points]);
   const rhpPoints = useMemo(() => points.filter((p) => normalizedThrowHand(p.pitcherthrows) === 'R'), [points]);
   const lhpPoints = useMemo(() => points.filter((p) => normalizedThrowHand(p.pitcherthrows) === 'L'), [points]);
+  const unspecifiedHandPoints = useMemo(
+    () => points.filter((p) => !['R', 'L'].includes(normalizedThrowHand(p.pitcherthrows))),
+    [points]
+  );
   const rhpHeatmapPoints = useMemo(
     () => heatmapPoints.filter((p) => normalizedThrowHand(p.pitcherthrows) === 'R'),
     [heatmapPoints]
@@ -3670,6 +3686,55 @@ export default function HittingSuite({
   const lhpHeatmapPoints = useMemo(
     () => heatmapPoints.filter((p) => normalizedThrowHand(p.pitcherthrows) === 'L'),
     [heatmapPoints]
+  );
+  const unspecifiedHandHeatmapPoints = useMemo(
+    () => heatmapPoints.filter((p) => !['R', 'L'].includes(normalizedThrowHand(p.pitcherthrows))),
+    [heatmapPoints]
+  );
+  const pitchLogColumns = useMemo(() => {
+    const identity = ['Date', 'Team', 'Opponent', 'Hitter', 'Pitcher', 'Pitch #', 'Count', 'Pitch Type', 'Result'];
+    if (tableMode === 'Batted Ball Data') return [...identity, 'EV', 'LA', 'Distance', 'Direction', 'Batted Ball Type', 'Play Result'];
+    if (tableMode === 'Results') return [...identity, 'EV', 'LA', 'Distance', 'Play Result'];
+    if (tableMode === 'Swing Decisions') return [...identity, 'Plate Side', 'Plate Height', 'Velo'];
+    if (tableMode === 'Custom' && customTableColumns.length) return [...identity, ...customTableColumns.filter((column) => !identity.includes(column))];
+    return [...identity, 'BatSpeed', 'VertAttack', 'HorzAttack', 'EV', 'LA'];
+  }, [customTableColumns, tableMode]);
+  const pitchLogRows = useMemo<Array<Record<string, string | number | null>>>(() => {
+    const valueForColumn = (point: ChartPoint, column: string): string | number | null => {
+      const values: Record<string, string | number | null | undefined> = {
+        Date: point.session_date,
+        Team: point.batter_team_code,
+        Opponent: point.pitcher_team_code,
+        Hitter: point.batter,
+        Pitcher: point.pitcher,
+        'Pitch #': point.pitch_number,
+        Count: point.balls_num != null && point.strikes_num != null ? `${point.balls_num}-${point.strikes_num}` : null,
+        'Pitch Type': point.pitch_type,
+        Result: point.result_label || point.pitch_call,
+        BatSpeed: point.bat_speed,
+        VertAttack: point.vertical_attack_angle,
+        HorzAttack: point.horizontal_attack_angle,
+        EV: point.exit_speed,
+        LA: point.angle,
+        Distance: point.distance,
+        Direction: point.direction,
+        'Batted Ball Type': point.tagged_hit_type || point.bb_type_raw,
+        'Play Result': point.play_result,
+        'Plate Side': point.plate_side,
+        'Plate Height': point.plate_height,
+        Velo: point.rel_speed ?? point.velo,
+      };
+      return values[column] ?? null;
+    };
+    return points.map((point, index) => {
+      const row: Record<string, string | number | null> = { _pitch_log_key: String(point.pitch_event_id ?? `${point.session_date}-${index}`) };
+      for (const column of pitchLogColumns) row[column] = valueForColumn(point, column);
+      return row;
+    });
+  }, [pitchLogColumns, points]);
+  const sortedPitchLogRows = useMemo(
+    () => sortTableRows(pitchLogRows, pitchLogSortColumn, pitchLogSortDirection),
+    [pitchLogRows, pitchLogSortColumn, pitchLogSortDirection]
   );
   useEffect(() => {
     if (summaryRhpLocationViewTouchedRef.current) return;
@@ -5028,6 +5093,17 @@ export default function HittingSuite({
                       placeholder="All"
                     />
                   </label>
+                  {!isPro ? (
+                    <label>
+                      Session Type
+                      <SearchableSingleSelect
+                        options={toOptions(filters.session_types ?? ['All', 'Batting Practice', 'Game'])}
+                        value={sessionType}
+                        onChange={setSessionType}
+                        placeholder="All"
+                      />
+                    </label>
+                  ) : null}
                   {isPro || isLeague ? (
                     <label>
                       Level
@@ -5238,11 +5314,16 @@ export default function HittingSuite({
                 <select
                   className="portal-mobile-page-select"
                   value={dashboardPage}
-                  onChange={(event) => setDashboardPage(event.target.value as typeof dashboardPage)}
+                  onChange={(event) => {
+                    const nextPage = event.target.value as typeof dashboardPage;
+                    if (nextPage === 'Pitch Log') setTableMode('Swing Metrics');
+                    setDashboardPage(nextPage);
+                  }}
                 >
                   <option value="Summary">Summary</option>
                   <option value="Leaderboard">Leaderboard</option>
                   <option value="Game Log">Game Log</option>
+                  <option value="Pitch Log">Pitch Log</option>
                   <option value="AB Report">AB Report</option>
                   <option value="HeatMaps">HeatMaps</option>
                   <option value="Swing Data">Swing Data</option>
@@ -5258,6 +5339,16 @@ export default function HittingSuite({
                 </button>
                 <button type="button" className={dashboardPage === 'Game Log' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setDashboardPage('Game Log')}>
                   Game Log
+                </button>
+                <button
+                  type="button"
+                  className={dashboardPage === 'Pitch Log' ? 'btn btn-primary' : 'btn btn-ghost'}
+                  onClick={() => {
+                    setTableMode('Swing Metrics');
+                    setDashboardPage('Pitch Log');
+                  }}
+                >
+                  Pitch Log
                 </button>
                 <button type="button" className={dashboardPage === 'AB Report' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setDashboardPage('AB Report')}>
                   AB Report
@@ -5303,21 +5394,40 @@ export default function HittingSuite({
 
             {!isLeaderboardPage ? (
               <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', minWidth: 0 }}>
-                <LocationChart
-                  title="vs. RHP"
-                  points={rhpPoints}
-                  heatmapPoints={rhpHeatmapPoints}
-                  displayView={summaryRhpLocationView}
-                  selectedPitchTypes={pitchTypes}
-                  strictRunValue={isPro}
-                  viewOptions={summaryLocationViewOptions}
-                  onViewChange={(next) => {
-                    summaryRhpLocationViewTouchedRef.current = true;
-                    setSummaryRhpLocationView(next);
-                  }}
-                  onPointHover={setChartHover}
-                  onPointLeave={() => setChartHover(null)}
-                />
+                {rhpPoints.length || !unspecifiedHandPoints.length ? (
+                  <LocationChart
+                    title="vs. RHP"
+                    points={rhpPoints}
+                    heatmapPoints={rhpHeatmapPoints}
+                    displayView={summaryRhpLocationView}
+                    selectedPitchTypes={pitchTypes}
+                    strictRunValue={isPro}
+                    viewOptions={summaryLocationViewOptions}
+                    onViewChange={(next) => {
+                      summaryRhpLocationViewTouchedRef.current = true;
+                      setSummaryRhpLocationView(next);
+                    }}
+                    onPointHover={setChartHover}
+                    onPointLeave={() => setChartHover(null)}
+                  />
+                ) : null}
+                {unspecifiedHandPoints.length ? (
+                  <LocationChart
+                    title="Unspecified Pitcher Hand"
+                    points={unspecifiedHandPoints}
+                    heatmapPoints={unspecifiedHandHeatmapPoints}
+                    displayView={summaryRhpLocationView}
+                    selectedPitchTypes={pitchTypes}
+                    strictRunValue={isPro}
+                    viewOptions={summaryLocationViewOptions}
+                    onViewChange={(next) => {
+                      summaryRhpLocationViewTouchedRef.current = true;
+                      setSummaryRhpLocationView(next);
+                    }}
+                    onPointHover={setChartHover}
+                    onPointLeave={() => setChartHover(null)}
+                  />
+                ) : null}
                 <SprayChart
                   points={points}
                   view={summarySprayView}
@@ -5325,21 +5435,23 @@ export default function HittingSuite({
                   onPointHover={setChartHover}
                   onPointLeave={() => setChartHover(null)}
                 />
-                <LocationChart
-                  title="vs. LHP"
-                  points={lhpPoints}
-                  heatmapPoints={lhpHeatmapPoints}
-                  displayView={summaryLhpLocationView}
-                  selectedPitchTypes={pitchTypes}
-                  strictRunValue={isPro}
-                  viewOptions={summaryLocationViewOptions}
-                  onViewChange={(next) => {
-                    summaryLhpLocationViewTouchedRef.current = true;
-                    setSummaryLhpLocationView(next);
-                  }}
-                  onPointHover={setChartHover}
-                  onPointLeave={() => setChartHover(null)}
-                />
+                {lhpPoints.length || !unspecifiedHandPoints.length ? (
+                  <LocationChart
+                    title="vs. LHP"
+                    points={lhpPoints}
+                    heatmapPoints={lhpHeatmapPoints}
+                    displayView={summaryLhpLocationView}
+                    selectedPitchTypes={pitchTypes}
+                    strictRunValue={isPro}
+                    viewOptions={summaryLocationViewOptions}
+                    onViewChange={(next) => {
+                      summaryLhpLocationViewTouchedRef.current = true;
+                      setSummaryLhpLocationView(next);
+                    }}
+                    onPointHover={setChartHover}
+                    onPointLeave={() => setChartHover(null)}
+                  />
+                ) : null}
               </div>
             ) : null}
             {chartHover && !isLeaderboardPage ? (
@@ -6326,6 +6438,105 @@ export default function HittingSuite({
                   </div>
                 ) : (
                   <p className="portal-muted-text" style={{ marginBottom: 0 }}>No game log rows found for current filters.</p>
+                )}
+              </div>
+            ) : dashboardPage === 'Pitch Log' ? (
+              <div className="dashboard-panel" style={{ padding: 14 }}>
+                <h3 style={{ marginTop: 0, marginBottom: 10 }}>Pitch Log</h3>
+                <div
+                  className="portal-form-grid"
+                  style={{ marginBottom: 10, gridTemplateColumns: 'minmax(170px, 240px)' }}
+                >
+                  <label>
+                    Table
+                    <SearchableSingleSelect
+                      options={tableModeOptions}
+                      value={tableModeSelectValue}
+                      onChange={handleTableModeSelection}
+                      placeholder="Swing Metrics"
+                    />
+                  </label>
+                </div>
+                {!canRunPitchLog ? (
+                  <p className="portal-muted-text" style={{ marginBottom: 0 }}>
+                    Pitch Log requires a selected team or hitter. Choose a team (not `All`) or select a hitter.
+                  </p>
+                ) : loadingOverview ? (
+                  <p className="portal-muted-text" style={{ marginBottom: 0 }}>Loading pitch log...</p>
+                ) : error ? (
+                  <p style={{ color: '#ff8a8a', marginBottom: 0 }}>{error}</p>
+                ) : sortedPitchLogRows.length ? (
+                  <div className="portal-table-wrap" style={{ maxHeight: '72vh', overflowY: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+                      <thead>
+                        <tr>
+                          {pitchLogColumns.map((column) => {
+                            const activeSort = pitchLogSortColumn === column;
+                            return (
+                              <th
+                                key={column}
+                                style={{
+                                  textAlign: 'center',
+                                  padding: '8px 6px',
+                                  borderBottom: '1px solid rgba(255,255,255,0.18)',
+                                  whiteSpace: 'nowrap',
+                                  cursor: 'pointer',
+                                  position: 'sticky',
+                                  top: 0,
+                                  zIndex: 3,
+                                  background: activeSort
+                                    ? 'rgb(var(--portal-accent-rgb, 59,130,246))'
+                                    : ((typeof document !== 'undefined' && document.body.classList.contains('theme-light'))
+                                      ? 'rgba(248,250,252,0.98)'
+                                      : 'rgba(7,9,14,0.98)'),
+                                  color: activeSort ? '#fff' : undefined,
+                                }}
+                                onClick={() => {
+                                  if (activeSort) setPitchLogSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'));
+                                  else {
+                                    setPitchLogSortColumn(column);
+                                    setPitchLogSortDirection(column === 'Date' ? 'desc' : 'asc');
+                                  }
+                                }}
+                              >
+                                {column}{activeSort ? ` ${pitchLogSortDirection === 'asc' ? '↑' : '↓'}` : ''}
+                              </th>
+                            );
+                          })}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sortedPitchLogRows.map((row, rowIndex) => (
+                          <tr key={String(row._pitch_log_key ?? rowIndex)} style={{ contentVisibility: 'auto', containIntrinsicSize: '36px' }}>
+                            {pitchLogColumns.map((column) => {
+                              const rawValue = row[column];
+                              const displayValue = column === 'Date'
+                                ? formatShortDate(String(rawValue ?? ''))
+                                : column === 'Hitter' || column === 'Pitcher'
+                                  ? formatNameFirstLast(String(rawValue ?? ''))
+                                  : formatTableDisplayValue(column, rawValue);
+                              return (
+                                <td
+                                  key={`${rowIndex}-${column}`}
+                                  style={{
+                                    textAlign: ['Date', 'Team', 'Opponent', 'Hitter', 'Pitcher', 'Pitch Type', 'Result'].includes(column) ? 'left' : 'center',
+                                    padding: '8px 6px',
+                                    borderBottom: '1px solid rgba(255,255,255,0.1)',
+                                    whiteSpace: 'nowrap',
+                                    background: pitchLogSortColumn === column ? 'rgba(var(--portal-accent-rgb, 59,130,246),0.12)' : undefined,
+                                  }}
+                                >
+                                  {displayValue === null || displayValue === undefined || displayValue === '' ? '—' : displayValue}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="portal-muted-text" style={{ marginBottom: 0 }}>No pitches found for current filters.</p>
                 )}
               </div>
             ) : dashboardPage === 'HeatMaps' ? (

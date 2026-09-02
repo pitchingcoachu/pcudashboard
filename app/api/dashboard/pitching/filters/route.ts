@@ -6,13 +6,14 @@ import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, selectScopedPlay
 import { schoolRosterAdditions } from '../../../../../lib/dashboard-roster-additions';
 import { listDashboardCsvPitcherNames } from '../../../../../lib/dashboard-csv-imports';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
+import { applyManagedRosterTeamScope } from '../../../../../lib/dashboard-managed-roster';
 
 const RESPONSE_CACHE_HEADERS = {
   'cache-control': 'private, max-age=30, stale-while-revalidate=300',
   vary: 'Cookie',
 } as const;
 const SLOW_ROUTE_MS = 2500;
-const PITCHING_FILTERS_ROSTER_CACHE_VERSION = 'league-level-filtering-2026-08-03-v1';
+const PITCHING_FILTERS_ROSTER_CACHE_VERSION = 'managed-roster-team-scope-2026-09-01-v1';
 
 function resolveFiltersTimeoutMs(schoolCode: string): number {
   const upper = String(schoolCode ?? '').trim().toUpperCase();
@@ -75,10 +76,11 @@ export async function GET(request: Request) {
   const level = inputUrl.searchParams.get('level')?.trim() ?? '';
   const forceRefresh = inputUrl.searchParams.get('force_refresh') === '1' || inputUrl.searchParams.get('force_refresh') === 'true';
   const shouldRefreshBallTypes = forceRefresh;
+  const shouldRefreshUnmRosterScope = schoolCode === 'UNM';
   const url = new URL(`${apiBase}/v1/pitching/filters`);
   url.searchParams.set('school_code', schoolCode);
   if (level) url.searchParams.set('level', level);
-  if (shouldRefreshBallTypes) url.searchParams.set('force_refresh', 'true');
+  if (shouldRefreshBallTypes || shouldRefreshUnmRosterScope) url.searchParams.set('force_refresh', 'true');
 
   try {
     const shouldScopePlayer = shouldScopeDashboardPlayer(session.role, schoolCode);
@@ -106,6 +108,13 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: String(result.payload.detail ?? result.payload.error ?? 'Dashboard API request failed.') }, { status: result.status });
     }
     const payload = result.payload as Record<string, unknown>;
+    await applyManagedRosterTeamScope({
+      payload,
+      schoolCode,
+      fallbackOrganizationId: session.organizationId,
+      playerField: 'pitchers',
+      mapField: 'pitchers_by_team_code',
+    });
     const csvPitchers = schoolCode === 'PRO' || schoolCode === 'LEAGUE'
       ? []
       : await listDashboardCsvPitcherNames(schoolCode).catch(() => []);

@@ -42,12 +42,6 @@ function maybeTeamCode(value: string): string {
   return '';
 }
 
-function isValidPitchType(value: unknown): boolean {
-  const token = String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-  return !!token && !['unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null'].includes(token);
-}
-
-const VALID_PITCH_TYPE_SQL = "regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') NOT IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null')";
 
 export async function GET(request: Request) {
   const session = getSessionFromRequest(request, await cookies());
@@ -98,7 +92,6 @@ export async function GET(request: Request) {
     if (teamCode) add('batter_team_code = ?', teamCode);
     if (hitterNorms.length) add('batter_norm = ANY(?::text[])', hitterNorms);
   }
-  add(VALID_PITCH_TYPE_SQL);
 
   const tableRef = schoolCode === 'PRO'
     ? 'public.pro_hitting_heatmap_daily_bins'
@@ -160,7 +153,6 @@ export async function GET(request: Request) {
 
   const chartPoints = result.rows
     .filter((row) => row.pitch_n > 0)
-    .filter((row) => isValidPitchType(row.pitch_type))
     .filter((row) => {
       if (!pitchTypeSet.size) return true;
       return pitchTypeSet.has(String(row.pitch_type ?? '').trim().toLowerCase());

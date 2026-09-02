@@ -4,12 +4,14 @@ import { getSessionFromRequest } from '../../../../../lib/auth';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
 import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, selectScopedPlayerName, shouldScopeDashboardPlayer } from '../../../../../lib/dashboard-player-scope';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
+import { applyManagedRosterTeamScope } from '../../../../../lib/dashboard-managed-roster';
 
 const RESPONSE_CACHE_HEADERS = {
   'cache-control': 'private, max-age=30, stale-while-revalidate=300',
   vary: 'Cookie',
 } as const;
 const SLOW_ROUTE_MS = 2500;
+const HITTING_FILTERS_ROSTER_CACHE_VERSION = 'managed-roster-team-scope-2026-09-01-v1';
 
 function resolveFiltersTimeoutMs(schoolCode: string): number {
   const upper = String(schoolCode ?? '').trim().toUpperCase();
@@ -51,6 +53,7 @@ export async function GET(request: Request) {
   const url = new URL(`${apiBase}/v1/hitting/filters`);
   url.searchParams.set('school_code', schoolCode);
   if (level) url.searchParams.set('level', level);
+  if (schoolCode === 'UNM') url.searchParams.set('force_refresh', 'true');
 
   try {
     const shouldScopePlayer = shouldScopeDashboardPlayer(session.role, schoolCode);
@@ -67,7 +70,7 @@ export async function GET(request: Request) {
     }
 
     const result = await fetchDashboardJsonWithCache({
-      cacheKey: `hitting:filters:${url.toString()}`,
+      cacheKey: `hitting:filters:${HITTING_FILTERS_ROSTER_CACHE_VERSION}:${url.toString()}`,
       ttlMs: 120000,
       staleTtlMs: 300000,
       timeoutMs: resolveFiltersTimeoutMs(schoolCode),
@@ -78,6 +81,13 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: String(result.payload.detail ?? result.payload.error ?? 'Dashboard API request failed.') }, { status: result.status });
     }
     const payload = result.payload as Record<string, unknown>;
+    await applyManagedRosterTeamScope({
+      payload,
+      schoolCode,
+      fallbackOrganizationId: session.organizationId,
+      playerField: 'hitters',
+      mapField: 'hitters_by_team_code',
+    });
     let scopedHitter: string | null = null;
     if (shouldScopePlayer && playerIdentity && Array.isArray(payload.hitters)) {
       const scoped = selectScopedPlayerName(payload.hitters, playerIdentity);
