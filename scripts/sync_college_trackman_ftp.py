@@ -155,7 +155,11 @@ def fetch_remote_csvs(source: str, start: date, end: date) -> Iterable[RemoteCsv
                     source=source,
                     path=path,
                     payload=ftp_download(ftp, path),
-                    modified_at=ftp_modified_at(ftp, path),
+                    # TrackMan's MDTM command can stall for tens of seconds on
+                    # the large shared V3 directory. The content checksum is
+                    # the authoritative change detector, so use retrieval time
+                    # for metadata and avoid a second FTP round trip per file.
+                    modified_at=datetime.now(timezone.utc),
                 )
             except Exception as exc:
                 print(f"[{source}] skipped {path}: {exc}")
@@ -275,6 +279,20 @@ def sync_file(
            WHERE school_code = %s AND source_file = %s""",
         (school_code, stable_source),
     ).fetchone()
+    if not rows:
+        # A shared FTP login can expose thousands of other schools' games.
+        # Do not create school file metadata for a CSV with zero matching
+        # rows, and clean up any legacy zero-row record encountered again.
+        if existing:
+            conn.execute(
+                "DELETE FROM public.pitch_events WHERE school_code = %s AND file_id = %s",
+                (school_code, existing[0]),
+            )
+            conn.execute(
+                "DELETE FROM public.pitch_data_files WHERE school_code = %s AND file_id = %s",
+                (school_code, existing[0]),
+            )
+        return 0, True
     if existing and existing[1] == checksum:
         actual = conn.execute(
             "SELECT COUNT(*) FROM public.pitch_events WHERE school_code = %s AND file_id = %s",
