@@ -14,12 +14,22 @@ const OPTIONS_TTL_MS = 60 * 1000;
 const ORG_SCHOOL_TTL_MS = 10 * 60 * 1000;
 const STAFF_QUERY_TIMEOUT_MS = 2500;
 
+const PERSONAL_SCHOOL_OPTION_EXCLUSIONS: Record<string, ReadonlySet<string>> = {
+  'jgaynor@pitchingcoachu.com': new Set(['SEMO', 'OSU', 'GCU', 'CNU', 'HARVARD']),
+};
+
 function normalizeSchoolCode(value: string): string {
   return String(value ?? '').trim().toUpperCase();
 }
 
 function isNonEmptyString(value: string | null | undefined): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function applyPersonalSchoolOptionExclusions(email: string, codes: string[]): string[] {
+  const hidden = PERSONAL_SCHOOL_OPTION_EXCLUSIONS[String(email ?? '').trim().toLowerCase()];
+  if (!hidden?.size) return codes;
+  return codes.filter((code) => !hidden.has(normalizeSchoolCode(code)));
 }
 
 function withLeagueAndPro(values: Array<string | null | undefined>): string[] {
@@ -77,6 +87,7 @@ function schoolFromOrganizationName(name: string | null | undefined): string | n
   if (upper.includes('DASHBOARD TRIAL')) return 'TRIAL';
   if (upper.includes('PITCHINGCOACHU')) return 'PCU';
   if (upper.includes('UNIVERSITY OF NORTHWESTERN OHIO')) return 'UNOH';
+  if (upper.includes('UNIVERSITY OF ARIZONA')) return 'ARIZONA';
   if (upper.includes('LAKE ERIE COLLEGE')) return 'LEC';
   const compact = upper.replace(/[^A-Z0-9]/g, '');
   const allowed = resolveAllowedDashboardSchoolCodes();
@@ -101,6 +112,7 @@ const SCHOOL_DOMAIN_HINTS: Array<{ schoolCode: string; fragments: string[] }> = 
   { schoolCode: 'SEMO', fragments: ['semo.edu'] },
   { schoolCode: 'CREIGHTON', fragments: ['creighton.edu'] },
   { schoolCode: 'HARVARD', fragments: ['harvard.edu'] },
+  { schoolCode: 'ARIZONA', fragments: ['arizona.edu'] },
 ];
 
 function schoolFromEmailDomain(email: string | null | undefined): string | null {
@@ -234,7 +246,10 @@ export async function resolveSessionDashboardSchoolOptions(session: PortalSessio
 
   if (session.role === 'admin') {
     if (isGlobalAdminEmail(session.email)) {
-      const resolved = withLeagueAndPro(resolveAllowedDashboardSchoolCodes());
+      const resolved = applyPersonalSchoolOptionExclusions(
+        session.email,
+        withLeagueAndPro(resolveAllowedDashboardSchoolCodes())
+      );
       optionsCache.set(cacheKey, { at: Date.now(), codes: resolved });
       return resolved;
     }
@@ -244,7 +259,10 @@ export async function resolveSessionDashboardSchoolOptions(session: PortalSessio
       ? seededCodes
       : Array.from(new Set([selected, fallback].filter(isNonEmptyString)));
     const merged = withLeagueAndPro(mergedBase);
-    const resolved = merged.length > 0 ? merged : [fallback];
+    const resolved = applyPersonalSchoolOptionExclusions(
+      session.email,
+      merged.length > 0 ? merged : [fallback]
+    );
     optionsCache.set(cacheKey, { at: Date.now(), codes: resolved });
     return resolved;
   }
@@ -256,14 +274,17 @@ export async function resolveSessionDashboardSchoolOptions(session: PortalSessio
       ? seededCodes
       : Array.from(new Set([selected, fallback].filter(isNonEmptyString)));
     const merged = withLeagueAndPro(mergedBase);
-    const resolved = merged.length > 0 ? merged : [fallback];
+    const resolved = applyPersonalSchoolOptionExclusions(
+      session.email,
+      merged.length > 0 ? merged : [fallback]
+    );
     optionsCache.set(cacheKey, { at: Date.now(), codes: resolved });
     return resolved;
   }
 
   const orgSchoolCode = await resolveSchoolCodeByOrganizationId(Number(session.organizationId ?? 0));
   const base = orgSchoolCode || fallback;
-  const resolved = withLeagueAndPro([base]);
+  const resolved = applyPersonalSchoolOptionExclusions(session.email, withLeagueAndPro([base]));
   optionsCache.set(cacheKey, { at: Date.now(), codes: resolved });
   return resolved;
 }

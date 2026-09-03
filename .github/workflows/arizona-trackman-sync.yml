@@ -1,0 +1,90 @@
+name: Arizona TrackMan Sync
+
+on:
+  schedule:
+    - cron: "15 2 * * *"
+    - cron: "15 12 * * *"
+    - cron: "15 21 * * *"
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Optional start date (YYYY-MM-DD)"
+        required: false
+      end_date:
+        description: "Optional end date (YYYY-MM-DD)"
+        required: false
+      lookback_days:
+        description: "Days to scan when start_date is omitted"
+        required: false
+        default: "7"
+
+concurrency:
+  group: arizona-trackman-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      DASHBOARD_DATABASE_URL: ${{ secrets.DASHBOARD_DATABASE_URL }}
+      TRACKMAN_FTP_HOST: ftp.trackmanbaseball.com
+      TRACKMAN_PRACTICE_FTP_USER: ${{ secrets.ARIZONA_TRACKMAN_FTP_USER }}
+      TRACKMAN_PRACTICE_FTP_PASSWORD: ${{ secrets.ARIZONA_TRACKMAN_FTP_PASSWORD }}
+      TRACKMAN_V3_FTP_USER: ${{ secrets.ARIZONA_TRACKMAN_FTP_USER }}
+      TRACKMAN_V3_FTP_PASSWORD: ${{ secrets.ARIZONA_TRACKMAN_FTP_PASSWORD }}
+
+    steps:
+      - name: Check out pcudashboard
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: dashboard_api/requirements.txt
+
+      - name: Install Python dependencies
+        run: pip install -r dashboard_api/requirements.txt
+
+      - name: Resolve date window
+        shell: bash
+        env:
+          INPUT_START_DATE: ${{ github.event.inputs.start_date }}
+          INPUT_END_DATE: ${{ github.event.inputs.end_date }}
+          INPUT_LOOKBACK_DAYS: ${{ github.event.inputs.lookback_days }}
+        run: |
+          LOOKBACK_DAYS="${INPUT_LOOKBACK_DAYS:-7}"
+          END_DATE="${INPUT_END_DATE:-$(date -u +%F)}"
+          if [[ -n "${INPUT_START_DATE}" ]]; then
+            START_DATE="${INPUT_START_DATE}"
+          else
+            START_DATE="$(date -u -d "${END_DATE} - $((LOOKBACK_DAYS - 1)) days" +%F)"
+          fi
+          echo "SYNC_START_DATE=${START_DATE}" >> "$GITHUB_ENV"
+          echo "SYNC_END_DATE=${END_DATE}" >> "$GITHUB_ENV"
+          ROLLUP_START_DATE="$(date -u -d "${START_DATE} - 1 day" +%F)"
+          echo "ROLLUP_START_DATE=${ROLLUP_START_DATE}" >> "$GITHUB_ENV"
+
+      - name: Sync Arizona TrackMan CSV data
+        run: |
+          python scripts/sync_college_trackman_ftp.py \
+            --school ARIZONA \
+            --team-marker ARI_WIL \
+            --team-marker ARI_WPR \
+            --start-date "${SYNC_START_DATE}" \
+            --end-date "${SYNC_END_DATE}"
+
+      - name: Refresh Arizona dashboard rollups
+        run: |
+          python scripts/refresh_college_rollups.py \
+            --school ARIZONA \
+            --window-start "${ROLLUP_START_DATE}" \
+            --window-end "${SYNC_END_DATE}" \
+            --keep-pooler \
+            --batch-days 1 \
+            --retries 30

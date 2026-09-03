@@ -32,7 +32,7 @@ export function resolveAllowedDashboardSchoolCodes(): string[] {
   const mapValues = Object.values(parseOrgSchoolMap(process.env.DASHBOARD_ORG_SCHOOL_MAP ?? '{}')).map((value) => normalizeSchoolCode(value));
   const fallback = normalizeSchoolCode(process.env.DASHBOARD_DEFAULT_SCHOOL_CODE ?? 'OSU') || 'OSU';
   const combined = Array.from(
-    new Set([...envValues, ...mapValues, fallback, 'PCU', 'TRIAL', 'OSU', 'CNU', 'GCU', 'GMU', 'LSU', 'UNM', 'UNOH', 'LEC', 'SEMO', 'CREIGHTON', 'HARVARD', 'CBU', 'LEAGUE', 'PRO'].filter(Boolean))
+    new Set([...envValues, ...mapValues, fallback, 'PCU', 'TRIAL', 'OSU', 'CNU', 'GCU', 'GMU', 'LSU', 'UNM', 'UNOH', 'LEC', 'SEMO', 'CREIGHTON', 'HARVARD', 'CBU', 'ARIZONA', 'LEAGUE', 'PRO'].filter(Boolean))
   );
   return combined;
 }

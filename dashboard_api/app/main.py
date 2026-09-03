@@ -6099,6 +6099,7 @@ LEAGUE_TEAM_NAME_BY_CODE: Dict[str, str] = {
     "AND_TRO": "Anderson University",
     "ARI_SUN": "Arizona State University",
     "ARI_WIL": "University of Arizona",
+    "ARI_WPR": "University of Arizona",
     "ARK_RAZ": "University of Arkansas",
     "ARL_MAV": "The University of Texas at Arlington",
     "ASU_RED": "Arkansas State University",
@@ -6717,6 +6718,7 @@ def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
         "LSU": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "LSU", "school_config.R"),
         "TRIAL": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "TRIAL", "school_config.R"),
         "UNM": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "UNM", "school_config.R"),
+        "ARIZONA": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "ARIZONA", "school_config.R"),
         "UNOH": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "UNOH", "school_config.R"),
         "LEC": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "LEC", "school_config.R"),
         "SEMO": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "SEMO", "school_config.R"),
@@ -6748,8 +6750,8 @@ def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
     allowed_pitchers = _extract_r_vector(text, "allowed_pitchers")
     allowed_hitters = _extract_r_vector(text, "allowed_hitters")
     allowed_campers = _extract_r_vector(text, "allowed_campers")
-    if school_code.upper() == "UNM":
-        # UNM's approved roster is shared across pitching and hitting. Keep
+    if school_code.upper() in {"UNM", "ARIZONA"}:
+        # These schools share one approved roster across pitching and hitting. Keep
         # the historical hitter entries, but always include every approved
         # pitcher so two-way players and pitchers taking V3 at-bats are not
         # silently filtered out of the hitting dashboard.
@@ -15661,6 +15663,7 @@ def _mod_namespaces_for_school(school_code: str) -> List[str]:
         "LSU": ["lsubaseball", "lsu"],
         "TRIAL": ["dashboardtrial", "trial"],
         "UNM": ["unmbaseball", "unm", "newmexico"],
+        "ARIZONA": ["arizonabaseball", "uarizona", "arizona"],
         "UNOH": ["unohbaseball", "unoh"],
         "LEC": ["lecbaseball", "lec", "lakeerie"],
         "SEMO": ["semobaseball", "semo"],
@@ -22077,7 +22080,7 @@ def pitching_filters(
             school_code=school_code,
             team_markers_norm=set(team_markers_norm or []),
         )
-        if school_code == "UNM":
+        if school_code in {"UNM", "ARIZONA"}:
             pitchers_by_team_code[school_code] = sorted(roster_pitchers)
             pitchers_by_team_code["Opponents"] = sorted(
                 name for name in pitchers if _normalize_name_key(name) not in allowed_pitcher_keys
@@ -25955,7 +25958,7 @@ def hitting_filters(
             school_code=school_code,
             team_markers_norm=set(team_markers_norm or []),
         )
-        if school_code == "UNM":
+        if school_code in {"UNM", "ARIZONA"}:
             hitters_by_team_code[school_code] = sorted(roster_hitters)
             hitters_by_team_code["Opponents"] = sorted(
                 name for name in hitters if _normalize_name_key(name) not in allowed_hitter_keys

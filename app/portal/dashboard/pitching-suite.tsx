@@ -479,6 +479,7 @@ const TEAM_CODE_PREFIX_LABELS: Record<string, string> = {
   CBU: 'CBU',
   GMU: 'GMU',
   UNM: 'UNM',
+  ARI: 'University of Arizona',
   UNOH: 'University of Northwestern Ohio',
   LEC: 'Lake Erie College',
   SEMO: 'SEMO',
@@ -488,6 +489,7 @@ const TEAM_CODE_PREFIX_LABELS: Record<string, string> = {
 const TREND_SCHOOL_TEAM_CODE_ALIASES: Record<string, string[]> = {
   OSU: ['OKLCOW', 'OKLCPR'],
   UNM: ['MEX_LOB'],
+  ARIZONA: ['ARI_WIL', 'ARI_WPR'],
 };
 const LEAGUE_TEAM_CODE_BY_LABEL_TOKEN: Record<string, string> = Object.fromEntries(
   Object.entries(LEAGUE_TEAM_NAME_BY_CODE).map(([code, label]) => [normalizeLeagueTeamToken(label), code])

@@ -117,6 +117,15 @@ const SCHOOL_BRANDS: Record<string, SchoolBrand> = {
     accentSoft: '#8b0923',
     accentRgb: '186, 12, 47',
   },
+  ARIZONA: {
+    schoolCode: 'ARIZONA',
+    logoSrc: '/arizona-logo.png',
+    logoAlt: 'University of Arizona logo',
+    accent: '#ab0520',
+    accentSoft: '#850019',
+    accentRgb: '171, 5, 32',
+    accentRgbSecondary: '12, 35, 75',
+  },
   UNOH: {
     schoolCode: 'UNOH',
     logoSrc: '/unoh-logo.png',

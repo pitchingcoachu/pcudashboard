@@ -10,6 +10,7 @@ export const LEAGUE_TEAM_NAME_BY_CODE: Record<string, string> = {
     "AND_TRO": "Anderson University",
     "ARI_SUN": "Arizona State University",
     "ARI_WIL": "University of Arizona",
+    "ARI_WPR": "University of Arizona",
     "ARK_RAZ": "University of Arkansas",
     "ARL_MAV": "The University of Texas at Arlington",
     "ASU_RED": "Arkansas State University",

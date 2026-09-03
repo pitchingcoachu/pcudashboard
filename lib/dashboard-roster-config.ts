@@ -35,6 +35,7 @@ export function loadRosterVectorsFromConfig(schoolCode: string): { allowedPitche
     SEMO: `${bundledRoot}/dashboard_api/config/schools/SEMO/school_config.R`,
     CREIGHTON: `${bundledRoot}/dashboard_api/config/schools/CREIGHTON/school_config.R`,
     HARVARD: `${bundledRoot}/dashboard_api/config/schools/HARVARD/school_config.R`,
+    ARIZONA: `${bundledRoot}/dashboard_api/config/schools/ARIZONA/school_config.R`,
     PRO: `${bundledRoot}/dashboard_api/config/schools/PRO/school_config.R`,
   };
   const configPath = envPath || defaultPathBySchool[upper] || '';
@@ -53,8 +54,8 @@ export function loadRosterVectorsFromConfig(schoolCode: string): { allowedPitche
         allowedHitters: uniqueNames([...base.allowedHitters, ...additions]),
       };
     }
-    if (upper === 'UNM') {
-      // UNM manages one active-player roster. A player may appear as a
+    if (upper === 'UNM' || upper === 'ARIZONA') {
+      // These schools manage one active-player roster. A player may appear as a
       // pitcher, hitter, or both in V3 sessions, so nobody approved for the
       // pitching dashboard should disappear from hitting solely because the
       // two legacy R vectors drifted apart.

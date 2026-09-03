@@ -199,9 +199,10 @@ def load_roster_keys(database_url: str, school_code: str) -> set[str]:
             """SELECT p.full_name
                FROM public.players p
                JOIN public.organizations o ON o.id = p.organization_id
-               WHERE UPPER(TRIM(o.name)) = %s
+               WHERE (UPPER(TRIM(COALESCE(p.school_code, ''))) = %s
+                      OR UPPER(TRIM(o.name)) = %s)
                  AND LOWER(COALESCE(NULLIF(TRIM(p.status), ''), 'active')) <> 'inactive'""",
-            (school_code,),
+            (school_code, school_code),
         ).fetchall()
     keys: set[str] = set()
     for row in rows:
