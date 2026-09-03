@@ -246,12 +246,14 @@ export default function IntendedZoneStats({
   sidebarStartDate,
   sidebarEndDate,
   sidebarPitchTypes,
+  sidebarBallTypes,
 }: {
   pitcherName: string | null;
   organizationHasMultiplePitchers: boolean;
   sidebarStartDate: string;
   sidebarEndDate: string;
   sidebarPitchTypes: string[];
+  sidebarBallTypes?: string[];
 }) {
   const [mode, setMode] = useState<'pitcher' | 'leaderboard'>('pitcher');
   const [pitchTypeStats, setPitchTypeStats] = useState<PitchTypeStat[]>([]);
@@ -269,7 +271,7 @@ export default function IntendedZoneStats({
   const [selectedPitcherRow, setSelectedPitcherRow] = useState<string | null>(null);
   const [selectedPitcherTypeStats, setSelectedPitcherTypeStats] = useState<PitchTypeStat[]>([]);
   const [selectedPitcherStatsLoading, setSelectedPitcherStatsLoading] = useState(false);
-  const [splitBy, setSplitBy] = useState<'pitchType' | 'targetSize'>('pitchType');
+  const [splitBy, setSplitBy] = useState<'pitchType' | 'targetSize' | 'ballType'>('pitchType');
   const [isExportingPitcherPdf, setIsExportingPitcherPdf] = useState(false);
   const [isExportingLeaderboardPdf, setIsExportingLeaderboardPdf] = useState(false);
   const pitcherExportRef = useRef<HTMLDivElement | null>(null);
@@ -278,6 +280,10 @@ export default function IntendedZoneStats({
   const pitchTypesParam = useMemo(
     () => sidebarPitchTypes.filter((value) => value.trim() && value.trim().toLowerCase() !== 'all').join(','),
     [sidebarPitchTypes]
+  );
+  const ballTypesParam = useMemo(
+    () => (sidebarBallTypes ?? []).filter((value) => value.trim() && value.trim().toLowerCase() !== 'all').join(','),
+    [sidebarBallTypes]
   );
 
   const loadPitcherStats = useCallback(async () => {
@@ -289,6 +295,7 @@ export default function IntendedZoneStats({
       if (sidebarStartDate) params.set('startDate', sidebarStartDate);
       if (sidebarEndDate) params.set('endDate', sidebarEndDate);
       if (pitchTypesParam) params.set('pitchTypes', pitchTypesParam);
+      if (ballTypesParam) params.set('ballTypes', ballTypesParam);
       const response = await fetch(`/api/dashboard/pitching/intended-zone/stats?${params.toString()}`);
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error ?? 'Failed to load stats.');
@@ -298,7 +305,7 @@ export default function IntendedZoneStats({
     } finally {
       setLoading(false);
     }
-  }, [pitcherName, sidebarStartDate, sidebarEndDate, pitchTypesParam, splitBy]);
+  }, [pitcherName, sidebarStartDate, sidebarEndDate, pitchTypesParam, ballTypesParam, splitBy]);
 
   const loadLeaderboard = useCallback(async () => {
     setLoading(true);
@@ -308,6 +315,7 @@ export default function IntendedZoneStats({
       if (sidebarStartDate) params.set('startDate', sidebarStartDate);
       if (sidebarEndDate) params.set('endDate', sidebarEndDate);
       if (pitchTypesParam) params.set('pitchTypes', pitchTypesParam);
+      if (ballTypesParam) params.set('ballTypes', ballTypesParam);
       const response = await fetch(`/api/dashboard/pitching/intended-zone/stats?${params.toString()}`);
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error ?? 'Failed to load leaderboard.');
@@ -318,7 +326,7 @@ export default function IntendedZoneStats({
     } finally {
       setLoading(false);
     }
-  }, [sidebarStartDate, sidebarEndDate, pitchTypesParam, splitBy]);
+  }, [sidebarStartDate, sidebarEndDate, pitchTypesParam, ballTypesParam, splitBy]);
 
   useEffect(() => {
     if (mode === 'pitcher') loadPitcherStats();
@@ -338,6 +346,7 @@ export default function IntendedZoneStats({
         if (sidebarStartDate) params.set('startDate', sidebarStartDate);
         if (sidebarEndDate) params.set('endDate', sidebarEndDate);
         if (pitchTypesParam) params.set('pitchTypes', pitchTypesParam);
+        if (ballTypesParam) params.set('ballTypes', ballTypesParam);
         const response = await fetch(`/api/dashboard/pitching/intended-zone/stats?${params.toString()}`);
         const payload = await response.json();
         if (!cancelled && response.ok) setSelectedPitcherTypeStats(Array.isArray(payload.stats) ? payload.stats : []);
@@ -350,7 +359,7 @@ export default function IntendedZoneStats({
     return () => {
       cancelled = true;
     };
-  }, [mode, selectedPitcherRow, sidebarStartDate, sidebarEndDate, pitchTypesParam, splitBy]);
+  }, [mode, selectedPitcherRow, sidebarStartDate, sidebarEndDate, pitchTypesParam, ballTypesParam, splitBy]);
 
   // Resolves any sortable leaderboard column (fixed field or a dynamic
   // `targetHit:{inches}` Hit% column) to a value comparable by
@@ -476,6 +485,11 @@ export default function IntendedZoneStats({
         subtitleText: [splitBy === 'targetSize' ? 'Split by Target Size' : '', dateRangeLabel].filter(Boolean).join('  ·  '),
         fileName: `intended-target-${safeName}.pdf`,
         singlePage: true,
+        // This component also renders inside a narrow sidebar column (the
+        // Bullpen Scripts page's Intended Target panel) -- force the same
+        // wide desktop layout the full-page Dashboard tab renders at, so
+        // the export always looks the same regardless of where it's embedded.
+        forceWidth: 1100,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to export PDF.');
@@ -545,16 +559,26 @@ export default function IntendedZoneStats({
             <label className={styles.fieldLabel} htmlFor="iz-split-by">
               Split By
             </label>
-            <select id="iz-split-by" className={styles.select} value={splitBy} onChange={(event) => setSplitBy(event.target.value === 'targetSize' ? 'targetSize' : 'pitchType')}>
+            <select
+              id="iz-split-by"
+              className={styles.select}
+              value={splitBy}
+              onChange={(event) => {
+                const next = event.target.value;
+                setSplitBy(next === 'targetSize' || next === 'ballType' ? next : 'pitchType');
+              }}
+            >
               <option value="pitchType">Pitch Type</option>
               <option value="targetSize">Target Size</option>
+              <option value="ballType">Ball Type</option>
             </select>
           </div>
         </div>
         <p className={styles.zoneHint} style={{ textAlign: 'left' }}>
-          Uses the Date Range and Pitch Type filters from the sidebar.
+          Uses the Date Range, Pitch Type, and Ball Type filters from the sidebar.
           {sidebarStartDate || sidebarEndDate ? ` ${sidebarStartDate || '…'} → ${sidebarEndDate || '…'}.` : ' Showing all dates.'}
           {pitchTypesParam ? ` Pitch types: ${pitchTypesParam.split(',').join(', ')}.` : ' Showing all pitch types.'}
+          {ballTypesParam ? ` Ball types: ${ballTypesParam.split(',').join(', ')}.` : ' Showing all ball types.'}
         </p>
       </div>
 
@@ -591,7 +615,7 @@ export default function IntendedZoneStats({
                         <th>In Zone%</th>
                         <th>Comp%</th>
                         {perTypeTargetColumns.map((inches) => (
-                          <th key={inches}>{inches}" Target Hit%</th>
+                          <th key={inches}>{inches}&quot; Target Hit%</th>
                         ))}
                         <th>Avg Miss Distance</th>
                         <th>Most Common Miss Direction</th>
@@ -674,7 +698,7 @@ export default function IntendedZoneStats({
                     </th>
                     {leaderboardTargetColumns.map((inches) => (
                       <th key={inches} style={sortableHeaderStyle(`targetHit:${inches}`)} onClick={() => toggleSort(`targetHit:${inches}`)}>
-                        {inches}" Target Hit%{sortArrow(`targetHit:${inches}`)}
+                        {inches}&quot; Target Hit%{sortArrow(`targetHit:${inches}`)}
                       </th>
                     ))}
                     <th style={sortableHeaderStyle('avgMissDistanceFt')} onClick={() => toggleSort('avgMissDistanceFt')}>
@@ -763,7 +787,7 @@ export default function IntendedZoneStats({
                               <th>In Zone%</th>
                               <th>Comp%</th>
                               {targetColumns.map((inches) => (
-                                <th key={inches}>{inches}" Target Hit%</th>
+                                <th key={inches}>{inches}&quot; Target Hit%</th>
                               ))}
                               <th>Avg Miss Distance</th>
                               <th>Most Common Miss Direction</th>

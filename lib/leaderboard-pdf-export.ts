@@ -204,8 +204,16 @@ export async function downloadContentPdf(options: {
    * instead of paginating across fixed US Letter pages -- see
    * renderCaptureBatchesToPdf's singlePage option. */
   singlePage?: boolean;
+  /** When the live node is squeezed into a narrower container than its
+   * "natural" desktop layout (e.g. this same component embedded in a
+   * sidebar column elsewhere in the app), force the CLONED node to this
+   * width before capture so the export always looks like the component's
+   * full desktop layout -- matching what it produces when it has the
+   * whole page to itself -- rather than whatever cramped/wrapped shape
+   * it happens to be rendered at on screen right now. */
+  forceWidth?: number;
 }): Promise<void> {
-  const { node, titleText, nameText, subtitleText, fileName, singlePage } = options;
+  const { node, titleText, nameText, subtitleText, fileName, singlePage, forceWidth } = options;
   const { default: html2canvas } = await import('html2canvas');
   const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
   const captureScale = Math.min(2, Math.max(1.4, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1));
@@ -216,13 +224,32 @@ export async function downloadContentPdf(options: {
   // the capture window down the live node) keeps every individual capture
   // well under that limit.
   const MAX_CAPTURE_SOURCE_HEIGHT = 4000;
-  const rect = node.getBoundingClientRect();
-  const totalHeight = Math.max(1, Math.ceil(rect.height));
+  // When forcing a wider layout, measure that wider height instead of the
+  // live (possibly narrower/taller-from-wrapping) node's own rect -- a
+  // dry-run clone-and-measure pass, discarded, just to get an accurate
+  // totalHeight for the real capture loop below.
+  let totalHeight = Math.max(1, Math.ceil(node.getBoundingClientRect().height));
+  if (forceWidth) {
+    const probeCanvas = await html2canvas(node, {
+      backgroundColor: isLightTheme ? '#f8fafc' : '#000000',
+      scale: 1,
+      useCORS: true,
+      logging: false,
+      windowWidth: Math.max(forceWidth + 200, document.documentElement.scrollWidth),
+      onclone: (clonedDoc, clonedNode) => {
+        clonedNode.style.width = `${forceWidth}px`;
+        clonedNode.style.maxWidth = `${forceWidth}px`;
+        clonedDoc.querySelectorAll('[data-pdf-hide="true"]').forEach((el) => {
+          (el as HTMLElement).style.display = 'none';
+        });
+      },
+    });
+    totalHeight = probeCanvas.height;
+  }
   const captureBatches: HTMLCanvasElement[] = [];
   let y = 0;
   while (y < totalHeight) {
     const sliceHeight = Math.min(MAX_CAPTURE_SOURCE_HEIGHT, totalHeight - y);
-    // eslint-disable-next-line no-await-in-loop
     const canvas = await html2canvas(node, {
       backgroundColor: isLightTheme ? '#f8fafc' : '#000000',
       scale: captureScale,
@@ -230,13 +257,17 @@ export async function downloadContentPdf(options: {
       logging: false,
       y,
       height: sliceHeight,
-      windowWidth: document.documentElement.scrollWidth,
+      windowWidth: forceWidth ? Math.max(forceWidth + 200, document.documentElement.scrollWidth) : document.documentElement.scrollWidth,
       // Some elements should show on-screen but not in the exported PDF
       // (e.g. a heading that's redundant once the PDF has its own title) --
       // mutating the CLONED document here (rather than the live node) lets
       // that content collapse out of the capture's layout entirely instead
       // of just being painted-over, leaving no gap where it was.
-      onclone: (clonedDoc) => {
+      onclone: (clonedDoc, clonedNode) => {
+        if (forceWidth) {
+          clonedNode.style.width = `${forceWidth}px`;
+          clonedNode.style.maxWidth = `${forceWidth}px`;
+        }
         clonedDoc.querySelectorAll('[data-pdf-hide="true"]').forEach((el) => {
           (el as HTMLElement).style.display = 'none';
         });

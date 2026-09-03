@@ -1744,10 +1744,12 @@ async function fetchIntendedZoneStatRows(input: {
   startDate?: string | null;
   endDate?: string | null;
   pitchTypes?: string[] | null;
+  ballTypes?: string[] | null;
 }): Promise<
   {
     pitcherName: string;
     pitchType: string;
+    ballType: string;
     missDistanceFt: number;
     missDirection: IntendedZoneMissDirection;
     inZone: boolean;
@@ -1779,13 +1781,23 @@ async function fetchIntendedZoneStatRows(input: {
     params.push(input.pitchTypes);
     conditions.push(`COALESCE(izp.pitch_type, 'Undefined') = ANY($${params.length}::text[])`);
   }
+  // Ball type isn't recorded on intended_zone_pitches itself -- it's read
+  // off the linked pitch_events row (same customlabel field pitch-flight-sync.ts
+  // derives ball_type from elsewhere), defaulting to 'Baseball' like everywhere
+  // else in the codebase when unset or unlinked (e.g. manual-mode sessions).
+  if (input.ballTypes && input.ballTypes.length) {
+    params.push(input.ballTypes);
+    conditions.push(`COALESCE(NULLIF(TRIM(pe.customlabel), ''), 'Baseball') = ANY($${params.length}::text[])`);
+  }
 
   const result = await pool.query(
     `SELECT COALESCE(izp.tagged_pitcher_name, s.pitcher_name) AS pitcher_name,
             COALESCE(izp.pitch_type, 'Undefined') AS pitch_type,
+            COALESCE(NULLIF(TRIM(pe.customlabel), ''), 'Baseball') AS ball_type,
             izp.miss_distance_ft, izp.miss_direction, izp.plate_loc_side, izp.plate_loc_height, izp.target_radius_ft
      FROM intended_zone_pitches izp
      JOIN intended_zone_sessions s ON s.id = izp.session_id
+     LEFT JOIN pitch_events pe ON pe.id = izp.pitch_events_id
      WHERE ${conditions.join(' AND ')}`,
     params
   );
@@ -1801,6 +1813,7 @@ async function fetchIntendedZoneStatRows(input: {
       return {
         pitcherName: String(row.pitcher_name),
         pitchType: String(row.pitch_type),
+        ballType: String(row.ball_type),
         missDistanceFt,
         missDirection: row.miss_direction as IntendedZoneMissDirection,
         inZone: label === 'Yes',
@@ -1811,10 +1824,11 @@ async function fetchIntendedZoneStatRows(input: {
     });
 }
 
-export type IntendedZoneStatsSplitBy = 'pitchType' | 'targetSize';
+export type IntendedZoneStatsSplitBy = 'pitchType' | 'targetSize' | 'ballType';
 
-function groupKeyForRow(row: { pitchType: string; targetRadiusFt: number }, splitBy: IntendedZoneStatsSplitBy): string {
+function groupKeyForRow(row: { pitchType: string; ballType: string; targetRadiusFt: number }, splitBy: IntendedZoneStatsSplitBy): string {
   if (splitBy === 'targetSize') return `${Math.round(row.targetRadiusFt * 2 * 12)}"`;
+  if (splitBy === 'ballType') return row.ballType;
   return row.pitchType;
 }
 
@@ -1831,6 +1845,7 @@ export async function getIntendedZonePitchTypeStats(input: {
   startDate?: string | null;
   endDate?: string | null;
   pitchTypes?: string[] | null;
+  ballTypes?: string[] | null;
   splitBy?: IntendedZoneStatsSplitBy;
 }): Promise<IntendedZonePitchTypeStat[]> {
   const rows = await fetchIntendedZoneStatRows(input);
@@ -1891,6 +1906,7 @@ export async function getIntendedZonePitcherLeaderboard(input: {
   startDate?: string | null;
   endDate?: string | null;
   pitchTypes?: string[] | null;
+  ballTypes?: string[] | null;
 }): Promise<IntendedZonePitcherStat[]> {
   const rows = await fetchIntendedZoneStatRows(input);
   if (!rows.length) return [];
@@ -1950,6 +1966,29 @@ export async function getIntendedZonePitcherLeaderboard(input: {
 
   stats.sort((a, b) => (a.avgMissDistanceFt ?? Infinity) - (b.avgMissDistanceFt ?? Infinity));
   return stats;
+}
+
+/** Ball type is free-text per org (e.g. "Baseball", "+5%" for a weighted
+ * ball), not a fixed enum -- so the filter's option list is the org's own
+ * actual pitch_events.customlabel values, same source getIntendedZone*
+ * stats above join against, not a hardcoded list. 'Baseball' is always
+ * included first even if the org has no data yet, since that's the
+ * universal default. */
+export async function listIntendedZoneBallTypes(input: { organizationId: number }): Promise<string[]> {
+  if (!isDatabaseConfigured()) return ['Baseball'];
+  await ensureIntendedZoneSchema();
+  const pool = getDbPool();
+  const result = await pool.query(
+    `SELECT DISTINCT COALESCE(NULLIF(TRIM(pe.customlabel), ''), 'Baseball') AS ball_type
+     FROM intended_zone_pitches izp
+     JOIN pitch_events pe ON pe.id = izp.pitch_events_id
+     WHERE izp.organization_id = $1
+     ORDER BY 1`,
+    [input.organizationId]
+  );
+  const found = result.rows.map((row) => String(row.ball_type));
+  const withBaseballFirst = ['Baseball', ...found.filter((value) => value !== 'Baseball')];
+  return withBaseballFirst;
 }
 
 async function ensureWorkoutLibraryCalendarLinkTargetColumn(): Promise<void> {
@@ -3653,6 +3692,10 @@ function orgNameLikelyMatchesSchoolCode(orgName: string, schoolCode: string): bo
   return false;
 }
 
+const ORGANIZATION_NAME_ALIASES_BY_SCHOOL: Record<string, readonly string[]> = {
+  ARIZONA: ['UNIVERSITY OF ARIZONA'],
+};
+
 export async function getLoginOrganizationIdForUser(userId: number): Promise<number> {
   if (!isDatabaseConfigured() || !Number.isFinite(userId) || userId <= 0) return 0;
   await ensureTrainingDbReady();
@@ -3699,17 +3742,22 @@ export async function resolveOrganizationIdForSchool(input: {
       if (Number.isFinite(orgId) && orgId > 0) return orgId;
     }
 
+    const organizationNameCandidates = [
+      ...(ORGANIZATION_NAME_ALIASES_BY_SCHOOL[schoolCode] ?? []),
+      schoolCode,
+      `${schoolCode} ORGANIZATION`,
+    ];
     const byName = await pool.query<{ id: number }>(
       `
         SELECT id
         FROM organizations
-        WHERE UPPER(TRIM(name)) IN ($1, $2)
+        WHERE UPPER(TRIM(name)) = ANY($1::text[])
         ORDER BY
-          CASE WHEN UPPER(TRIM(name)) = $1 THEN 0 ELSE 1 END,
+          array_position($1::text[], UPPER(TRIM(name))),
           id ASC
         LIMIT 1
       `,
-      [schoolCode, `${schoolCode} ORGANIZATION`]
+      [organizationNameCandidates]
     );
     if ((byName.rowCount ?? 0) > 0) {
       const orgId = Number(byName.rows[0]?.id ?? 0);

@@ -1,14 +1,19 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromRequest } from '../../../../../lib/auth';
-import { deleteStaffUser, setStaffActiveStatus, updateStaffUser } from '../../../../../lib/training-db';
+import { resolveClientManagementOrganizationId, resolveProgrammingSchoolCode } from '../../../../../lib/programming-scope';
+import { deleteStaffUser, resolveOrganizationIdForSchool, setStaffActiveStatus, updateStaffUser } from '../../../../../lib/training-db';
 
 async function requireAdmin(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromRequest(request, cookieStore);
   if (!session) return { ok: false as const, status: 401, error: 'Unauthorized' };
   if (session.role !== 'admin') return { ok: false as const, status: 403, error: 'Forbidden' };
-  const organizationId = Number(session.organizationId ?? 0);
+  const organizationId = await resolveOrganizationIdForSchool({
+    schoolCode: resolveProgrammingSchoolCode(session),
+    fallbackOrganizationId: await resolveClientManagementOrganizationId(session),
+    allowFallbackIfUnresolved: false,
+  });
   if (!Number.isFinite(organizationId) || organizationId <= 0) {
     return { ok: false as const, status: 403, error: 'No organization found for session.' };
   }

@@ -171,11 +171,13 @@ export default function IntendedZonePanel({
   startDate,
   endDate,
   selectedPitchTypes,
+  selectedBallTypes,
 }: {
   pitcherName: string | null;
   startDate?: string;
   endDate?: string;
   selectedPitchTypes?: string[];
+  selectedBallTypes?: string[];
 }) {
   const [page, setPage] = useState<'live' | 'stats'>('live');
   const [mode, setMode] = useState<IntendedZoneSessionMode>('live');
@@ -318,6 +320,9 @@ export default function IntendedZonePanel({
         titleText: `Intended Target Session — ${pitcherName ?? 'Unknown Pitcher'}`,
         subtitleText: [modeLabel(activeSession.mode), dateLabel].filter(Boolean).join('  ·  '),
         fileName: `intended-zone-session-${safeName}.pdf`,
+        // Also embedded in a narrower sidebar column (Bullpen Scripts page) --
+        // force the same wide desktop layout regardless of where it's rendered.
+        forceWidth: 1100,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to export session PDF.');
@@ -610,6 +615,7 @@ export default function IntendedZonePanel({
           sidebarStartDate={startDate ?? ''}
           sidebarEndDate={endDate ?? ''}
           sidebarPitchTypes={selectedPitchTypes ?? ['All']}
+          sidebarBallTypes={selectedBallTypes ?? ['Baseball']}
         />
       </div>
     );

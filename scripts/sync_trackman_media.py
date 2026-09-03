@@ -92,20 +92,38 @@ def trackman_session(client_id: str, client_secret: str) -> requests.Session:
 
 
 def discover_sessions(session: requests.Session, start: date, end: date, environment: str) -> list[dict[str, Any]]:
-    payload = {
-        "sessionType": "All",
-        "utcDateFrom": f"{start.isoformat()}T00:00:00Z",
-        "utcDateTo": f"{end.isoformat()}T23:59:59Z",
-    }
-    rows = json_rows(
-        request_json(
-            session,
-            "POST",
-            f"{TRACKMAN_API_URL}/discovery/{environment}/sessions",
-            payload=payload,
+    # TrackMan rejects discovery windows that reach 30 full days once the
+    # inclusive end-of-day timestamp is taken into account. Split long
+    # backfills into safe 29-calendar-day requests and de-duplicate their
+    # results so callers can request any practical date range.
+    discovered: dict[str, dict[str, Any]] = {}
+    cursor = start
+    while cursor <= end:
+        chunk_end = min(end, cursor + timedelta(days=28))
+        payload = {
+            "sessionType": "All",
+            "utcDateFrom": f"{cursor.isoformat()}T00:00:00Z",
+            "utcDateTo": f"{chunk_end.isoformat()}T23:59:59Z",
+        }
+        chunk_rows = json_rows(
+            request_json(
+                session,
+                "POST",
+                f"{TRACKMAN_API_URL}/discovery/{environment}/sessions",
+                payload=payload,
+            )
         )
-    )
-    print(f"[media] discovered {len(rows)} TrackMan {environment} sessions")
+        for item in chunk_rows:
+            session_id = str(item.get("sessionId") or item.get("sessionID") or item.get("id") or "").strip()
+            if session_id:
+                discovered[session_id] = item
+        print(
+            f"[media] discovered {len(chunk_rows)} TrackMan {environment} sessions "
+            f"from {cursor.isoformat()} through {chunk_end.isoformat()}"
+        )
+        cursor = chunk_end + timedelta(days=1)
+    rows = list(discovered.values())
+    print(f"[media] discovered {len(rows)} unique TrackMan {environment} sessions")
     return rows
 
 
@@ -230,7 +248,14 @@ def existing_mapping(conn: psycopg.Connection, table: str, session_id: str, play
     return conn.execute(statement, (session_id, play_id, slot, blob["name"], blob["md5"], blob["md5"])).fetchone() is not None
 
 
-def cloudinary_upload(azure_url: str, cloud_name: str, preset: str, public_id: str) -> dict[str, Any]:
+def cloudinary_upload(
+    azure_url: str,
+    cloud_name: str,
+    preset: str,
+    public_id: str,
+    api_key: str = "",
+    api_secret: str = "",
+) -> dict[str, Any]:
     with tempfile.NamedTemporaryFile(suffix=".mov") as target:
         with requests.get(azure_url, stream=True, timeout=120) as source:
             source.raise_for_status()
@@ -239,13 +264,25 @@ def cloudinary_upload(azure_url: str, cloud_name: str, preset: str, public_id: s
                     target.write(chunk)
         target.flush()
         with open(target.name, "rb") as media:
+            if api_key and api_secret:
+                timestamp = str(int(datetime.now(timezone.utc).timestamp()))
+                signature_text = f"public_id={public_id}&timestamp={timestamp}{api_secret}"
+                upload_data = {
+                    "api_key": api_key,
+                    "public_id": public_id,
+                    "timestamp": timestamp,
+                    "signature": hashlib.sha1(signature_text.encode()).hexdigest(),
+                }
+            else:
+                upload_data = {"upload_preset": preset, "public_id": public_id}
             response = requests.post(
-                f"https://api.cloudinary.com/v1_1/{cloud_name}/auto/upload",
-                data={"upload_preset": preset, "public_id": public_id, "resource_type": "video"},
+                f"https://api.cloudinary.com/v1_1/{cloud_name}/video/upload",
+                data=upload_data,
                 files={"file": ("clip.mov", media, "video/quicktime")},
                 timeout=300,
             )
-        response.raise_for_status()
+        if not response.ok:
+            raise RuntimeError(f"Cloudinary upload failed ({response.status_code}): {response.text[:500]}")
         return response.json()
 
 
@@ -287,12 +324,16 @@ def main() -> int:
     start = parse_date(args.start_date) if args.start_date else end - timedelta(days=max(0, args.lookback_days))
     if start > end:
         raise RuntimeError("start-date must be on or before end-date")
-    if (end - start).days > 9:
-        start = end - timedelta(days=9)
-
     database_url = os.getenv("DASHBOARD_DATABASE_URL", "").strip() or required_env("DATABASE_URL")
     cloud_name = required_env("CLOUDINARY_CLOUD_NAME")
-    preset = required_env("CLOUDINARY_UPLOAD_PRESET")
+    preset = os.getenv("CLOUDINARY_UPLOAD_PRESET", "").strip()
+    cloudinary_api_key = os.getenv("CLOUDINARY_API_KEY", "").strip()
+    cloudinary_api_secret = os.getenv("CLOUDINARY_API_SECRET", "").strip()
+    if not preset and not (cloudinary_api_key and cloudinary_api_secret):
+        raise RuntimeError(
+            "Configure CLOUDINARY_API_KEY/CLOUDINARY_API_SECRET for signed uploads "
+            "or CLOUDINARY_UPLOAD_PRESET for unsigned uploads."
+        )
     table = safe_table_name(school_code)
     trackman = trackman_session(required_env("TM_CLIENT_ID"), required_env("TM_CLIENT_SECRET"))
 
@@ -349,7 +390,14 @@ def main() -> int:
                     )[:255]
                     azure_url = f"https://{entity_path}.blob.core.windows.net/{endpoint}/{quote(blob['name'], safe='/')}?{sas_token.lstrip('?')}"
                     print(f"[media] uploading {play_id} [{slot}]")
-                    upload = cloudinary_upload(azure_url, cloud_name, preset, public_id)
+                    upload = cloudinary_upload(
+                        azure_url,
+                        cloud_name,
+                        preset,
+                        public_id,
+                        cloudinary_api_key,
+                        cloudinary_api_secret,
+                    )
                     save_mapping(
                         conn,
                         table,

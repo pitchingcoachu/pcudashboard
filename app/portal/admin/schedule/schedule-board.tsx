@@ -19,6 +19,7 @@ import WorkoutLogModal from '../../components/workout-log-modal';
 import { GroupAssignModal } from './group-assign-modal';
 import BullpenEntry from '../../player/program/bullpens/bullpen-entry';
 import ScriptEntry from '../../player/program/shared-script-entry';
+import IntendedZonePanel from '../../dashboard/intended-zone-panel';
 import { bubbleCategoryIdFromType, bubbleColumnType, isBubbleColumnType } from '../../../../lib/bullpen-column-types';
 import type { BubbleCategoryDef } from '../../../../lib/bubble-categories';
 
@@ -44,6 +45,101 @@ const DEFAULT_THROWING_FIELDS: ThrowingFieldDef[] = [
   { key: 'drills', label: 'Drills' },
   { key: 'bullpen', label: 'Bullpen' },
 ];
+// Mirrors intended-zone-stats.tsx's PITCH_TYPE_ORDER exactly -- matches how
+// coaches actually order pitch types, not alphabetical.
+const INTENDED_TARGET_PITCH_TYPES = ['Fastball', 'Sinker', 'Cutter', 'Slider', 'Sweeper', 'Curveball', 'ChangeUp', 'Splitter', 'Knuckleball'];
+
+type IntendedTargetOption = { value: string; label: string };
+
+function intendedTargetNormalizeMulti(values: string[], fallback: string): string[] {
+  const unique = Array.from(new Set(values.filter((value) => value.trim().length > 0)));
+  if (unique.length === 0) return [fallback];
+  if (unique.includes('All')) return ['All'];
+  return unique;
+}
+
+// Mirrors pitching-suite.tsx's SearchableMultiSelect (same portal-search-select*
+// global styles) so the Intended Target filters here look and behave exactly
+// like the main dashboard filter bar, per the user's request.
+function IntendedTargetMultiSelect({
+  options,
+  values,
+  onChange,
+  fallback,
+}: {
+  options: IntendedTargetOption[];
+  values: string[];
+  onChange: (next: string[]) => void;
+  fallback: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const onDocClick = (event: MouseEvent) => {
+      if (!rootRef.current) return;
+      if (!rootRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, []);
+
+  const selectedLabels = options.filter((option) => values.includes(option.value)).map((option) => option.label);
+  const triggerText =
+    values.includes('All') || values.length === 0
+      ? 'All'
+      : selectedLabels.length === 1
+        ? selectedLabels[0]
+        : `${selectedLabels.length} selected`;
+
+  const filtered = options.filter((option) => option.label.toLowerCase().includes(query.toLowerCase()));
+
+  const toggle = (value: string) => {
+    if (value === 'All') {
+      onChange(['All']);
+      return;
+    }
+    const current = values.filter((entry) => entry !== 'All');
+    const next = current.includes(value) ? current.filter((entry) => entry !== value) : [...current, value];
+    onChange(intendedTargetNormalizeMulti(next, fallback));
+  };
+
+  return (
+    <div className="portal-search-select" ref={rootRef}>
+      <button type="button" className="portal-search-select-trigger" onClick={() => setOpen((current) => !current)}>
+        {triggerText}
+      </button>
+      {open ? (
+        <div className="portal-search-select-menu">
+          <input
+            className="portal-search-select-input"
+            placeholder="Type to filter..."
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          <div className="portal-search-select-options">
+            {filtered.map((option) => {
+              const checked = values.includes(option.value);
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  className="portal-search-select-option portal-search-select-option-multi"
+                  onClick={() => toggle(option.value)}
+                >
+                  <span>{checked ? '✓' : ''}</span>
+                  <span>{option.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 type ThrowingTemplate = {
   id: string;
   name: string;
@@ -400,6 +496,12 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const playerPickerRef = useRef<HTMLDivElement | null>(null);
   const [isMobileSchedule, setIsMobileSchedule] = useState(false);
   const [view, setView] = useState<ViewMode>('month');
+  const [showIntendedTarget, setShowIntendedTarget] = useState(false);
+  const [intendedTargetStartDate, setIntendedTargetStartDate] = useState(() => toIsoDate(new Date()));
+  const [intendedTargetEndDate, setIntendedTargetEndDate] = useState(() => toIsoDate(new Date()));
+  const [intendedTargetPitchTypes, setIntendedTargetPitchTypes] = useState<string[]>(['All']);
+  const [intendedTargetBallTypes, setIntendedTargetBallTypes] = useState<string[]>(['Baseball']);
+  const [intendedTargetBallTypeOptions, setIntendedTargetBallTypeOptions] = useState<string[]>(['Baseball']);
   const [mobilePaletteCollapsed, setMobilePaletteCollapsed] = useState(true);
   const [builderMode, setBuilderMode] = useState<BuilderMode>('schedule');
   const [paletteMode, setPaletteMode] = useState<PaletteMode>('workouts');
@@ -685,6 +787,24 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     if (!selected) return;
     setPlayerQuery(selected.name);
   }, [playerId, players]);
+
+  useEffect(() => {
+    if (!showIntendedTarget) return;
+    let cancelled = false;
+    fetch('/api/dashboard/pitching/intended-zone/stats?ballTypeOptions=1')
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload) => {
+        if (cancelled || !payload) return;
+        const options = Array.isArray(payload.ballTypes) ? payload.ballTypes.filter((value: unknown) => typeof value === 'string') : [];
+        if (options.length) setIntendedTargetBallTypeOptions(options);
+      })
+      .catch(() => {
+        // Best-effort -- filter still works with the default 'Baseball' option.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [showIntendedTarget]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -2969,6 +3089,39 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     />
   );
 
+  const isVelocityView = view === 'velocity';
+  const isHittingView = view === 'hitting';
+
+  useEffect(() => {
+    if (!bullpenFillDrag) return;
+    const onMouseUp = () => {
+      const targets = Array.from(bullpenFillTargetsRef.current);
+      if (targets.length) {
+        const applyFill = (prev: BullpenScript) => {
+          const rows = buildBullpenRows(prev.rowCount, prev.columns.length, prev.rows);
+          for (const key of targets) {
+            const [rowRaw, fieldRaw] = key.split('__');
+            const rowIndex = Number(rowRaw);
+            const field = Number(fieldRaw);
+            if (!Number.isFinite(rowIndex) || rowIndex < 0 || rowIndex >= rows.length) continue;
+            if (!Number.isFinite(field) || field < 0 || field >= prev.columns.length) continue;
+            const nextRow = [...rows[rowIndex]];
+            nextRow[field] = bullpenFillDrag.value;
+            rows[rowIndex] = nextRow;
+          }
+          return { ...prev, rows };
+        };
+        if (isHittingView) setHittingCurrent(applyFill);
+        else if (isVelocityView) setVelocityCurrent(applyFill);
+        else setBullpenCurrent(applyFill);
+      }
+      bullpenFillTargetsRef.current = new Set();
+      setBullpenFillDrag(null);
+    };
+    window.addEventListener('mouseup', onMouseUp);
+    return () => window.removeEventListener('mouseup', onMouseUp);
+  }, [bullpenFillDrag, isVelocityView, isHittingView]);
+
   if (players.length === 0) {
     return <p className="portal-muted-text">Create a client first before scheduling workouts.</p>;
   }
@@ -3029,8 +3182,6 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     );
   };
 
-  const isVelocityView = view === 'velocity';
-  const isHittingView = view === 'hitting';
   const activeCurrent = isHittingView ? hittingCurrent : isVelocityView ? velocityCurrent : bullpenCurrent;
   const activeTemplates = isHittingView ? hittingTemplates : isVelocityView ? velocityTemplates : bullpenTemplates;
   const activeSelectedTemplateId = isHittingView ? selectedHittingTemplateId : isVelocityView ? selectedVelocityTemplateId : selectedBullpenTemplateId;
@@ -3319,36 +3470,6 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     else if (isVelocityView) setVelocityCurrent(updater);
     else setBullpenCurrent(updater);
   };
-
-  useEffect(() => {
-    if (!bullpenFillDrag) return;
-    const onMouseUp = () => {
-      const targets = Array.from(bullpenFillTargetsRef.current);
-      if (targets.length) {
-        const applyFill = (prev: BullpenScript) => {
-          const rows = buildBullpenRows(prev.rowCount, prev.columns.length, prev.rows);
-          for (const key of targets) {
-            const [rowRaw, fieldRaw] = key.split('__');
-            const rowIndex = Number(rowRaw);
-            const field = Number(fieldRaw);
-            if (!Number.isFinite(rowIndex) || rowIndex < 0 || rowIndex >= rows.length) continue;
-            if (!Number.isFinite(field) || field < 0 || field >= prev.columns.length) continue;
-            const nextRow = [...rows[rowIndex]];
-            nextRow[field] = bullpenFillDrag.value;
-            rows[rowIndex] = nextRow;
-          }
-          return { ...prev, rows };
-        };
-        if (isHittingView) setHittingCurrent(applyFill);
-        else if (isVelocityView) setVelocityCurrent(applyFill);
-        else setBullpenCurrent(applyFill);
-      }
-      bullpenFillTargetsRef.current = new Set();
-      setBullpenFillDrag(null);
-    };
-    window.addEventListener('mouseup', onMouseUp);
-    return () => window.removeEventListener('mouseup', onMouseUp);
-  }, [bullpenFillDrag, isVelocityView, isHittingView]);
 
   const startNewBullpenScript = () => {
     if (isHittingView) {
@@ -4406,6 +4527,16 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                   >
                     Manage Bubble Categories
                   </button>
+                  {view === 'bullpens' && playerId > 0 ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={() => setShowIntendedTarget((current) => !current)}
+                      style={{ minWidth: 188, minHeight: 42, justifyContent: 'center', whiteSpace: 'nowrap' }}
+                    >
+                      {showIntendedTarget ? 'Hide Intended Target' : 'Show Intended Target'}
+                    </button>
+                  ) : null}
                 </div>
                 {!scriptTemplateBuilderCollapsed ? (
                   <>
@@ -5212,7 +5343,24 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           aria-busy={loading}
           data-throwing-export-root={builderMode === 'schedule' && view === 'throwing' ? 'true' : undefined}
           ref={builderMode === 'schedule' && view === 'throwing' ? throwingCalendarRef : undefined}
-          style={builderMode === 'schedule' && (view === 'throwing' || view === 'bullpens' || view === 'velocity' || view === 'hitting' || view === 'drills' || view === 'hitting-drills') ? { gridColumn: '1 / -1', width: '100%' } : undefined}
+          style={
+            builderMode === 'schedule' && (view === 'throwing' || view === 'bullpens' || view === 'velocity' || view === 'hitting' || view === 'drills' || view === 'hitting-drills')
+              ? {
+                  gridColumn: '1 / -1',
+                  width: '100%',
+                  // `overflow-x: auto` on this section (for other calendar views'
+                  // wide date grids) breaks `position: sticky` several levels
+                  // below in the Bullpen Scripts view's Intended Target panel --
+                  // sticky binds to the nearest scrolling ancestor, and per the
+                  // CSS overflow spec, setting only overflow-y to 'visible' still
+                  // computes as 'auto' as long as overflow-x isn't also
+                  // 'visible' (mismatched non-visible/visible pairs both resolve
+                  // to auto). This view doesn't need horizontal scroll here, so
+                  // override both axes.
+                  ...(view === 'bullpens' ? { overflowX: 'visible', overflowY: 'visible' } : null),
+                }
+              : undefined
+          }
         >
           {builderMode === 'schedule' && view !== 'drills' && view !== 'hitting-drills' ? (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: '0.45rem' }}>
@@ -5482,19 +5630,77 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
               </div>
             </div>
           )}
-          {builderMode === 'schedule' && view === 'bullpens' && playerId > 0 && bullpenTemplates.length > 0 && (
+          {builderMode === 'schedule' && view === 'bullpens' && playerId > 0 ? (
             <div style={{ marginTop: 16 }}>
-              <h4 style={{ margin: '0 0 10px', fontSize: 14, color: '#94a3b8' }}>Player Bullpen Scripts Entry</h4>
-              <BullpenEntry
-                templates={bullpenTemplates}
-                state={{ selectedTemplateId: selectedBullpenTemplateId, visibleTemplateIds: visibleBullpenTemplateIds }}
-                playerId={playerId}
-                previewQuery={`?previewPlayerId=${playerId}`}
-                schoolLogoSrc={schoolLogoSrc}
-                schoolLogoAlt={schoolLogoAlt}
-              />
+              <div style={{ display: 'grid', gridTemplateColumns: showIntendedTarget && bullpenTemplates.length > 0 ? 'minmax(0, 1fr) minmax(760px, 1fr)' : '1fr', gap: 24, alignItems: 'start' }}>
+                {bullpenTemplates.length > 0 && (
+                  <div>
+                    <h4 style={{ margin: '0 0 10px', fontSize: 14, color: '#94a3b8' }}>Player Bullpen Scripts Entry</h4>
+                    <BullpenEntry
+                      templates={bullpenTemplates}
+                      state={{ selectedTemplateId: selectedBullpenTemplateId, visibleTemplateIds: visibleBullpenTemplateIds }}
+                      playerId={playerId}
+                      previewQuery={`?previewPlayerId=${playerId}`}
+                      schoolLogoSrc={schoolLogoSrc}
+                      schoolLogoAlt={schoolLogoAlt}
+                    />
+                  </div>
+                )}
+                {showIntendedTarget ? (
+                  <div style={{ position: 'sticky', top: 16, maxHeight: 'calc(100vh - 32px)', overflowY: 'auto' }}>
+                    <h4 style={{ margin: '0 0 10px', fontSize: 14, color: '#94a3b8' }}>Intended Target</h4>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12, alignItems: 'end', marginBottom: 16 }}>
+                      <label style={{ display: 'grid', gap: 4, minWidth: 0 }}>
+                        <span style={{ fontSize: 12, color: '#94a3b8' }}>Start Date</span>
+                        <input
+                          type="date"
+                          className="portal-schedule-control"
+                          value={intendedTargetStartDate}
+                          onChange={(e) => setIntendedTargetStartDate(e.target.value)}
+                          style={{ width: '100%', minHeight: 40, boxSizing: 'border-box', textAlign: 'center', fontSize: 15, borderRadius: 10 }}
+                        />
+                      </label>
+                      <label style={{ display: 'grid', gap: 4, minWidth: 0 }}>
+                        <span style={{ fontSize: 12, color: '#94a3b8' }}>End Date</span>
+                        <input
+                          type="date"
+                          className="portal-schedule-control"
+                          value={intendedTargetEndDate}
+                          onChange={(e) => setIntendedTargetEndDate(e.target.value)}
+                          style={{ width: '100%', minHeight: 40, boxSizing: 'border-box', textAlign: 'center', fontSize: 15, borderRadius: 10 }}
+                        />
+                      </label>
+                      <label style={{ display: 'grid', gap: 4, minWidth: 0 }}>
+                        <span style={{ fontSize: 12, color: '#94a3b8' }}>Pitch Type</span>
+                        <IntendedTargetMultiSelect
+                          options={[{ value: 'All', label: 'All' }, ...INTENDED_TARGET_PITCH_TYPES.map((type) => ({ value: type, label: type }))]}
+                          values={intendedTargetPitchTypes}
+                          onChange={setIntendedTargetPitchTypes}
+                          fallback="All"
+                        />
+                      </label>
+                      <label style={{ display: 'grid', gap: 4, minWidth: 0 }}>
+                        <span style={{ fontSize: 12, color: '#94a3b8' }}>Ball Type</span>
+                        <IntendedTargetMultiSelect
+                          options={[{ value: 'All', label: 'All' }, ...intendedTargetBallTypeOptions.map((type) => ({ value: type, label: type }))]}
+                          values={intendedTargetBallTypes}
+                          onChange={setIntendedTargetBallTypes}
+                          fallback="Baseball"
+                        />
+                      </label>
+                    </div>
+                    <IntendedZonePanel
+                      pitcherName={players.find((player) => player.id === playerId)?.name ?? null}
+                      startDate={intendedTargetStartDate || undefined}
+                      endDate={intendedTargetEndDate || undefined}
+                      selectedPitchTypes={intendedTargetPitchTypes}
+                      selectedBallTypes={intendedTargetBallTypes}
+                    />
+                  </div>
+                ) : null}
+              </div>
             </div>
-          )}
+          ) : null}
           {builderMode === 'schedule' && view === 'hitting' && playerId > 0 && hittingTemplates.length > 0 && (
             <div style={{ marginTop: 16 }}>
               <h4 style={{ margin: '0 0 10px', fontSize: 14, color: '#94a3b8' }}>Player BP Templates Entry</h4>

@@ -337,6 +337,7 @@ export const LEAGUE_TEAM_NAME_BY_CODE: Record<string, string> = {
     "WOF_TER": "Wofford College",
     "WIN_EAG": "Winthrop University",
     "WIN_BUL": "Wingate University",
+    "WES_MOU": "University of West Virginia",
     "WES_HIL": "Western Kentucky University",
     "WIU_LEA": "Western Illinois University",
     "WRI_RAI": "Wright State University",

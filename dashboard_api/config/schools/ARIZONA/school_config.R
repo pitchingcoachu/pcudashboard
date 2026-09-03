@@ -34,7 +34,7 @@ school_config <- list(
     background           = "#FFFFFF",
     background_secondary = "#F4F6F9"
   ),
-  logo = "arizona-logo.png",
+  logo = "arizona-logo-v2.png",
   coaches_emails = c(
     "chale8@arizona.edu", "rcouch1@arizona.edu", "ellawolters@arizona.edu",
     "seankenny@arizona.edu", "jmeggs@arizona.edu", "swinston@arizona.edu",

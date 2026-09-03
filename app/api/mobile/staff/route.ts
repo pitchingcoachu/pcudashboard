@@ -1,14 +1,23 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromRequest } from '../../../../lib/auth';
-import { createStaffUser, listCoachesByOrganization } from '../../../../lib/training-db';
+import { resolveClientManagementOrganizationId, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
+import { createStaffUser, listCoachesByOrganization, resolveOrganizationIdForSchool } from '../../../../lib/training-db';
+
+async function resolveSelectedOrganizationId(session: NonNullable<ReturnType<typeof getSessionFromRequest>>): Promise<number> {
+  return resolveOrganizationIdForSchool({
+    schoolCode: resolveProgrammingSchoolCode(session),
+    fallbackOrganizationId: await resolveClientManagementOrganizationId(session),
+    allowFallbackIfUnresolved: false,
+  });
+}
 
 export async function GET(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (session.role !== 'admin') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  const organizationId = Number(session.organizationId ?? 0);
+  const organizationId = await resolveSelectedOrganizationId(session);
   if (!Number.isFinite(organizationId) || organizationId <= 0) {
     return NextResponse.json({ error: 'No organization found for session.' }, { status: 403 });
   }
@@ -22,7 +31,7 @@ export async function POST(request: Request) {
   const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (session.role !== 'admin') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  const organizationId = Number(session.organizationId ?? 0);
+  const organizationId = await resolveSelectedOrganizationId(session);
   if (!Number.isFinite(organizationId) || organizationId <= 0) {
     return NextResponse.json({ error: 'No organization found for session.' }, { status: 403 });
   }

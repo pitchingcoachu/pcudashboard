@@ -119,7 +119,7 @@ const SCHOOL_BRANDS: Record<string, SchoolBrand> = {
   },
   ARIZONA: {
     schoolCode: 'ARIZONA',
-    logoSrc: '/arizona-logo.png',
+    logoSrc: '/arizona-logo-v2.png',
     logoAlt: 'University of Arizona logo',
     accent: '#ab0520',
     accentSoft: '#850019',

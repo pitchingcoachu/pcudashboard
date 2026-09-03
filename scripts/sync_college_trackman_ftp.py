@@ -26,6 +26,9 @@ import psycopg
 from psycopg import sql
 
 
+FILTER_POLICY_VERSION = "source-aware-v1"
+
+
 DEFAULT_COLUMN_ALIASES = {
     "ivb": "inducedvertbreak",
     "hb": "horzbreak",
@@ -242,7 +245,13 @@ def find_value(row: dict[str, str], *candidates: str) -> str:
     return ""
 
 
-def filter_school_rows(rows: list[dict[str, str]], markers: set[str], roster_keys: set[str]) -> list[dict[str, str]]:
+def filter_school_rows(
+    rows: list[dict[str, str]],
+    markers: set[str],
+    roster_keys: set[str],
+    *,
+    allow_roster_match: bool,
+) -> list[dict[str, str]]:
     kept = []
     for row in rows:
         pitcher_team = normalize_team(find_value(row, "PitcherTeam", "pitcher_team", "Pitcher Team"))
@@ -253,7 +262,9 @@ def filter_school_rows(rows: list[dict[str, str]], markers: set[str], roster_key
             normalize_key(find_value(row, "Catcher")),
         }
         row_name_keys.discard("")
-        if pitcher_team in markers or batter_team in markers or bool(row_name_keys & roster_keys):
+        team_matches = pitcher_team in markers or batter_team in markers
+        roster_matches = allow_roster_match and bool(row_name_keys & roster_keys)
+        if team_matches or roster_matches:
             kept.append(row)
     return kept
 
@@ -325,6 +336,17 @@ def ensure_school(conn: psycopg.Connection, school_code: str) -> None:
     conn.execute("INSERT INTO public.schools (school_code) VALUES (%s) ON CONFLICT DO NOTHING", (school_code,))
 
 
+def source_checksum(remote: RemoteCsv, markers: set[str], roster_keys: set[str]) -> str:
+    """Fingerprint both the CSV and the inputs that decide which rows belong to the school."""
+    filter_inputs = [FILTER_POLICY_VERSION, remote.source, *sorted(markers)]
+    if remote.source == "practice":
+        filter_inputs.extend(sorted(roster_keys))
+    digest = hashlib.sha256(remote.payload)
+    digest.update(b"\0")
+    digest.update("\0".join(filter_inputs).encode("utf-8"))
+    return digest.hexdigest()
+
+
 def sync_file(
     conn: psycopg.Connection,
     remote: RemoteCsv,
@@ -333,8 +355,13 @@ def sync_file(
     roster_keys: set[str],
 ) -> tuple[int, bool]:
     stable_source = f"trackman://{remote.source}{remote.path}"
-    checksum = hashlib.sha256(remote.payload).hexdigest()
-    rows = filter_school_rows(decode_csv(remote.payload), markers, roster_keys)
+    checksum = source_checksum(remote, markers, roster_keys)
+    rows = filter_school_rows(
+        decode_csv(remote.payload),
+        markers,
+        roster_keys,
+        allow_roster_match=remote.source == "practice",
+    )
     existing = conn.execute(
         """SELECT file_id, file_checksum, row_count FROM public.pitch_data_files
            WHERE school_code = %s AND source_file = %s""",
@@ -442,7 +469,12 @@ def main() -> int:
             try:
                 for remote in fetch_remote_csvs(source, start, end):
                     files_seen += 1
-                    rows = filter_school_rows(decode_csv(remote.payload), markers, roster_keys)
+                    rows = filter_school_rows(
+                        decode_csv(remote.payload),
+                        markers,
+                        roster_keys,
+                        allow_roster_match=remote.source == "practice",
+                    )
                     if rows:
                         matched_files += 1
                         matched_rows += len(rows)

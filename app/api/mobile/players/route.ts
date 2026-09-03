@@ -1,8 +1,8 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromRequest } from '../../../../lib/auth';
-import { resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
-import { createClientWithLogin } from '../../../../lib/training-db';
+import { resolveClientManagementOrganizationId, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
+import { createClientWithLogin, resolveOrganizationIdForSchool } from '../../../../lib/training-db';
 
 export async function POST(request: Request) {
   const cookieStore = await cookies();
@@ -11,7 +11,12 @@ export async function POST(request: Request) {
   if (session.role !== 'admin' && session.role !== 'coach') {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
-  const organizationId = Number(session.organizationId ?? 0);
+  const schoolCode = resolveProgrammingSchoolCode(session);
+  const organizationId = await resolveOrganizationIdForSchool({
+    schoolCode,
+    fallbackOrganizationId: await resolveClientManagementOrganizationId(session),
+    allowFallbackIfUnresolved: false,
+  });
   if (!Number.isFinite(organizationId) || organizationId <= 0) {
     return NextResponse.json({ error: 'No organization found for session.' }, { status: 403 });
   }
@@ -31,8 +36,6 @@ export async function POST(request: Request) {
       : Number.isFinite(assignedCoachUserIdFromBody) && assignedCoachUserIdFromBody > 0
         ? assignedCoachUserIdFromBody
         : undefined;
-
-  const schoolCode = resolveProgrammingSchoolCode(session);
 
   const result = await createClientWithLogin({
     organizationId,

@@ -1234,6 +1234,24 @@ def _is_num(value: Any) -> bool:
         return False
 
 
+def _sortable_number(value: Any) -> float:
+    return float(value) if _is_num(value) else 0.0
+
+
+def _game_identifier_sort_key(row: Dict[str, Any]) -> tuple[int, float, str]:
+    value = (
+        row.get("game_pk")
+        if row.get("game_pk") is not None
+        else row.get("game_id")
+        or row.get("game_uid")
+        or row.get("game_foreign_id")
+        or ""
+    )
+    if _is_num(value):
+        return (0, float(value), "")
+    return (1, 0.0, str(value or "").strip().casefold())
+
+
 
 def _validate_school_code(value: str) -> str:
     school_code = (value or "").strip().upper()
@@ -3681,11 +3699,11 @@ def _build_dynamic_table(
         def _order(rr: Dict[str, Any]) -> tuple:
             return (
                 str(rr.get("session_date") or ""),
-                int(rr.get("game_pk") or rr.get("game_id") or 0),
-                int(rr.get("at_bat_index") or 0),
-                int(rr.get("event_index") or 0),
-                int(rr.get("pitch_number") or 0),
-                int(rr.get("id") or 0),
+                _game_identifier_sort_key(rr),
+                _sortable_number(rr.get("at_bat_index")),
+                _sortable_number(rr.get("event_index")),
+                _sortable_number(rr.get("pitch_number")),
+                _sortable_number(rr.get("id")),
             )
 
         def _explicit(rr: Dict[str, Any]) -> str:
@@ -3841,11 +3859,11 @@ def _build_dynamic_table(
         def _after_row_order_key(rr: Dict[str, Any]) -> tuple:
             return (
                 str(rr.get("session_date") or ""),
-                int(rr.get("game_pk") or rr.get("game_id") or 0),
-                int(rr.get("at_bat_index") or 0),
-                int(rr.get("event_index") or 0),
-                int(rr.get("pitch_number") or 0),
-                int(rr.get("id") or 0),
+                _game_identifier_sort_key(rr),
+                _sortable_number(rr.get("at_bat_index")),
+                _sortable_number(rr.get("event_index")),
+                _sortable_number(rr.get("pitch_number")),
+                _sortable_number(rr.get("id")),
             )
 
         def _count_token_from_pair(bv: Any, sv: Any) -> str:
@@ -4468,11 +4486,11 @@ def _build_dynamic_table(
         def _row_order_key_for_pa(rr: Dict[str, Any]) -> tuple:
             return (
                 str(rr.get("session_date") or ""),
-                int(rr.get("game_pk") or rr.get("game_id") or 0),
-                int(rr.get("at_bat_index") or 0),
-                int(rr.get("event_index") or 0),
-                int(rr.get("pitch_number") or 0),
-                int(rr.get("id") or 0),
+                _game_identifier_sort_key(rr),
+                _sortable_number(rr.get("at_bat_index")),
+                _sortable_number(rr.get("event_index")),
+                _sortable_number(rr.get("pitch_number")),
+                _sortable_number(rr.get("id")),
             )
         def _is_terminal_pa_row(rr: Dict[str, Any]) -> bool:
             pr = _canonical_play_result(rr.get("play_result"))
@@ -5723,11 +5741,11 @@ def _build_trend_rows(
             def _pro_row_order_key(rr: Dict[str, Any]) -> tuple:
                 return (
                     str(rr.get("session_date") or ""),
-                    int(rr.get("game_pk") or rr.get("game_id") or 0),
-                    int(rr.get("at_bat_index") or 0),
-                    int(rr.get("event_index") or 0),
-                    int(rr.get("pitch_number") or 0),
-                    int(rr.get("id") or 0),
+                    _game_identifier_sort_key(rr),
+                    _sortable_number(rr.get("at_bat_index")),
+                    _sortable_number(rr.get("event_index")),
+                    _sortable_number(rr.get("pitch_number")),
+                    _sortable_number(rr.get("id")),
                 )
 
             bf_fallback = 0
@@ -6422,6 +6440,7 @@ LEAGUE_TEAM_NAME_BY_CODE: Dict[str, str] = {
     "WOF_TER": "Wofford College",
     "WIN_EAG": "Winthrop University",
     "WIN_BUL": "Wingate University",
+    "WES_MOU": "University of West Virginia",
     "WES_HIL": "Western Kentucky University",
     "WIU_LEA": "Western Illinois University",
     "WRI_RAI": "Wright State University",
