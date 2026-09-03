@@ -36,6 +36,7 @@ jobs:
       TRACKMAN_PRACTICE_FTP_PASSWORD: ${{ secrets.ARIZONA_TRACKMAN_FTP_PASSWORD }}
       TRACKMAN_V3_FTP_USER: ${{ secrets.ARIZONA_TRACKMAN_FTP_USER }}
       TRACKMAN_V3_FTP_PASSWORD: ${{ secrets.ARIZONA_TRACKMAN_FTP_PASSWORD }}
+      TRACKMAN_FTP_DOWNLOAD_WORKERS: "8"
 
     steps:
       - name: Check out pcudashboard

@@ -9,6 +9,7 @@ requested school, and writes them into the shared pitch_events tables.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -18,6 +19,7 @@ import io
 import os
 import posixpath
 import re
+import threading
 from typing import Iterable
 
 import psycopg
@@ -121,6 +123,15 @@ def ftp_download(ftp: ftplib.FTP, path: str) -> bytes:
     return b"".join(chunks)
 
 
+def ftp_connect(source: str) -> ftplib.FTP:
+    prefix = "TRACKMAN_PRACTICE" if source == "practice" else "TRACKMAN_V3"
+    host = os.getenv("TRACKMAN_FTP_HOST", "ftp.trackmanbaseball.com").strip()
+    ftp = ftplib.FTP(host, timeout=45)
+    ftp.login(user=required_env(f"{prefix}_FTP_USER"), passwd=required_env(f"{prefix}_FTP_PASSWORD"))
+    ftp.set_pasv(True)
+    return ftp
+
+
 def discover_paths(ftp: ftplib.FTP, source: str, start: date, end: date) -> list[str]:
     paths: list[str] = []
     for day in iter_dates(start, end):
@@ -140,31 +151,81 @@ def discover_paths(ftp: ftplib.FTP, source: str, start: date, end: date) -> list
 
 
 def fetch_remote_csvs(source: str, start: date, end: date) -> Iterable[RemoteCsv]:
-    prefix = "TRACKMAN_PRACTICE" if source == "practice" else "TRACKMAN_V3"
-    host = os.getenv("TRACKMAN_FTP_HOST", "ftp.trackmanbaseball.com").strip()
-    user = required_env(f"{prefix}_FTP_USER")
-    password = required_env(f"{prefix}_FTP_PASSWORD")
-    with ftplib.FTP(host, timeout=45) as ftp:
-        ftp.login(user=user, passwd=password)
-        ftp.set_pasv(True)
+    with ftp_connect(source) as ftp:
         paths = discover_paths(ftp, source, start, end)
-        print(f"[{source}] discovered {len(paths)} CSV files")
-        for index, path in enumerate(paths, start=1):
+    print(f"[{source}] discovered {len(paths)} CSV files")
+
+    workers = max(1, int(os.getenv("TRACKMAN_FTP_DOWNLOAD_WORKERS", "1"))) if source == "v3" else 1
+    worker_state = threading.local()
+    connections: list[ftplib.FTP] = []
+    connections_lock = threading.Lock()
+
+    def worker_ftp() -> ftplib.FTP:
+        ftp = getattr(worker_state, "ftp", None)
+        if ftp is None:
+            ftp = ftp_connect(source)
+            worker_state.ftp = ftp
+            with connections_lock:
+                connections.append(ftp)
+        return ftp
+
+    def reset_worker_ftp() -> None:
+        ftp = getattr(worker_state, "ftp", None)
+        worker_state.ftp = None
+        if ftp is not None:
             try:
-                yield RemoteCsv(
+                ftp.close()
+            except Exception:
+                pass
+
+    def download(path: str) -> RemoteCsv:
+        last_error: Exception | None = None
+        for _attempt in range(2):
+            try:
+                return RemoteCsv(
                     source=source,
                     path=path,
-                    payload=ftp_download(ftp, path),
+                    payload=ftp_download(worker_ftp(), path),
                     # TrackMan's MDTM command can stall for tens of seconds on
-                    # the large shared V3 directory. The content checksum is
-                    # the authoritative change detector, so use retrieval time
-                    # for metadata and avoid a second FTP round trip per file.
+                    # the large shared V3 directory. The checksum is the
+                    # authoritative change detector, so retrieval time is
+                    # sufficient metadata here.
                     modified_at=datetime.now(timezone.utc),
                 )
+            except Exception as exc:
+                last_error = exc
+                reset_worker_ftp()
+        raise last_error or RuntimeError(f"Failed to download {path}")
+
+    if workers == 1:
+        try:
+            for index, path in enumerate(paths, start=1):
+                try:
+                    yield download(path)
+                except Exception as exc:
+                    print(f"[{source}] skipped {path}: {exc}")
+                if index % 50 == 0:
+                    print(f"[{source}] downloaded {index}/{len(paths)}")
+        finally:
+            reset_worker_ftp()
+        return
+
+    print(f"[{source}] downloading with {workers} parallel FTP workers")
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        pending = {executor.submit(download, path): path for path in paths}
+        for index, future in enumerate(as_completed(pending), start=1):
+            path = pending[future]
+            try:
+                yield future.result()
             except Exception as exc:
                 print(f"[{source}] skipped {path}: {exc}")
             if index % 50 == 0:
                 print(f"[{source}] downloaded {index}/{len(paths)}")
+    for ftp in connections:
+        try:
+            ftp.close()
+        except Exception:
+            pass
 
 
 def decode_csv(payload: bytes) -> list[dict[str, str]]:
