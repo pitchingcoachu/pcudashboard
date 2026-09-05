@@ -320,7 +320,7 @@ export async function GET() {
       )
       ORDER BY updated_at DESC, id DESC
       `,
-      [scopedOrgIds, schoolCode, hasUserScope, effectiveUserIds, canShareAcrossSites, normalizedEmail, globalAdminEmails]
+      [scopedOrgIds, schoolCode, hasUserScope, effectiveUserIds, canShareAcrossSites, normalizedEmail]
     );
     let rows = result.rows;
     if (!rows.length) {
@@ -351,7 +351,7 @@ export async function GET() {
         )
         ORDER BY updated_at DESC, id DESC
         `,
-        [scopedOrgIds, hasUserScope, effectiveUserIds, canShareAcrossSites, normalizedEmail, schoolCode, globalAdminEmails]
+        [scopedOrgIds, hasUserScope, effectiveUserIds, canShareAcrossSites, normalizedEmail, schoolCode]
       );
       rows = fallback.rows;
     }

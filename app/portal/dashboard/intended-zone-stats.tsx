@@ -66,17 +66,20 @@ type PitchTypeStat = {
   pitchType: string;
   pitchCount: number;
   avgMissDistanceFt: number | null;
+  medianMissDistanceFt: number | null;
   directionBreakdown: DirectionBreakdown;
   topMissDirection: MissDirection | null;
   inZonePct: number | null;
   competitivePct: number | null;
   targetHitRates: TargetHitRate[];
+  throwsLeft: boolean;
 };
 
 type PitcherStat = {
   pitcherName: string;
   pitchCount: number;
   avgMissDistanceFt: number | null;
+  medianMissDistanceFt: number | null;
   missDistanceStdDevFt: number | null;
   bestPitchType: string | null;
   directionBreakdown: DirectionBreakdown;
@@ -84,7 +87,17 @@ type PitcherStat = {
   inZonePct: number | null;
   competitivePct: number | null;
   targetHitRates: TargetHitRate[];
+  throwsLeft: boolean;
 };
+
+type StatsSplitBy = 'pitchType' | 'targetSize' | 'targetLocation' | 'ballType';
+
+function splitByLabel(splitBy: StatsSplitBy): string {
+  if (splitBy === 'targetSize') return 'Target Size';
+  if (splitBy === 'targetLocation') return 'Target Location';
+  if (splitBy === 'ballType') return 'Ball Type';
+  return 'Pitch Type';
+}
 
 function pctLabel(value: number | null): string {
   if (value === null || !Number.isFinite(value)) return '—';
@@ -147,9 +160,40 @@ function sumBreakdown(breakdown: DirectionBreakdown): number {
   return MISS_DIRECTION_ORDER.reduce((sum, key) => sum + (breakdown[key] ?? 0), 0);
 }
 
-export function MiniDirectionGrid({ breakdown, size = 15 }: { breakdown: DirectionBreakdown; size?: number }) {
+// MISS_DIRECTION_ORDER's grid layout puts "glove" in the left column and
+// "arm" in the right column. That's the correct physical view for a
+// right-handed pitcher (glove side is on their left, from the coach's view
+// standing behind them), but a fixed screen-left-is-always-glove convention
+// draws a lefty's grid backwards from how it'd physically look standing
+// behind that pitcher. Swap each row's glove/arm cells for lefties so the
+// grid always matches the physical view of the specific pitcher shown.
+function directionGridOrder(throwsLeft: boolean): readonly MissDirection[] {
+  if (!throwsLeft) return MISS_DIRECTION_ORDER;
+  return [
+    'up-arm',
+    'up-middle',
+    'up-glove',
+    'middle-arm',
+    'on-target',
+    'middle-glove',
+    'down-arm',
+    'down-middle',
+    'down-glove',
+  ];
+}
+
+export function MiniDirectionGrid({
+  breakdown,
+  size = 15,
+  throwsLeft = false,
+}: {
+  breakdown: DirectionBreakdown;
+  size?: number;
+  throwsLeft?: boolean;
+}) {
   const total = sumBreakdown(breakdown);
   const max = Math.max(1, ...MISS_DIRECTION_ORDER.map((key) => breakdown[key] ?? 0));
+  const order = directionGridOrder(throwsLeft);
   return (
     <div
       style={{
@@ -160,7 +204,7 @@ export function MiniDirectionGrid({ breakdown, size = 15 }: { breakdown: Directi
       }}
       title={total ? `${total} pitches` : 'No data'}
     >
-      {MISS_DIRECTION_ORDER.map((key) => {
+      {order.map((key) => {
         const count = breakdown[key] ?? 0;
         return (
           <div
@@ -190,9 +234,10 @@ export function MiniDirectionGrid({ breakdown, size = 15 }: { breakdown: Directi
 // html2canvas (used for the PDF export) -- html2canvas rasterizes <img>
 // elements (including SVG data URIs) via a plain drawImage instead of
 // trying to re-serialize the SVG DOM tree, so this survives the export.
-export function DirectionHeatmap({ breakdown }: { breakdown: DirectionBreakdown }) {
+export function DirectionHeatmap({ breakdown, throwsLeft = false }: { breakdown: DirectionBreakdown; throwsLeft?: boolean }) {
   const total = sumBreakdown(breakdown);
   const max = Math.max(1, ...MISS_DIRECTION_ORDER.map((key) => breakdown[key] ?? 0));
+  const order = directionGridOrder(throwsLeft);
   const cell = 84;
 
   return (
@@ -205,7 +250,7 @@ export function DirectionHeatmap({ breakdown }: { breakdown: DirectionBreakdown 
           gap: 4,
         }}
       >
-        {MISS_DIRECTION_ORDER.map((key) => {
+        {order.map((key) => {
           const count = breakdown[key] ?? 0;
           const pct = total ? Math.round((count / total) * 100) : 0;
           return (
@@ -271,7 +316,7 @@ export default function IntendedZoneStats({
   const [selectedPitcherRow, setSelectedPitcherRow] = useState<string | null>(null);
   const [selectedPitcherTypeStats, setSelectedPitcherTypeStats] = useState<PitchTypeStat[]>([]);
   const [selectedPitcherStatsLoading, setSelectedPitcherStatsLoading] = useState(false);
-  const [splitBy, setSplitBy] = useState<'pitchType' | 'targetSize' | 'ballType'>('pitchType');
+  const [splitBy, setSplitBy] = useState<StatsSplitBy>('pitchType');
   const [isExportingPitcherPdf, setIsExportingPitcherPdf] = useState(false);
   const [isExportingLeaderboardPdf, setIsExportingLeaderboardPdf] = useState(false);
   const pitcherExportRef = useRef<HTMLDivElement | null>(null);
@@ -379,6 +424,7 @@ export default function IntendedZoneStats({
         return row.topMissDirection ? MISS_DIRECTION_SHORT_LABELS[row.topMissDirection] : null;
       case 'pitchCount':
       case 'avgMissDistanceFt':
+      case 'medianMissDistanceFt':
       case 'missDistanceStdDevFt':
       case 'inZonePct':
       case 'competitivePct':
@@ -482,7 +528,7 @@ export default function IntendedZoneStats({
         node: wrapNode,
         titleText: 'Intended Target Results',
         nameText: pitcherName,
-        subtitleText: [splitBy === 'targetSize' ? 'Split by Target Size' : '', dateRangeLabel].filter(Boolean).join('  ·  '),
+        subtitleText: [splitBy === 'pitchType' ? '' : `Split by ${splitByLabel(splitBy)}`, dateRangeLabel].filter(Boolean).join('  ·  '),
         fileName: `intended-target-${safeName}.pdf`,
         singlePage: true,
         // This component also renders inside a narrow sidebar column (the
@@ -509,7 +555,11 @@ export default function IntendedZoneStats({
         titleText: 'Intended Target Leaderboard',
         subtitleText: ['All Pitchers', dateRangeLabel].filter(Boolean).join('  ·  '),
         fileName: 'intended-zone-leaderboard.pdf',
-        tableSelector: `table.${styles.logTable}`,
+        // This export wrapper's first table is the leaderboard. Avoid a
+        // runtime-generated CSS-module selector here: Safari occasionally
+        // rejects an unescaped generated class with
+        // "The string did not match the expected pattern."
+        tableSelector: 'table',
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to export PDF.');
@@ -565,13 +615,31 @@ export default function IntendedZoneStats({
               value={splitBy}
               onChange={(event) => {
                 const next = event.target.value;
-                setSplitBy(next === 'targetSize' || next === 'ballType' ? next : 'pitchType');
+                setSplitBy(next === 'targetSize' || next === 'targetLocation' || next === 'ballType' ? next : 'pitchType');
               }}
             >
               <option value="pitchType">Pitch Type</option>
               <option value="targetSize">Target Size</option>
+              <option value="targetLocation">Target Location</option>
               <option value="ballType">Ball Type</option>
             </select>
+            {splitBy === 'targetLocation' ? (
+              <div className={styles.targetLocationKey} aria-label="Target location numbering key">
+                <div>
+                  <span className={styles.targetLocationKeyLabel}>Zone pockets</span>
+                  <div className={styles.targetPocketGrid} aria-hidden="true">
+                    {Array.from({ length: 9 }, (_, index) => <span key={index + 1}>{index + 1}</span>)}
+                  </div>
+                </div>
+                <div>
+                  <span className={styles.targetLocationKeyLabel}>Outer layer</span>
+                  <div className={styles.targetOuterGrid}>
+                    <span><b>10</b> Top left</span><span><b>11</b> Top right</span>
+                    <span><b>12</b> Bottom left</span><span><b>13</b> Bottom right</span>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
         <p className={styles.zoneHint} style={{ textAlign: 'left' }}>
@@ -605,12 +673,12 @@ export default function IntendedZoneStats({
 
             <div ref={pitcherExportRef} style={{ display: 'grid', gap: 20 }}>
               <div className={styles.logSection}>
-                <p className={styles.logTitle} data-pdf-hide="true" style={{ marginBottom: 12 }}>{splitBy === 'targetSize' ? 'By Target Size' : 'By Pitch Type'}</p>
+                <p className={styles.logTitle} data-pdf-hide="true" style={{ marginBottom: 12 }}>By {splitByLabel(splitBy)}</p>
                 <div className={styles.logScroll}>
                   <table className={styles.logTable}>
                     <thead>
                       <tr>
-                        <th>{splitBy === 'targetSize' ? 'Target Size' : 'Pitch Type'}</th>
+                        <th>{splitByLabel(splitBy)}</th>
                         <th>Pitches</th>
                         <th>In Zone%</th>
                         <th>Comp%</th>
@@ -618,6 +686,7 @@ export default function IntendedZoneStats({
                           <th key={inches}>{inches}&quot; Target Hit%</th>
                         ))}
                         <th>Avg Miss Distance</th>
+                        <th>Med. Miss Distance</th>
                         <th>Most Common Miss Direction</th>
                       </tr>
                     </thead>
@@ -635,6 +704,7 @@ export default function IntendedZoneStats({
                               <td key={inches}>{targetHitCellLabel(row.targetHitRates, inches)}</td>
                             ))}
                             <td className={severity ? `${styles.logMissDistance} ${styles[severity]}` : undefined}>{missDistanceLabel(row.avgMissDistanceFt)}</td>
+                            <td>{missDistanceLabel(row.medianMissDistanceFt)}</td>
                             <td>{row.topMissDirection ? MISS_DIRECTION_SHORT_LABELS[row.topMissDirection] : '—'}</td>
                           </tr>
                         );
@@ -647,7 +717,7 @@ export default function IntendedZoneStats({
               {perTypeRows.length ? (
                 <div>
                   <p className={styles.logTitle} style={{ marginBottom: 4 }}>
-                    Miss Direction by Pitch Type
+                    Miss Direction by {splitByLabel(splitBy)}
                   </p>
                   <p className={styles.zoneHint} style={{ textAlign: 'left', marginBottom: 12 }}>
                     Where misses land relative to the target — glove/arm side is from the pitcher&apos;s own throwing-hand perspective.
@@ -658,7 +728,7 @@ export default function IntendedZoneStats({
                         <p className={styles.historyTitle} style={{ alignSelf: 'flex-start', color: '#f8fafc' }}>
                           {row.pitchType} ({row.pitchCount})
                         </p>
-                        <DirectionHeatmap breakdown={row.directionBreakdown} />
+                        <DirectionHeatmap breakdown={row.directionBreakdown} throwsLeft={row.throwsLeft} />
                       </div>
                     ))}
                   </div>
@@ -704,6 +774,9 @@ export default function IntendedZoneStats({
                     <th style={sortableHeaderStyle('avgMissDistanceFt')} onClick={() => toggleSort('avgMissDistanceFt')}>
                       Avg Miss Distance{sortArrow('avgMissDistanceFt')}
                     </th>
+                    <th style={sortableHeaderStyle('medianMissDistanceFt')} onClick={() => toggleSort('medianMissDistanceFt')}>
+                      Med. Miss Distance{sortArrow('medianMissDistanceFt')}
+                    </th>
                     <th style={sortableHeaderStyle('missDistanceStdDevFt')} onClick={() => toggleSort('missDistanceStdDevFt')}>
                       Consistency (Std Dev){sortArrow('missDistanceStdDevFt')}
                     </th>
@@ -738,11 +811,12 @@ export default function IntendedZoneStats({
                           <td key={inches}>{targetHitCellLabel(row.targetHitRates, inches)}</td>
                         ))}
                         <td className={severity ? `${styles.logMissDistance} ${styles[severity]}` : undefined}>{missDistanceLabel(row.avgMissDistanceFt)}</td>
+                        <td>{missDistanceLabel(row.medianMissDistanceFt)}</td>
                         <td>{missDistanceLabel(row.missDistanceStdDevFt)}</td>
                         <td>{row.bestPitchType ?? '—'}</td>
                         <td>{row.topMissDirection ? MISS_DIRECTION_SHORT_LABELS[row.topMissDirection] : '—'}</td>
                         <td>
-                          <MiniDirectionGrid breakdown={row.directionBreakdown} />
+                          <MiniDirectionGrid breakdown={row.directionBreakdown} throwsLeft={row.throwsLeft} />
                         </td>
                       </tr>
                     );
@@ -775,14 +849,14 @@ export default function IntendedZoneStats({
                   <div style={{ width: '100%', display: 'grid', gap: 20 }}>
                     <div className={styles.logSection} style={{ width: '100%' }}>
                       <p className={styles.logTitle} style={{ marginBottom: 12 }}>
-                        {splitBy === 'targetSize' ? 'By Target Size' : 'By Pitch Type'}
+                        By {splitByLabel(splitBy)}
                         {titleSuffix}
                       </p>
                       <div className={styles.logScroll}>
                         <table className={styles.logTable}>
                           <thead>
                             <tr>
-                              <th>{splitBy === 'targetSize' ? 'Target Size' : 'Pitch Type'}</th>
+                              <th>{splitByLabel(splitBy)}</th>
                               <th>Pitches</th>
                               <th>In Zone%</th>
                               <th>Comp%</th>
@@ -790,6 +864,7 @@ export default function IntendedZoneStats({
                                 <th key={inches}>{inches}&quot; Target Hit%</th>
                               ))}
                               <th>Avg Miss Distance</th>
+                              <th>Med. Miss Distance</th>
                               <th>Most Common Miss Direction</th>
                             </tr>
                           </thead>
@@ -807,6 +882,7 @@ export default function IntendedZoneStats({
                                     <td key={inches}>{targetHitCellLabel(row.targetHitRates, inches)}</td>
                                   ))}
                                   <td className={severity ? `${styles.logMissDistance} ${styles[severity]}` : undefined}>{missDistanceLabel(row.avgMissDistanceFt)}</td>
+                                  <td>{missDistanceLabel(row.medianMissDistanceFt)}</td>
                                   <td>{row.topMissDirection ? MISS_DIRECTION_SHORT_LABELS[row.topMissDirection] : '—'}</td>
                                 </tr>
                               );
@@ -819,7 +895,7 @@ export default function IntendedZoneStats({
                     {rows.length ? (
                       <div>
                         <p className={styles.logTitle} style={{ marginBottom: 4 }}>
-                          Miss Direction by {splitBy === 'targetSize' ? 'Target Size' : 'Pitch Type'}
+                          Miss Direction by {splitByLabel(splitBy)}
                         </p>
                         <p className={styles.zoneHint} style={{ textAlign: 'left', marginBottom: 12 }}>
                           Where misses land relative to the target — glove/arm side is from the pitcher&apos;s own throwing-hand perspective.
@@ -830,7 +906,7 @@ export default function IntendedZoneStats({
                               <p className={styles.historyTitle} style={{ alignSelf: 'flex-start', color: '#f8fafc' }}>
                                 {row.pitchType} ({row.pitchCount})
                               </p>
-                              <DirectionHeatmap breakdown={row.directionBreakdown} />
+                              <DirectionHeatmap breakdown={row.directionBreakdown} throwsLeft={row.throwsLeft} />
                             </div>
                           ))}
                         </div>

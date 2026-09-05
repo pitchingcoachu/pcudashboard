@@ -4,6 +4,7 @@ import { getSessionFromRequest } from '../../../../../lib/auth';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
 import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, shouldScopeDashboardPlayer } from '../../../../../lib/dashboard-player-scope';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
+import { isCrossSchoolPlayerSelection } from '../../../../../lib/cross-school-player-data';
 
 export const maxDuration = 300;
 
@@ -86,6 +87,7 @@ async function maybeAttachHittingHeatmapRollup(params: {
   } = params;
 
   if (!isTruthy(includeChartPoints)) return payload;
+  if (isCrossSchoolPlayerSelection(schoolCode, hitter)) return payload;
   if (!payload || typeof payload !== 'object') return payload;
   const existingChartPoints = (payload as { chart_points?: unknown }).chart_points;
   const existingHeatmapPoints = (payload as { heatmap_points?: unknown }).heatmap_points;

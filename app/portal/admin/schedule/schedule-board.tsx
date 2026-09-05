@@ -24,7 +24,7 @@ import { bubbleCategoryIdFromType, bubbleColumnType, isBubbleColumnType } from '
 import type { BubbleCategoryDef } from '../../../../lib/bubble-categories';
 
 type PlayerChoice = { id: number; name: string };
-type CalendarLinkTarget = 'none' | 'throwing' | 'bullpens' | 'velocity' | 'drills' | 'hitting' | 'hitting-drills';
+type CalendarLinkTarget = 'none' | 'details' | 'throwing' | 'bullpens' | 'velocity' | 'drills' | 'hitting' | 'hitting-drills';
 type WorkoutChoice = { id: number; name: string; exerciseCount: number; category: string; calendarLinkTarget: CalendarLinkTarget; isShared: boolean };
 type ViewMode = 'day' | 'week' | 'month' | 'cycle' | 'plan' | 'throwing' | 'bullpens' | 'velocity' | 'drills' | 'hitting' | 'hitting-drills';
 type ThrowingBuilderMode = 'month' | 'weeks';
@@ -467,6 +467,7 @@ function isDrillsWorkoutName(value: string): boolean {
 }
 
 function getCalendarLinkTarget(item: ProgramItemRow): CalendarLinkTarget {
+  if (item.calendarLinkTarget === 'details') return 'details';
   if (item.calendarLinkTarget && item.calendarLinkTarget !== 'none') return item.calendarLinkTarget;
   if (isThrowingCalendarWorkoutName(item.itemName)) return 'throwing';
   if (isBullpenWorkoutName(item.itemName)) return 'bullpens';
@@ -497,6 +498,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const [isMobileSchedule, setIsMobileSchedule] = useState(false);
   const [view, setView] = useState<ViewMode>('month');
   const [showIntendedTarget, setShowIntendedTarget] = useState(false);
+  const [showBullpenScripts, setShowBullpenScripts] = useState(true);
   const [intendedTargetStartDate, setIntendedTargetStartDate] = useState(() => toIsoDate(new Date()));
   const [intendedTargetEndDate, setIntendedTargetEndDate] = useState(() => toIsoDate(new Date()));
   const [intendedTargetPitchTypes, setIntendedTargetPitchTypes] = useState<string[]>(['All']);
@@ -4528,14 +4530,28 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                     Manage Bubble Categories
                   </button>
                   {view === 'bullpens' && playerId > 0 ? (
-                    <button
-                      type="button"
-                      className="btn btn-ghost"
-                      onClick={() => setShowIntendedTarget((current) => !current)}
-                      style={{ minWidth: 188, minHeight: 42, justifyContent: 'center', whiteSpace: 'nowrap' }}
-                    >
-                      {showIntendedTarget ? 'Hide Intended Target' : 'Show Intended Target'}
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={() => setShowIntendedTarget((current) => !current)}
+                        style={{ minWidth: 188, minHeight: 42, justifyContent: 'center', whiteSpace: 'nowrap' }}
+                      >
+                        {showIntendedTarget ? 'Hide Intended Target' : 'Show Intended Target'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        aria-pressed={!showBullpenScripts}
+                        onClick={() => {
+                          if (showBullpenScripts) setShowIntendedTarget(true);
+                          setShowBullpenScripts((current) => !current);
+                        }}
+                        style={{ minWidth: 188, minHeight: 42, justifyContent: 'center', whiteSpace: 'nowrap' }}
+                      >
+                        {showBullpenScripts ? 'Hide Bullpen Scripts' : 'Show Bullpen Scripts'}
+                      </button>
+                    </>
                   ) : null}
                 </div>
                 {!scriptTemplateBuilderCollapsed ? (
@@ -5632,8 +5648,8 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           )}
           {builderMode === 'schedule' && view === 'bullpens' && playerId > 0 ? (
             <div style={{ marginTop: 16 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: showIntendedTarget && bullpenTemplates.length > 0 ? 'minmax(0, 1fr) minmax(760px, 1fr)' : '1fr', gap: 24, alignItems: 'start' }}>
-                {bullpenTemplates.length > 0 && (
+              <div style={{ display: 'grid', gridTemplateColumns: showIntendedTarget && showBullpenScripts && bullpenTemplates.length > 0 ? 'minmax(0, 1fr) minmax(760px, 1fr)' : '1fr', gap: 24, alignItems: 'start' }}>
+                {showBullpenScripts && bullpenTemplates.length > 0 && (
                   <div>
                     <h4 style={{ margin: '0 0 10px', fontSize: 14, color: '#94a3b8' }}>Player Bullpen Scripts Entry</h4>
                     <BullpenEntry
@@ -5647,7 +5663,9 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                   </div>
                 )}
                 {showIntendedTarget ? (
-                  <div style={{ position: 'sticky', top: 16, maxHeight: 'calc(100vh - 32px)', overflowY: 'auto' }}>
+                  <div style={showBullpenScripts && bullpenTemplates.length > 0
+                    ? { position: 'sticky', top: 16, maxHeight: 'calc(100vh - 32px)', overflowY: 'auto' }
+                    : { width: '100%', minWidth: 0 }}>
                     <h4 style={{ margin: '0 0 10px', fontSize: 14, color: '#94a3b8' }}>Intended Target</h4>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12, alignItems: 'end', marginBottom: 16 }}>
                       <label style={{ display: 'grid', gap: 4, minWidth: 0 }}>

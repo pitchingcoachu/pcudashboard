@@ -57,7 +57,16 @@ jobs:
           cache-dependency-path: dashboard_api/requirements.txt
 
       - name: Install Python dependencies
-        run: pip install -r dashboard_api/requirements.txt
+        run: pip install -r dashboard_api/requirements.txt Pillow
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci --ignore-scripts
 
       - name: Resolve date window
         shell: bash
@@ -94,6 +103,9 @@ jobs:
             --environment practice \
             --start-date "${SYNC_START_DATE}" \
             --end-date "${SYNC_END_DATE}"
+
+      - name: Build quality-gated Arizona Edger spin estimates
+        run: node scripts/sync-edger-spin-estimates.mjs --school ARIZONA --limit 4
 
       - name: Refresh Arizona dashboard rollups
         run: |

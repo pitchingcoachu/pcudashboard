@@ -26,7 +26,25 @@ import psycopg
 from psycopg import sql
 
 
-FILTER_POLICY_VERSION = "source-aware-v1"
+FILTER_POLICY_VERSION = "source-aware-spin-v2"
+
+
+TRACKMAN_SPIN_COLUMNS = (
+    "spinaxis3dtransverseangle",
+    "spinaxis3dlongitudinalangle",
+    "spinaxis3dactivespinrate",
+    "spinaxis3dspinefficiency",
+    "spinaxis3dtilt",
+    # These are absent from some current exports, but retaining the columns
+    # lets ingestion start preserving them automatically when TrackMan sends
+    # the richer measured seam payload.
+    "spinaxis3dvectorx",
+    "spinaxis3dvectory",
+    "spinaxis3dvectorz",
+    "spinaxis3dseamorientationrotationx",
+    "spinaxis3dseamorientationrotationy",
+    "spinaxis3dseamorientationrotationz",
+)
 
 
 DEFAULT_COLUMN_ALIASES = {
@@ -321,6 +339,15 @@ def database_columns(conn: psycopg.Connection) -> dict[str, str]:
     return {normalize_key(row[0]): row[0] for row in rows}
 
 
+def ensure_trackman_spin_columns(conn: psycopg.Connection) -> None:
+    for column in TRACKMAN_SPIN_COLUMNS:
+        conn.execute(
+            sql.SQL("ALTER TABLE public.pitch_events ADD COLUMN IF NOT EXISTS {} TEXT").format(
+                sql.Identifier(column)
+            )
+        )
+
+
 def source_column_map(row: dict[str, str], db_columns: dict[str, str]) -> dict[str, str]:
     mapped: dict[str, str] = {}
     for source_name, value in row.items():
@@ -329,6 +356,13 @@ def source_column_map(row: dict[str, str], db_columns: dict[str, str]) -> dict[s
         target = db_columns.get(target_normalized)
         if target and target not in {"id", "school_code", "file_id", "session_date", "session_type", "source_file", "pitch_key", "created_at"}:
             mapped[target] = value or None
+        # Keep the original 3D TrackMan measurement as well as its legacy
+        # alias (for example, spin efficiency and release tilt). This avoids
+        # losing richer fields needed by Ball Flight while preserving all
+        # existing dashboard behavior.
+        measured_target = db_columns.get(normalized) if normalized in TRACKMAN_SPIN_COLUMNS else None
+        if measured_target:
+            mapped[measured_target] = value or None
     return mapped
 
 
@@ -497,6 +531,8 @@ def main() -> int:
     database_url = database_url or required_env("DATABASE_URL")
     failed_sources = 0
     with psycopg.connect(database_url) as conn:
+        ensure_trackman_spin_columns(conn)
+        conn.commit()
         for source in sources:
             try:
                 for remote in fetch_remote_csvs(source, start, end):

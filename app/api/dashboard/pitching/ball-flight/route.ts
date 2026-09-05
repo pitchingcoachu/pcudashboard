@@ -852,6 +852,67 @@ async function collegeVideoSpinSamples(args: {
   return result.rows;
 }
 
+async function pitchEventMeasuredSpinSamples(args: {
+  schoolCode: string;
+  search: URLSearchParams;
+  scopedPitcher: string | null;
+}): Promise<SpinSampleRow[]> {
+  const params: QueryValue[] = [];
+  const where = backfillArsenalWhere({ ...args, params });
+  const focusedPitcher = hasFocusedPitcher(args.search, args.scopedPitcher);
+  const detailLimit = focusedPitcher ? null : addParam(params, BROAD_DETAIL_ROWS_PER_PITCH_TYPE);
+  const pitchIdentifier = `COALESCE(NULLIF(TRIM(pe.pitchuid), ''), CASE
+    WHEN NULLIF(TRIM(pe.playid), '') IS NOT NULL THEN 'play:' || TRIM(pe.playid)
+    ELSE NULL END)`;
+  const requiredCoordinates = [
+    'spinaxis3dvectorx', 'spinaxis3dvectory', 'spinaxis3dvectorz',
+    'spinaxis3dseamorientationrotationx', 'spinaxis3dseamorientationrotationy',
+    'spinaxis3dseamorientationrotationz',
+  ].map((column) => `${textNumber(`pe.${column}`)} IS NOT NULL`);
+  const query = `
+    WITH ranked AS (
+      SELECT bf.*, pe.spinaxis3dactivespinrate, pe.spinaxis3dspinefficiency,
+        pe.spinaxis3dtilt, pe.spinaxis3dtransverseangle, pe.spinaxis3dlongitudinalangle,
+        pe.spinaxis3dvectorx, pe.spinaxis3dvectory, pe.spinaxis3dvectorz,
+        pe.spinaxis3dseamorientationrotationx, pe.spinaxis3dseamorientationrotationy,
+        pe.spinaxis3dseamorientationrotationz,
+        ROW_NUMBER() OVER (
+          PARTITION BY bf.pitch_type ORDER BY bf.session_date DESC, bf.pitch_uid DESC
+        ) AS detail_rank
+      FROM public.pitch_flight_backfill bf
+      JOIN public.pitch_events pe
+        ON pe.school_code = bf.school_code AND ${pitchIdentifier} = bf.pitch_uid
+      WHERE ${where.join('\n        AND ')}
+        AND ${requiredCoordinates.join('\n        AND ')}
+    )
+    SELECT
+      pitch_type, pitch_uid, session_date AS sample_date, pitcher,
+      pitcher_throws, spin_rate,
+      ${textNumber('spinaxis3dactivespinrate')} AS active_spin_rate,
+      ${textNumber('spinaxis3dspinefficiency')} AS spin_efficiency,
+      velocity, extension, ivb, hb,
+      NULLIF(TRIM(COALESCE(spinaxis3dtilt, '')), '') AS measured_tilt,
+      NULL::text AS break_tilt,
+      ${textNumber('spinaxis3dtransverseangle')} AS transverse_angle,
+      ${textNumber('spinaxis3dlongitudinalangle')} AS longitudinal_angle,
+      ${textNumber('spinaxis3dvectorx')} AS axis_x,
+      ${textNumber('spinaxis3dvectory')} AS axis_y,
+      ${textNumber('spinaxis3dvectorz')} AS axis_z,
+      ${textNumber('spinaxis3dseamorientationrotationx')} AS rotation_x,
+      ${textNumber('spinaxis3dseamorientationrotationy')} AS rotation_y,
+      ${textNumber('spinaxis3dseamorientationrotationz')} AS rotation_z,
+      'trackman_measured'::text AS source,
+      NULL::double precision AS confidence, NULL::text AS source_url,
+      'trackman'::text AS coordinate_frame
+    FROM ranked
+    WHERE lower(COALESCE(pitch_type, '')) <> 'undefined'
+      AND (${focusedPitcher ? 'TRUE' : `detail_rank <= ${detailLimit!}`})
+    ORDER BY pitch_type, sample_date DESC, pitch_uid DESC
+  `;
+  const result = await getDbPool().query<SpinSampleRow>(query, params);
+  return result.rows;
+}
+
 function backfillArsenalWhere(args: {
   schoolCode: string;
   search: URLSearchParams;
@@ -1085,15 +1146,18 @@ export async function GET(request: Request) {
       };
       rows = mergeFlightRows([forwardRows, backfillRows]);
       if (detailMode === 'spin') {
-        const [measuredSamples, videoSamples] = await Promise.all([
+        const [legacyMeasuredSamples, eventMeasuredSamples, videoSamples] = await Promise.all([
           collegeSpinSamples({ schoolCode, search: url.searchParams, scopedPitcher }),
+          pitchEventMeasuredSpinSamples({ schoolCode, search: url.searchParams, scopedPitcher }),
           collegeVideoSpinSamples({ schoolCode, search: url.searchParams, scopedPitcher }),
         ]);
         const byPitch = new Map<string, SpinSampleRow>();
         for (const row of videoSamples) byPitch.set(row.pitch_uid ?? `video:${row.pitch_type}:${row.sample_date}`, row);
         // Measured TrackMan seam coordinates always take precedence when the
         // same pitch also has a video-derived estimate.
-        for (const row of measuredSamples) byPitch.set(row.pitch_uid ?? `measured:${row.pitch_type}:${row.sample_date}`, row);
+        for (const row of [...legacyMeasuredSamples, ...eventMeasuredSamples]) {
+          byPitch.set(row.pitch_uid ?? `measured:${row.pitch_type}:${row.sample_date}`, row);
+        }
         spinSamples = Array.from(byPitch.values());
       }
       if (detailMode === 'pitches') {

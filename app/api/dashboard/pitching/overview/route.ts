@@ -6,6 +6,7 @@ import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, shouldScopeDashb
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 import { ensureAuthDbReady, getDbPool, isDatabaseConfigured } from '../../../../../lib/auth-db';
 import { getPlayerProLinkByPlayerName } from '../../../../../lib/training-db';
+import { isCrossSchoolPlayerSelection } from '../../../../../lib/cross-school-player-data';
 
 export const maxDuration = 300;
 const PITCHING_OVERVIEW_CACHE_VERSION = 'adv-metrics-v9';
@@ -399,6 +400,7 @@ async function maybeAttachPitchingHeatmapRollup(params: {
   } = params;
   const includeChartsRequested = isTruthy(includeChartPoints);
   if (!includeChartsRequested) return payload;
+  if (isCrossSchoolPlayerSelection(schoolCode, pitcher)) return payload;
   if (String(splitBy ?? '').trim().toLowerCase() === 'game') return payload;
   if (isTruthy(forceRaw)) return payload;
   const isChartOnly = isTruthy(chartOnly);
@@ -745,6 +747,7 @@ async function maybeReturnPitchingHeatmapRollupDirect(params: {
     allowPitchLevelVideoFallback = false,
   } = params;
   if (!isTruthy(includeChartPoints) || !isTruthy(chartOnly)) return null;
+  if (isCrossSchoolPlayerSelection(schoolCode, pitcher)) return null;
   const upperSchoolCode = String(schoolCode ?? '').trim().toUpperCase();
   if (upperSchoolCode === 'PRO') return null;
   // Heatmap-rollup bins are aggregate grid data, not individual pitches — skip for specific pitcher

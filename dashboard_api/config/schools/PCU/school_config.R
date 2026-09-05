@@ -155,7 +155,8 @@ school_config <- list(
   "Hughes, Carter",
   "Roodenburg, Russell",
   "Rankin, Beckett",
-  "O’Brasky, Jack"
+  "O’Brasky, Jack",
+  "Lugo, Alejandro"
 
   ),
   allowed_hitters = c(
@@ -248,6 +249,7 @@ school_config <- list(
   "Daniels, Tate",
   "Mogen, Cristian",
   "Wheeler, Henry",
+  "Lugo, Alejandro",
   "Hargrave, Jonah",
   "Theile, Garrett",
   "Daniels, Tyke",

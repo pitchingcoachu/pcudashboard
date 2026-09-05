@@ -39,7 +39,9 @@ export async function GET(request: Request) {
     .filter((value) => value && value.toLowerCase() !== 'all');
 
   const splitByRaw = url.searchParams.get('splitBy');
-  const splitBy = splitByRaw === 'targetSize' || splitByRaw === 'ballType' ? splitByRaw : 'pitchType';
+  const splitBy = splitByRaw === 'targetSize' || splitByRaw === 'targetLocation' || splitByRaw === 'ballType'
+    ? splitByRaw
+    : 'pitchType';
 
   if (url.searchParams.get('leaderboard') === '1') {
     const [leaderboard, stats] = await Promise.all([

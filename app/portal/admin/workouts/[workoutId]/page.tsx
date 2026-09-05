@@ -99,8 +99,8 @@ export default async function EditWorkoutPage({ params, searchParams }: EditWork
           </label>
           <label className="portal-form-span-2">
             Calendar Click Target
-            <select name="calendarLinkTarget" defaultValue={workout.calendarLinkTarget}>
-              <option value="none">Open workout details</option>
+            <select name="calendarLinkTarget" defaultValue={workout.calendarLinkTarget === 'none' ? 'details' : workout.calendarLinkTarget}>
+              <option value="details">Open workout details</option>
               <option value="throwing">Throwing Calendar</option>
               <option value="bullpens">Bullpens</option>
               <option value="drills">Drills</option>

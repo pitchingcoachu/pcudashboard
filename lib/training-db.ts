@@ -2,7 +2,9 @@ import { createPasswordHash, ensureAuthDbReady, getDbPool, isDatabaseConfigured,
 import { NOTE_ATTACHMENT_DATA_URL_MAX_LENGTH } from './note-attachment-limits';
 import { resolveHomeDashboardSchoolCode } from './dashboard-home-school';
 import { pitchLocationLabel } from './pitch-location';
+import { intendedTargetLocation } from './intended-target-location';
 import type { PortalActivityEventType } from './portal-activity';
+export { intendedTargetLocation } from './intended-target-location';
 const DEFAULT_DASHBOARD_URL = 'https://pitchingcoachu.shinyapps.io/TMdata/';
 const DASHBOARD_TRIAL_ORG_PREFIX = 'Dashboard Trial - ';
 const DEFAULT_DASHBOARD_TRIAL_TEMPLATE_ORG_ID = 22;
@@ -338,7 +340,7 @@ export type WorkoutDetailRow = {
   items: WorkoutEditorItem[];
 };
 
-export type CalendarLinkTarget = 'none' | 'throwing' | 'bullpens' | 'velocity' | 'drills';
+export type CalendarLinkTarget = 'none' | 'details' | 'throwing' | 'bullpens' | 'velocity' | 'drills';
 
 export type ScheduleTemplateItemRow = {
   id: number;
@@ -941,66 +943,77 @@ export async function ensureTrainingDbReady(): Promise<void> {
 // rest of Pitching Suite identifies pitchers -- by their TrackMan name
 // string ("Last, First") -- since that's this tab's existing identity
 // system and works even for a pitcher without a full player profile.
+let intendedZoneSchemaReady: Promise<void> | null = null;
+
 export async function ensureIntendedZoneSchema(): Promise<void> {
   if (!isDatabaseConfigured()) return;
-  const pool = getDbPool();
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS intended_zone_sessions (
-      id BIGSERIAL PRIMARY KEY,
-      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-      pitcher_name TEXT,
-      trackman_session_id TEXT,
-      target_radius_ft DOUBLE PRECISION NOT NULL DEFAULT 0.3,
-      started_by_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL,
-      started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      ended_at TIMESTAMPTZ
-    );
-  `);
-  await pool.query(
-    `CREATE INDEX IF NOT EXISTS idx_intended_zone_sessions_org_pitcher ON intended_zone_sessions (organization_id, pitcher_name, started_at DESC);`
-  );
-  // 'live' = polls TrackMan's Data API in real time (requires a B1 unit +
-  // API credentials); 'ftp_deferred' = targets are queued with no live
-  // match, then matched later by matchIntendedZoneSessionByPitcherAndTime
-  // once the FTP/CSV sync ingests that day's pitch_events -- for schools
-  // without live Data API access; 'manual' = no TrackMan at all -- the
-  // coach taps both the intended target and the actual landing spot for
-  // each pitch (recordManualIntendedZonePitch).
-  await pool.query(`ALTER TABLE intended_zone_sessions ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'live';`);
+  if (!intendedZoneSchemaReady) {
+    intendedZoneSchemaReady = (async () => {
+      const pool = getDbPool();
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS intended_zone_sessions (
+          id BIGSERIAL PRIMARY KEY,
+          organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          pitcher_name TEXT,
+          trackman_session_id TEXT,
+          target_radius_ft DOUBLE PRECISION NOT NULL DEFAULT 0.3,
+          started_by_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL,
+          started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          ended_at TIMESTAMPTZ
+        );
+      `);
+      await pool.query(
+        `CREATE INDEX IF NOT EXISTS idx_intended_zone_sessions_org_pitcher ON intended_zone_sessions (organization_id, pitcher_name, started_at DESC);`
+      );
+      // 'live' = polls TrackMan's Data API in real time (requires a B1 unit +
+      // API credentials); 'ftp_deferred' = targets are queued with no live
+      // match, then matched later by matchIntendedZoneSessionByPitcherAndTime
+      // once the FTP/CSV sync ingests that day's pitch_events -- for schools
+      // without live Data API access; 'manual' = no TrackMan at all -- the
+      // coach taps both the intended target and the actual landing spot for
+      // each pitch (recordManualIntendedZonePitch).
+      await pool.query(`ALTER TABLE intended_zone_sessions ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'live';`);
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS intended_zone_pitches (
-      id BIGSERIAL PRIMARY KEY,
-      session_id BIGINT NOT NULL REFERENCES intended_zone_sessions(id) ON DELETE CASCADE,
-      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-      pitch_index INTEGER NOT NULL,
-      trackman_play_id TEXT,
-      trackman_pitch_uid TEXT,
-      intended_side_ft DOUBLE PRECISION NOT NULL,
-      intended_height_ft DOUBLE PRECISION NOT NULL,
-      target_radius_ft DOUBLE PRECISION NOT NULL,
-      plate_loc_side DOUBLE PRECISION,
-      plate_loc_height DOUBLE PRECISION,
-      miss_distance_ft DOUBLE PRECISION,
-      miss_direction TEXT,
-      pitch_type TEXT,
-      rel_speed DOUBLE PRECISION,
-      induced_vert_break DOUBLE PRECISION,
-      horz_break DOUBLE PRECISION,
-      pitch_events_id BIGINT,
-      thrown_at TIMESTAMPTZ,
-      tagged_pitcher_name TEXT,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      UNIQUE (session_id, pitch_index)
-    );
-  `);
-  await pool.query(`ALTER TABLE intended_zone_pitches ADD COLUMN IF NOT EXISTS tagged_pitcher_name TEXT;`);
-  await pool.query(
-    `CREATE INDEX IF NOT EXISTS idx_intended_zone_pitches_session ON intended_zone_pitches (session_id, pitch_index);`
-  );
-  await pool.query(
-    `CREATE INDEX IF NOT EXISTS idx_intended_zone_pitches_play_id ON intended_zone_pitches (trackman_play_id) WHERE trackman_play_id IS NOT NULL;`
-  );
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS intended_zone_pitches (
+          id BIGSERIAL PRIMARY KEY,
+          session_id BIGINT NOT NULL REFERENCES intended_zone_sessions(id) ON DELETE CASCADE,
+          organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          pitch_index INTEGER NOT NULL,
+          trackman_play_id TEXT,
+          trackman_pitch_uid TEXT,
+          intended_side_ft DOUBLE PRECISION NOT NULL,
+          intended_height_ft DOUBLE PRECISION NOT NULL,
+          target_radius_ft DOUBLE PRECISION NOT NULL,
+          plate_loc_side DOUBLE PRECISION,
+          plate_loc_height DOUBLE PRECISION,
+          miss_distance_ft DOUBLE PRECISION,
+          miss_direction TEXT,
+          pitch_type TEXT,
+          rel_speed DOUBLE PRECISION,
+          induced_vert_break DOUBLE PRECISION,
+          horz_break DOUBLE PRECISION,
+          pitch_events_id BIGINT,
+          thrown_at TIMESTAMPTZ,
+          tagged_pitcher_name TEXT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          UNIQUE (session_id, pitch_index)
+        );
+      `);
+      await pool.query(`ALTER TABLE intended_zone_pitches ADD COLUMN IF NOT EXISTS tagged_pitcher_name TEXT;`);
+      await pool.query(`ALTER TABLE intended_zone_pitches ADD COLUMN IF NOT EXISTS trackman_ball_count_at_target INTEGER;`);
+      await pool.query(
+        `CREATE INDEX IF NOT EXISTS idx_intended_zone_pitches_session ON intended_zone_pitches (session_id, pitch_index);`
+      );
+      await pool.query(
+        `CREATE INDEX IF NOT EXISTS idx_intended_zone_pitches_play_id ON intended_zone_pitches (trackman_play_id) WHERE trackman_play_id IS NOT NULL;`
+      );
+    })().catch((error) => {
+      intendedZoneSchemaReady = null;
+      throw error;
+    });
+  }
+  await intendedZoneSchemaReady;
 }
 
 export type IntendedZoneSessionMode = 'live' | 'ftp_deferred' | 'manual';
@@ -1051,6 +1064,11 @@ export type IntendedZonePitchRow = {
   pitchEventsId: number | null;
   thrownAt: string | null;
   taggedPitcherName: string | null;
+  /** Drives which screen side (left/right) the live direction heatmap
+   * renders "glove" vs "arm" in. Read off the linked pitch_events row (same
+   * join fetchIntendedZoneStatRows uses); null when unlinked (e.g. no
+   * TrackMan match yet, or manual-mode sessions). */
+  pitcherThrows: string | null;
 };
 
 /** Classifies a miss into a 3x3 grid (vertical x horizontal) relative to the
@@ -1206,11 +1224,94 @@ export async function queueIntendedZoneTarget(input: {
   return { ok: true, pitchId: inserted.rows[0].id, pitchIndex };
 }
 
+/** Atomically creates the next pending target or moves the existing pending
+ * target. Locking the session row prevents rapid projector taps from creating
+ * two targets before either request can observe the other. Once TrackMan has
+ * matched the row, the next tap naturally creates the next pitch target. */
+export async function placeOrMoveIntendedZoneTarget(input: {
+  organizationId: number;
+  sessionId: number;
+  intendedSideFt: number;
+  intendedHeightFt: number;
+  targetRadiusFt: number;
+  trackmanBallCountAtTarget: number | null;
+}): Promise<{ ok: true; pitchId: number; pitchIndex: number; moved: boolean } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureIntendedZoneSchema();
+  const pool = getDbPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const sessionCheck = await client.query(
+      `SELECT id FROM intended_zone_sessions WHERE id = $1 AND organization_id = $2 LIMIT 1 FOR UPDATE`,
+      [input.sessionId, input.organizationId],
+    );
+    if ((sessionCheck.rowCount ?? 0) === 0) {
+      await client.query('ROLLBACK');
+      return { ok: false, error: 'Session was not found.' };
+    }
+
+    const pending = await client.query<{ id: number; pitch_index: number }>(
+      `SELECT id, pitch_index
+       FROM intended_zone_pitches
+       WHERE session_id = $1
+         AND organization_id = $2
+         AND trackman_play_id IS NULL
+         AND pitch_events_id IS NULL
+         AND plate_loc_side IS NULL
+         AND plate_loc_height IS NULL
+       ORDER BY pitch_index ASC, id ASC
+       LIMIT 1
+       FOR UPDATE`,
+      [input.sessionId, input.organizationId],
+    );
+    const existing = pending.rows[0];
+    if (existing) {
+      await client.query(
+        `UPDATE intended_zone_pitches
+         SET intended_side_ft = $1, intended_height_ft = $2, target_radius_ft = $3
+         WHERE id = $4 AND organization_id = $5`,
+        [input.intendedSideFt, input.intendedHeightFt, input.targetRadiusFt, existing.id, input.organizationId],
+      );
+      await client.query('COMMIT');
+      return { ok: true, pitchId: Number(existing.id), pitchIndex: Number(existing.pitch_index), moved: true };
+    }
+
+    const nextIndex = await client.query<{ next: number }>(
+      `SELECT COALESCE(MAX(pitch_index), 0) + 1 AS next FROM intended_zone_pitches WHERE session_id = $1`,
+      [input.sessionId],
+    );
+    const pitchIndex = Number(nextIndex.rows[0].next);
+    const inserted = await client.query<{ id: number }>(
+      `INSERT INTO intended_zone_pitches
+         (session_id, organization_id, pitch_index, intended_side_ft, intended_height_ft, target_radius_ft,
+          trackman_ball_count_at_target)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id`,
+      [
+        input.sessionId,
+        input.organizationId,
+        pitchIndex,
+        input.intendedSideFt,
+        input.intendedHeightFt,
+        input.targetRadiusFt,
+        input.trackmanBallCountAtTarget,
+      ],
+    );
+    await client.query('COMMIT');
+    return { ok: true, pitchId: Number(inserted.rows[0].id), pitchIndex, moved: false };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 /** Fills in actual location/miss data for the oldest still-unmatched queued
- * target in this session, using a freshly-fetched TrackMan pitch. Returns
- * null if there's no pending (un-thrown) target to match against -- the
- * caller should treat that pitch as "extra" (thrown without a tap) and skip
- * it, rather than silently attaching it to the wrong target. */
+ * target in this session, using a freshly-fetched TrackMan pitch. If this
+ * play was matched previously, refreshes that row instead; this lets durable
+ * webhook events self-repair after a normalization correction. */
 export async function matchIntendedZonePitch(input: {
   organizationId: number;
   sessionId: number;
@@ -1225,12 +1326,13 @@ export async function matchIntendedZonePitch(input: {
   taggedPitcherName: string | null;
   thrownAt: string | null;
   targetCreatedBefore?: string | null;
+  trackmanBallIndex?: number | null;
 }): Promise<{ ok: true; pitch: IntendedZonePitchRow } | { ok: false; error: string }> {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureIntendedZoneSchema();
   const pool = getDbPool();
 
-  const pending = await pool.query<{
+  const existing = await pool.query<{
     id: number;
     pitch_index: number;
     intended_side_ft: number;
@@ -1239,13 +1341,32 @@ export async function matchIntendedZonePitch(input: {
   }>(
     `SELECT id, pitch_index, intended_side_ft, intended_height_ft, target_radius_ft
      FROM intended_zone_pitches
-     WHERE session_id = $1 AND organization_id = $2 AND trackman_play_id IS NULL
-       AND ($3::timestamptz IS NULL OR created_at <= $3::timestamptz)
-     ORDER BY pitch_index ASC
+     WHERE session_id = $1 AND organization_id = $2 AND trackman_play_id = $3
      LIMIT 1`,
-    [input.sessionId, input.organizationId, input.targetCreatedBefore ?? null]
+    [input.sessionId, input.organizationId, input.trackmanPlayId]
   );
-  const target = pending.rows[0];
+  const pending = existing.rows[0]
+    ? null
+    : await pool.query<{
+        id: number;
+        pitch_index: number;
+        intended_side_ft: number;
+        intended_height_ft: number;
+        target_radius_ft: number;
+      }>(
+        `SELECT id, pitch_index, intended_side_ft, intended_height_ft, target_radius_ft
+         FROM intended_zone_pitches
+         WHERE session_id = $1 AND organization_id = $2 AND trackman_play_id IS NULL
+           AND ($3::timestamptz IS NULL OR created_at <= $3::timestamptz)
+           AND (
+             $4::integer IS NULL
+             OR (trackman_ball_count_at_target IS NOT NULL AND $4 >= trackman_ball_count_at_target)
+           )
+         ORDER BY pitch_index ASC
+         LIMIT 1`,
+        [input.sessionId, input.organizationId, input.targetCreatedBefore ?? null, input.trackmanBallIndex ?? null]
+      );
+  const target = existing.rows[0] ?? pending?.rows[0];
   if (!target) return { ok: false, error: 'No pending intended target to match this pitch to.' };
 
   let missDistanceFt: number | null = null;
@@ -1269,13 +1390,14 @@ export async function matchIntendedZonePitch(input: {
        plate_loc_height = $3,
        miss_distance_ft = $4,
        miss_direction = $5,
-       pitch_type = $6,
+       pitch_type = COALESCE($6, pitch_type),
        rel_speed = $7,
        induced_vert_break = $8,
        horz_break = $9,
-       thrown_at = $10,
-       tagged_pitcher_name = $11
+       thrown_at = COALESCE($10, thrown_at),
+       tagged_pitcher_name = COALESCE($11, tagged_pitcher_name)
      WHERE id = $12
+       AND (trackman_play_id IS NULL OR trackman_play_id = $1)
      RETURNING id, session_id, pitch_index, trackman_play_id, intended_side_ft, intended_height_ft, target_radius_ft,
        plate_loc_side, plate_loc_height, miss_distance_ft, miss_direction, pitch_type, rel_speed, induced_vert_break,
        horz_break, pitch_events_id, thrown_at, tagged_pitcher_name`,
@@ -1295,6 +1417,9 @@ export async function matchIntendedZonePitch(input: {
     ]
   );
   const row = updated.rows[0];
+  if (!row) {
+    return { ok: false, error: 'The pending target was already matched by another live refresh.' };
+  }
   return {
     ok: true,
     pitch: {
@@ -1316,6 +1441,7 @@ export async function matchIntendedZonePitch(input: {
       pitchEventsId: row.pitch_events_id,
       thrownAt: row.thrown_at,
       taggedPitcherName: row.tagged_pitcher_name,
+      pitcherThrows: input.pitcherThrows,
     },
   };
 }
@@ -1390,12 +1516,13 @@ export async function listIntendedZonePitches(input: { organizationId: number; s
   await ensureIntendedZoneSchema();
   const pool = getDbPool();
   const result = await pool.query(
-    `SELECT id, session_id, pitch_index, trackman_play_id, intended_side_ft, intended_height_ft, target_radius_ft,
-       plate_loc_side, plate_loc_height, miss_distance_ft, miss_direction, pitch_type, rel_speed, induced_vert_break,
-       horz_break, pitch_events_id, thrown_at, tagged_pitcher_name
-     FROM intended_zone_pitches
-     WHERE session_id = $1 AND organization_id = $2
-     ORDER BY pitch_index ASC`,
+    `SELECT izp.id, izp.session_id, izp.pitch_index, izp.trackman_play_id, izp.intended_side_ft, izp.intended_height_ft, izp.target_radius_ft,
+       izp.plate_loc_side, izp.plate_loc_height, izp.miss_distance_ft, izp.miss_direction, izp.pitch_type, izp.rel_speed, izp.induced_vert_break,
+       izp.horz_break, izp.pitch_events_id, izp.thrown_at, izp.tagged_pitcher_name, pe.pitcherthrows
+     FROM intended_zone_pitches izp
+     LEFT JOIN pitch_events pe ON pe.id = izp.pitch_events_id
+     WHERE izp.session_id = $1 AND izp.organization_id = $2
+     ORDER BY izp.pitch_index ASC`,
     [input.sessionId, input.organizationId]
   );
   return result.rows.map((row) => ({
@@ -1417,7 +1544,161 @@ export async function listIntendedZonePitches(input: { organizationId: number; s
     pitchEventsId: row.pitch_events_id,
     thrownAt: row.thrown_at,
     taggedPitcherName: row.tagged_pitcher_name,
+    pitcherThrows: row.pitcherthrows,
   }));
+}
+
+export async function getPendingIntendedZoneTargetCursor(input: {
+  organizationId: number;
+  sessionId: number;
+}): Promise<{ createdAt: string; trackmanBallCountAtTarget: number | null } | null> {
+  if (!isDatabaseConfigured()) return null;
+  await ensureIntendedZoneSchema();
+  const result = await getDbPool().query(
+    `SELECT created_at, trackman_ball_count_at_target
+     FROM intended_zone_pitches
+     WHERE session_id = $1
+       AND organization_id = $2
+       AND trackman_play_id IS NULL
+       AND pitch_events_id IS NULL
+       AND plate_loc_side IS NULL
+       AND plate_loc_height IS NULL
+     ORDER BY pitch_index ASC, id ASC
+     LIMIT 1`,
+    [input.sessionId, input.organizationId]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    createdAt: new Date(row.created_at).toISOString(),
+    trackmanBallCountAtTarget:
+      row.trackman_ball_count_at_target === null ? null : Number(row.trackman_ball_count_at_target),
+  };
+}
+
+export async function setPendingIntendedZoneTargetBallCount(input: {
+  organizationId: number;
+  pitchId: number;
+  trackmanBallCountAtTarget: number;
+}): Promise<void> {
+  if (!isDatabaseConfigured()) return;
+  await ensureIntendedZoneSchema();
+  await getDbPool().query(
+    `UPDATE intended_zone_pitches
+     SET trackman_ball_count_at_target = $1
+     WHERE id = $2
+       AND organization_id = $3
+       AND trackman_play_id IS NULL
+       AND pitch_events_id IS NULL
+       AND plate_loc_side IS NULL
+       AND plate_loc_height IS NULL
+       AND trackman_ball_count_at_target IS NULL`,
+    [input.trackmanBallCountAtTarget, input.pitchId, input.organizationId]
+  );
+}
+
+export type IntendedZonePitchLogRow = IntendedZonePitchRow & {
+  pitcherName: string;
+  ballType: string;
+  sessionMode: IntendedZoneSessionMode;
+  sessionStartedAt: string;
+  targetLocation: number;
+  targetHit: boolean;
+};
+
+/** Every completed pitch from prior/current Intended Target sessions for the
+ * requested dashboard filters. Unmatched queued targets are intentionally
+ * excluded because they were never recorded as thrown pitches. */
+export async function listIntendedZonePitchLog(input: {
+  organizationId: number;
+  pitcherName?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  pitchTypes?: string[] | null;
+  ballTypes?: string[] | null;
+}): Promise<IntendedZonePitchLogRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureIntendedZoneSchema();
+  const pool = getDbPool();
+  const conditions = [
+    'izp.organization_id = $1',
+    'izp.plate_loc_side IS NOT NULL',
+    'izp.plate_loc_height IS NOT NULL',
+  ];
+  const params: (string | number | string[])[] = [input.organizationId];
+
+  if (input.pitcherName) {
+    params.push(input.pitcherName);
+    conditions.push(`COALESCE(izp.tagged_pitcher_name, s.pitcher_name) = $${params.length}`);
+  }
+  if (input.startDate) {
+    params.push(input.startDate);
+    conditions.push(`COALESCE(izp.thrown_at, s.started_at) >= $${params.length}::date`);
+  }
+  if (input.endDate) {
+    params.push(input.endDate);
+    conditions.push(`COALESCE(izp.thrown_at, s.started_at) < ($${params.length}::date + INTERVAL '1 day')`);
+  }
+  if (input.pitchTypes?.length) {
+    params.push(input.pitchTypes);
+    conditions.push(`COALESCE(izp.pitch_type, 'Undefined') = ANY($${params.length}::text[])`);
+  }
+  if (input.ballTypes?.length) {
+    params.push(input.ballTypes);
+    conditions.push(`COALESCE(NULLIF(TRIM(pe.customlabel), ''), 'Baseball') = ANY($${params.length}::text[])`);
+  }
+
+  const result = await pool.query(
+    `SELECT izp.id, izp.session_id, izp.pitch_index, izp.trackman_play_id,
+            izp.intended_side_ft, izp.intended_height_ft, izp.target_radius_ft,
+            izp.plate_loc_side, izp.plate_loc_height, izp.miss_distance_ft,
+            izp.miss_direction, COALESCE(izp.pitch_type, 'Undefined') AS pitch_type,
+            izp.rel_speed, izp.induced_vert_break, izp.horz_break,
+            izp.pitch_events_id, izp.thrown_at, izp.tagged_pitcher_name,
+            COALESCE(izp.tagged_pitcher_name, s.pitcher_name) AS pitcher_name,
+            COALESCE(NULLIF(TRIM(pe.customlabel), ''), 'Baseball') AS ball_type,
+            pe.pitcherthrows, s.mode, s.started_at
+     FROM intended_zone_pitches izp
+     JOIN intended_zone_sessions s ON s.id = izp.session_id
+     LEFT JOIN pitch_events pe ON pe.id = izp.pitch_events_id
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY COALESCE(izp.thrown_at, s.started_at) DESC, izp.id DESC`,
+    params
+  );
+
+  return result.rows.map((row) => {
+    const targetRadiusFt = Number(row.target_radius_ft);
+    const missDistanceFt = row.miss_distance_ft !== null ? Number(row.miss_distance_ft) : null;
+    const intendedSideFt = Number(row.intended_side_ft);
+    const intendedHeightFt = Number(row.intended_height_ft);
+    return {
+      id: Number(row.id),
+      sessionId: Number(row.session_id),
+      pitchIndex: Number(row.pitch_index),
+      trackmanPlayId: row.trackman_play_id,
+      intendedSideFt,
+      intendedHeightFt,
+      targetRadiusFt,
+      plateLocSide: Number(row.plate_loc_side),
+      plateLocHeight: Number(row.plate_loc_height),
+      missDistanceFt,
+      missDirection: row.miss_direction,
+      pitchType: row.pitch_type,
+      relSpeed: row.rel_speed !== null ? Number(row.rel_speed) : null,
+      inducedVertBreak: row.induced_vert_break !== null ? Number(row.induced_vert_break) : null,
+      horzBreak: row.horz_break !== null ? Number(row.horz_break) : null,
+      pitchEventsId: row.pitch_events_id !== null ? Number(row.pitch_events_id) : null,
+      thrownAt: row.thrown_at,
+      taggedPitcherName: row.tagged_pitcher_name,
+      pitcherThrows: row.pitcherthrows,
+      pitcherName: String(row.pitcher_name ?? ''),
+      ballType: String(row.ball_type),
+      sessionMode: row.mode as IntendedZoneSessionMode,
+      sessionStartedAt: row.started_at,
+      targetLocation: intendedTargetLocation(intendedSideFt, intendedHeightFt),
+      targetHit: missDistanceFt !== null && missDistanceFt <= targetRadiusFt,
+    };
+  });
 }
 
 /** Best-effort link from an intended-zone pitch to the corresponding
@@ -1670,17 +1951,25 @@ export type IntendedZonePitchTypeStat = {
   pitchType: string;
   pitchCount: number;
   avgMissDistanceFt: number | null;
+  medianMissDistanceFt: number | null;
   directionBreakdown: IntendedZoneDirectionBreakdown;
   topMissDirection: IntendedZoneMissDirection | null;
   inZonePct: number | null;
   competitivePct: number | null;
   targetHitRates: IntendedZoneTargetHitRate[];
+  /** Drives which screen side (left/right) the direction heatmap renders
+   * "glove" vs "arm" in -- mirrored for lefties so the grid matches the
+   * physical view of standing behind that specific pitcher. Majority vote
+   * across this group's rows (virtually always unanimous when scoped to
+   * one pitcher, which "This Pitcher" always is). */
+  throwsLeft: boolean;
 };
 
 export type IntendedZonePitcherStat = {
   pitcherName: string;
   pitchCount: number;
   avgMissDistanceFt: number | null;
+  medianMissDistanceFt: number | null;
   missDistanceStdDevFt: number | null;
   bestPitchType: string | null;
   directionBreakdown: IntendedZoneDirectionBreakdown;
@@ -1688,6 +1977,10 @@ export type IntendedZonePitcherStat = {
   inZonePct: number | null;
   competitivePct: number | null;
   targetHitRates: IntendedZoneTargetHitRate[];
+  /** Drives which screen side (left/right) the direction heatmap renders
+   * "glove" vs "arm" in -- mirrored for lefties so the grid matches the
+   * physical view of standing behind that specific pitcher. */
+  throwsLeft: boolean;
 };
 
 /** Buckets rows by target size, rounded to the nearest whole inch (radius
@@ -1755,19 +2048,32 @@ async function fetchIntendedZoneStatRows(input: {
     inZone: boolean;
     competitive: boolean;
     targetRadiusFt: number;
+    targetLocation: number;
     targetHit: boolean;
+    throwsLeft: boolean;
+    missSideFt: number;
+    missHeightFt: number;
   }[]
 > {
   if (!isDatabaseConfigured()) return [];
   await ensureIntendedZoneSchema();
   const pool = getDbPool();
 
+  const resolvedPitcherNameSql = `COALESCE(izp.tagged_pitcher_name, s.pitcher_name)`;
+  // TrackMan tags pitchers as "Last, First", while player profiles and the
+  // dashboard filters use "First Last". Resolve both the selected-player
+  // comparison and returned leaderboard label through one canonical form.
+  const firstLastPitcherNameSql = `(CASE
+    WHEN POSITION(',' IN ${resolvedPitcherNameSql}) > 0
+      THEN TRIM(SPLIT_PART(${resolvedPitcherNameSql}, ',', 2)) || ' ' || TRIM(SPLIT_PART(${resolvedPitcherNameSql}, ',', 1))
+    ELSE TRIM(${resolvedPitcherNameSql})
+  END)`;
   const conditions = ['izp.organization_id = $1', 'izp.miss_distance_ft IS NOT NULL', 'izp.miss_direction IS NOT NULL'];
   const params: (string | number | string[])[] = [input.organizationId];
 
   if (input.pitcherName) {
     params.push(input.pitcherName);
-    conditions.push(`COALESCE(izp.tagged_pitcher_name, s.pitcher_name) = $${params.length}`);
+    conditions.push(`LOWER(${firstLastPitcherNameSql}) = LOWER(TRIM($${params.length}::text))`);
   }
   if (input.startDate) {
     params.push(input.startDate);
@@ -1791,10 +2097,12 @@ async function fetchIntendedZoneStatRows(input: {
   }
 
   const result = await pool.query(
-    `SELECT COALESCE(izp.tagged_pitcher_name, s.pitcher_name) AS pitcher_name,
+    `SELECT ${firstLastPitcherNameSql} AS pitcher_name,
             COALESCE(izp.pitch_type, 'Undefined') AS pitch_type,
             COALESCE(NULLIF(TRIM(pe.customlabel), ''), 'Baseball') AS ball_type,
-            izp.miss_distance_ft, izp.miss_direction, izp.plate_loc_side, izp.plate_loc_height, izp.target_radius_ft
+            izp.miss_distance_ft, izp.miss_direction, izp.plate_loc_side, izp.plate_loc_height,
+            izp.intended_side_ft, izp.intended_height_ft, izp.target_radius_ft,
+            pe.pitcherthrows
      FROM intended_zone_pitches izp
      JOIN intended_zone_sessions s ON s.id = izp.session_id
      LEFT JOIN pitch_events pe ON pe.id = izp.pitch_events_id
@@ -1810,6 +2118,8 @@ async function fetchIntendedZoneStatRows(input: {
       const label = pitchLocationLabel(plateLocSide, plateLocHeight);
       const missDistanceFt = Number(row.miss_distance_ft);
       const targetRadiusFt = Number(row.target_radius_ft);
+      const intendedSideFt = Number(row.intended_side_ft);
+      const intendedHeightFt = Number(row.intended_height_ft);
       return {
         pitcherName: String(row.pitcher_name),
         pitchType: String(row.pitch_type),
@@ -1819,17 +2129,99 @@ async function fetchIntendedZoneStatRows(input: {
         inZone: label === 'Yes',
         competitive: label === 'Yes' || label === 'Competitive',
         targetRadiusFt,
+        targetLocation: intendedTargetLocation(intendedSideFt, intendedHeightFt),
         targetHit: missDistanceFt <= targetRadiusFt,
+        // Same 'starts with l' check classifyMissDirection uses -- defaults
+        // to right-handed framing when unknown (unlinked pitch_events row,
+        // e.g. manual-mode sessions), matching that function's convention.
+        throwsLeft: String(row.pitcherthrows ?? '').trim().toLowerCase().startsWith('l'),
+        missSideFt: (plateLocSide ?? Number.NaN) - intendedSideFt,
+        missHeightFt: (plateLocHeight ?? Number.NaN) - intendedHeightFt,
       };
-    });
+    })
+    .filter((row) => Number.isFinite(row.missSideFt) && Number.isFinite(row.missHeightFt));
 }
 
-export type IntendedZoneStatsSplitBy = 'pitchType' | 'targetSize' | 'ballType';
+export type IntendedZoneStatsSplitBy = 'pitchType' | 'targetSize' | 'targetLocation' | 'ballType';
 
-function groupKeyForRow(row: { pitchType: string; ballType: string; targetRadiusFt: number }, splitBy: IntendedZoneStatsSplitBy): string {
+export type IntendedZoneTargetingSample = {
+  pitchCount: number;
+  avgMissSideFt: number;
+  avgMissHeightFt: number;
+  avgMissDistanceFt: number;
+};
+
+export type IntendedZoneTargetingProfile = {
+  pitchType: string;
+  pitchCount: number;
+  throwsLeft: boolean;
+  overall: IntendedZoneTargetingSample;
+  byLocation: Record<string, IntendedZoneTargetingSample>;
+};
+
+function summarizeTargetingRows(rows: { missSideFt: number; missHeightFt: number; missDistanceFt: number }[]): IntendedZoneTargetingSample {
+  return {
+    pitchCount: rows.length,
+    avgMissSideFt: rows.reduce((sum, row) => sum + row.missSideFt, 0) / rows.length,
+    avgMissHeightFt: rows.reduce((sum, row) => sum + row.missHeightFt, 0) / rows.length,
+    avgMissDistanceFt: rows.reduce((sum, row) => sum + row.missDistanceFt, 0) / rows.length,
+  };
+}
+
+/** Builds the correction models used by the Targeting workspace. The client
+ * chooses a location-specific vector only when that pocket has more than 25
+ * samples; otherwise it falls back to the pitch type's all-location vector. */
+export async function getIntendedZoneTargetingProfiles(input: {
+  organizationId: number;
+  pitcherName: string;
+  startDate?: string | null;
+  endDate?: string | null;
+  pitchTypes?: string[] | null;
+  ballTypes?: string[] | null;
+}): Promise<IntendedZoneTargetingProfile[]> {
+  const rows = await fetchIntendedZoneStatRows(input);
+  const byPitchType = new Map<string, typeof rows>();
+
+  for (const row of rows) {
+    const bucket = byPitchType.get(row.pitchType) ?? [];
+    bucket.push(row);
+    byPitchType.set(row.pitchType, bucket);
+  }
+
+  return Array.from(byPitchType.entries())
+    .map(([pitchType, pitchRows]) => {
+      const byLocationRows = new Map<number, typeof rows>();
+      for (const row of pitchRows) {
+        const bucket = byLocationRows.get(row.targetLocation) ?? [];
+        bucket.push(row);
+        byLocationRows.set(row.targetLocation, bucket);
+      }
+
+      return {
+        pitchType,
+        pitchCount: pitchRows.length,
+        throwsLeft: pitchRows.filter((row) => row.throwsLeft).length * 2 > pitchRows.length,
+        overall: summarizeTargetingRows(pitchRows),
+        byLocation: Object.fromEntries(
+          Array.from(byLocationRows.entries()).map(([location, locationRows]) => [String(location), summarizeTargetingRows(locationRows)])
+        ),
+      };
+    })
+    .sort((a, b) => b.pitchCount - a.pitchCount || a.pitchType.localeCompare(b.pitchType));
+}
+
+function groupKeyForRow(row: { pitchType: string; ballType: string; targetRadiusFt: number; targetLocation: number }, splitBy: IntendedZoneStatsSplitBy): string {
   if (splitBy === 'targetSize') return `${Math.round(row.targetRadiusFt * 2 * 12)}"`;
+  if (splitBy === 'targetLocation') return String(row.targetLocation);
   if (splitBy === 'ballType') return row.ballType;
   return row.pitchType;
+}
+
+function medianDistance(values: number[]): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
 }
 
 /** Stats for one pitcher, broken out by pitch type OR by target size (the
@@ -1854,31 +2246,41 @@ export async function getIntendedZonePitchTypeStats(input: {
 
   const byType = new Map<
     string,
-    { distances: number[]; breakdown: IntendedZoneDirectionBreakdown; inZoneN: number; competitiveN: number; targetRows: { targetRadiusFt: number; targetHit: boolean }[] }
+    { distances: number[]; breakdown: IntendedZoneDirectionBreakdown; inZoneN: number; competitiveN: number; targetRows: { targetRadiusFt: number; targetHit: boolean }[]; throwsLeftN: number }
   >();
+  if (splitBy === 'targetLocation') {
+    for (let location = 1; location <= 13; location += 1) {
+      byType.set(String(location), { distances: [], breakdown: emptyDirectionBreakdown(), inZoneN: 0, competitiveN: 0, targetRows: [], throwsLeftN: 0 });
+    }
+  }
   for (const row of rows) {
     const key = groupKeyForRow(row, splitBy);
-    if (!byType.has(key)) byType.set(key, { distances: [], breakdown: emptyDirectionBreakdown(), inZoneN: 0, competitiveN: 0, targetRows: [] });
+    if (!byType.has(key)) byType.set(key, { distances: [], breakdown: emptyDirectionBreakdown(), inZoneN: 0, competitiveN: 0, targetRows: [], throwsLeftN: 0 });
     const bucket = byType.get(key)!;
     bucket.distances.push(row.missDistanceFt);
     bucket.breakdown[row.missDirection] += 1;
     if (row.inZone) bucket.inZoneN += 1;
     if (row.competitive) bucket.competitiveN += 1;
     bucket.targetRows.push({ targetRadiusFt: row.targetRadiusFt, targetHit: row.targetHit });
+    if (row.throwsLeft) bucket.throwsLeftN += 1;
   }
 
   const stats: IntendedZonePitchTypeStat[] = Array.from(byType.entries()).map(([pitchType, bucket]) => ({
     pitchType,
     pitchCount: bucket.distances.length,
-    avgMissDistanceFt: bucket.distances.reduce((a, b) => a + b, 0) / bucket.distances.length,
+    avgMissDistanceFt: bucket.distances.length ? bucket.distances.reduce((a, b) => a + b, 0) / bucket.distances.length : null,
+    medianMissDistanceFt: medianDistance(bucket.distances),
     directionBreakdown: bucket.breakdown,
     topMissDirection: topDirectionExcludingOnTarget(bucket.breakdown),
-    inZonePct: (bucket.inZoneN / bucket.distances.length) * 100,
-    competitivePct: (bucket.competitiveN / bucket.distances.length) * 100,
+    inZonePct: bucket.distances.length ? (bucket.inZoneN / bucket.distances.length) * 100 : null,
+    competitivePct: bucket.distances.length ? (bucket.competitiveN / bucket.distances.length) * 100 : null,
     targetHitRates: computeTargetHitRates(bucket.targetRows),
+    throwsLeft: bucket.throwsLeftN * 2 > bucket.distances.length,
   }));
   stats.sort((a, b) =>
-    splitBy === 'targetSize' ? parseInt(a.pitchType, 10) - parseInt(b.pitchType, 10) : b.pitchCount - a.pitchCount
+    splitBy === 'targetSize' || splitBy === 'targetLocation'
+      ? parseInt(a.pitchType, 10) - parseInt(b.pitchType, 10)
+      : b.pitchCount - a.pitchCount
   );
 
   const allBreakdown = emptyDirectionBreakdown();
@@ -1886,15 +2288,18 @@ export async function getIntendedZonePitchTypeStats(input: {
   const allDistances = rows.map((row) => row.missDistanceFt);
   const allInZoneN = rows.filter((row) => row.inZone).length;
   const allCompetitiveN = rows.filter((row) => row.competitive).length;
+  const allThrowsLeftN = rows.filter((row) => row.throwsLeft).length;
   stats.unshift({
     pitchType: 'All',
     pitchCount: allDistances.length,
     avgMissDistanceFt: allDistances.reduce((a, b) => a + b, 0) / allDistances.length,
+    medianMissDistanceFt: medianDistance(allDistances),
     directionBreakdown: allBreakdown,
     topMissDirection: topDirectionExcludingOnTarget(allBreakdown),
     inZonePct: (allInZoneN / allDistances.length) * 100,
     competitivePct: (allCompetitiveN / allDistances.length) * 100,
     targetHitRates: computeTargetHitRates(rows),
+    throwsLeft: allThrowsLeftN * 2 > allDistances.length,
   });
 
   return stats;
@@ -1920,11 +2325,12 @@ export async function getIntendedZonePitcherLeaderboard(input: {
       inZoneN: number;
       competitiveN: number;
       targetRows: { targetRadiusFt: number; targetHit: boolean }[];
+      throwsLeftN: number;
     }
   >();
   for (const row of rows) {
     if (!byPitcher.has(row.pitcherName)) {
-      byPitcher.set(row.pitcherName, { distances: [], breakdown: emptyDirectionBreakdown(), byType: new Map(), inZoneN: 0, competitiveN: 0, targetRows: [] });
+      byPitcher.set(row.pitcherName, { distances: [], breakdown: emptyDirectionBreakdown(), byType: new Map(), inZoneN: 0, competitiveN: 0, targetRows: [], throwsLeftN: 0 });
     }
     const bucket = byPitcher.get(row.pitcherName)!;
     bucket.distances.push(row.missDistanceFt);
@@ -1934,6 +2340,7 @@ export async function getIntendedZonePitcherLeaderboard(input: {
     bucket.targetRows.push({ targetRadiusFt: row.targetRadiusFt, targetHit: row.targetHit });
     if (!bucket.byType.has(row.pitchType)) bucket.byType.set(row.pitchType, []);
     bucket.byType.get(row.pitchType)!.push(row.missDistanceFt);
+    if (row.throwsLeft) bucket.throwsLeftN += 1;
   }
 
   const stats: IntendedZonePitcherStat[] = Array.from(byPitcher.entries()).map(([pitcherName, bucket]) => {
@@ -1954,6 +2361,7 @@ export async function getIntendedZonePitcherLeaderboard(input: {
       pitcherName,
       pitchCount: bucket.distances.length,
       avgMissDistanceFt: mean,
+      medianMissDistanceFt: medianDistance(bucket.distances),
       missDistanceStdDevFt: Math.sqrt(variance),
       bestPitchType,
       directionBreakdown: bucket.breakdown,
@@ -1961,6 +2369,11 @@ export async function getIntendedZonePitcherLeaderboard(input: {
       inZonePct: (bucket.inZoneN / bucket.distances.length) * 100,
       competitivePct: (bucket.competitiveN / bucket.distances.length) * 100,
       targetHitRates: computeTargetHitRates(bucket.targetRows),
+      // Majority vote across this pitcher's rows -- virtually always
+      // unanimous (one pitcher, one hand), but guards against a stray
+      // unlinked row defaulting to right-handed framing from flipping the
+      // whole pitcher's grid.
+      throwsLeft: bucket.throwsLeftN * 2 > bucket.distances.length,
     };
   });
 
@@ -2033,6 +2446,7 @@ function normalizeCalendarLinkTarget(value: string | null | undefined): Calendar
     .toLowerCase()
     .replace(/[‐‑‒–—−-]+/g, '_')
     .replace(/\s+/g, '_');
+  if (normalized === 'details' || normalized === 'workout_details' || normalized === 'open_workout_details') return 'details';
   if (normalized === 'throwing' || normalized === 'throwing_calendar') return 'throwing';
   if (normalized === 'bullpen' || normalized === 'bullpens') return 'bullpens';
   if (normalized === 'velocity' || normalized === 'velocity_plan') return 'velocity';

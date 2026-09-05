@@ -36,7 +36,7 @@ export function AsyncWorkoutCreateForm({
   initialName?: string;
   initialCategory?: string;
   initialDescription?: string;
-  initialCalendarLinkTarget?: 'none' | 'throwing' | 'bullpens' | 'velocity' | 'drills';
+  initialCalendarLinkTarget?: 'none' | 'details' | 'throwing' | 'bullpens' | 'velocity' | 'drills';
   initialSelectedExerciseIds?: number[];
   initialValuesByExerciseId?: Record<number, { prefix?: string; prescribedSets?: string; prescribedReps?: string; prescribedLoad?: string; notes?: string }>;
 }) {
@@ -85,8 +85,8 @@ export function AsyncWorkoutCreateForm({
       </label>
       <label className="portal-form-span-2">
         Calendar Click Target
-        <select name="calendarLinkTarget" defaultValue={initialCalendarLinkTarget}>
-          <option value="none">Open workout details</option>
+        <select name="calendarLinkTarget" defaultValue={initialCalendarLinkTarget === 'none' ? 'details' : initialCalendarLinkTarget}>
+          <option value="details">Open workout details</option>
           <option value="throwing">Throwing Calendar</option>
           <option value="bullpens">Bullpens</option>
           <option value="drills">Drills</option>

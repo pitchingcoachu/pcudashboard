@@ -2,11 +2,18 @@ import { timingSafeEqual } from 'node:crypto';
 import { getDbPool, isDatabaseConfigured } from './auth-db';
 import { classifyMissDirection, ensureIntendedZoneSchema } from './training-db';
 
-const METERS_TO_FEET = 3.280839895;
-const METERS_TO_INCHES = 39.37007874;
-const METERS_PER_SECOND_TO_MPH = 2.236936292;
-
 type JsonObject = Record<string, unknown>;
+
+export type TrackmanVector3 = { x: number; y: number; z: number };
+
+export type TrackmanFlightData = {
+  position: TrackmanVector3;
+  velocity: TrackmanVector3;
+  acceleration: TrackmanVector3;
+  releaseSideFt: number | null;
+  releaseHeightFt: number | null;
+  releaseExtensionFt: number | null;
+};
 
 export type TrackmanEventGridEnvelope = {
   eventType?: string;
@@ -20,6 +27,7 @@ export type NormalizedTrackmanPitch = {
   playId: string;
   trackId: string | null;
   trackedAt: string | null;
+  receivedAt: string | null;
   plateLocSideFt: number | null;
   plateLocHeightFt: number | null;
   relSpeedMph: number | null;
@@ -28,6 +36,7 @@ export type NormalizedTrackmanPitch = {
   pitchType: string | null;
   pitcherThrows: string | null;
   taggedPitcherName: string | null;
+  flightData: TrackmanFlightData | null;
 };
 
 let schemaReady: Promise<void> | null = null;
@@ -51,6 +60,14 @@ function textValue(value: unknown): string | null {
 function numberValue(value: unknown): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null;
   return value;
+}
+
+function vector3Value(value: unknown): TrackmanVector3 | null {
+  const source = object(value);
+  const x = numberValue(field(source, 'X', 'x'));
+  const y = numberValue(field(source, 'Y', 'y'));
+  const z = numberValue(field(source, 'Z', 'z'));
+  return x === null || y === null || z === null ? null : { x, y, z };
 }
 
 function isoValue(value: unknown): string | null {
@@ -111,29 +128,48 @@ export function normalizeTrackmanPitch(payload: unknown): NormalizedTrackmanPitc
   const release = object(field(pitch, 'Release', 'release'));
   const location = object(field(pitch, 'Location', 'location'));
   const movement = object(field(pitch, 'Movement', 'movement'));
+  const nineP = object(field(pitch, 'NineP', 'nineP'));
   const pitchTag = object(field(root, 'PitchTag', 'pitchTag'));
   const players = object(field(root, 'Players', 'players'));
   const pitcher = object(field(players, 'Pitcher', 'pitcher'));
 
-  const sideMeters = numberValue(field(location, 'Side', 'side'));
-  const heightMeters = numberValue(field(location, 'Height', 'height'));
-  const speedMetersPerSecond = numberValue(field(release, 'Speed', 'speed'));
-  const inducedVerticalMeters = numberValue(field(movement, 'InducedVertical', 'inducedVertical'));
-  const horizontalMeters = numberValue(field(movement, 'Horizontal', 'horizontal'));
+  // Despite the short field names, TrackMan's live B1 webhook sends these in
+  // baseball display units: Location is feet, Release.Speed is mph, and both
+  // Movement values are inches. The Data API uses the same display units.
+  const sideFeet = numberValue(field(location, 'Side', 'side'));
+  const heightFeet = numberValue(field(location, 'Height', 'height'));
+  const speedMph = numberValue(field(release, 'Speed', 'speed'));
+  const inducedVerticalInches = numberValue(field(movement, 'InducedVertical', 'inducedVertical'));
+  const horizontalInches = numberValue(field(movement, 'Horizontal', 'horizontal'));
+  const position = vector3Value(field(nineP, 'X0', 'x0'));
+  const velocity = vector3Value(field(nineP, 'V0', 'v0'));
+  const acceleration = vector3Value(field(nineP, 'A0', 'a0'));
 
   return {
     sessionId,
     playId,
     trackId: textValue(field(root, 'TrackId', 'trackId')),
     trackedAt: isoValue(field(root, 'TrackStartTime', 'trackStartTime', 'Time', 'time')),
-    plateLocSideFt: sideMeters === null ? null : sideMeters * METERS_TO_FEET,
-    plateLocHeightFt: heightMeters === null ? null : heightMeters * METERS_TO_FEET,
-    relSpeedMph: speedMetersPerSecond === null ? null : speedMetersPerSecond * METERS_PER_SECOND_TO_MPH,
-    inducedVertBreakIn: inducedVerticalMeters === null ? null : inducedVerticalMeters * METERS_TO_INCHES,
-    horzBreakIn: horizontalMeters === null ? null : horizontalMeters * METERS_TO_INCHES,
+    receivedAt: null,
+    plateLocSideFt: sideFeet,
+    plateLocHeightFt: heightFeet,
+    relSpeedMph: speedMph,
+    inducedVertBreakIn: inducedVerticalInches,
+    horzBreakIn: horizontalInches,
     pitchType: textValue(field(pitchTag, 'TaggedPitchType', 'taggedPitchType')),
     pitcherThrows: textValue(field(pitcher, 'PitchingHandedness', 'pitchingHandedness')),
     taggedPitcherName: textValue(field(pitcher, 'NameRef', 'nameRef')),
+    flightData:
+      position && velocity && acceleration
+        ? {
+            position,
+            velocity,
+            acceleration,
+            releaseSideFt: numberValue(field(release, 'Side', 'side')),
+            releaseHeightFt: numberValue(field(release, 'Height', 'height')),
+            releaseExtensionFt: numberValue(field(release, 'Extension', 'extension')),
+          }
+        : null,
   };
 }
 
@@ -351,26 +387,88 @@ export async function listLiveTrackmanSessions(): Promise<
 export async function listBufferedTrackmanPitches(sessionId: string): Promise<NormalizedTrackmanPitch[]> {
   if (!isDatabaseConfigured()) return [];
   await ensureTrackmanLiveSchema();
-  const result = await getDbPool().query(
-    `SELECT play_id, session_id, track_id, tracked_at, plate_loc_side_ft, plate_loc_height_ft,
-            rel_speed_mph, induced_vert_break_in, horz_break_in, pitch_type, pitcher_throws, tagged_pitcher_name
+  const pool = getDbPool();
+  const result = await pool.query(
+    `SELECT play_id, session_id, track_id, tracked_at, received_at, plate_loc_side_ft, plate_loc_height_ft,
+            rel_speed_mph, induced_vert_break_in, horz_break_in, pitch_type, pitcher_throws, tagged_pitcher_name,
+            raw_payload
      FROM trackman_live_ball_events
      WHERE session_id = $1 AND kind = 'Pitch'
      ORDER BY COALESCE(tracked_at, received_at) ASC, received_at ASC`,
     [sessionId]
   );
-  return result.rows.map((row) => ({
-    sessionId: row.session_id,
-    playId: row.play_id,
-    trackId: row.track_id,
-    trackedAt: row.tracked_at ? new Date(row.tracked_at).toISOString() : null,
-    plateLocSideFt: row.plate_loc_side_ft === null ? null : Number(row.plate_loc_side_ft),
-    plateLocHeightFt: row.plate_loc_height_ft === null ? null : Number(row.plate_loc_height_ft),
-    relSpeedMph: row.rel_speed_mph === null ? null : Number(row.rel_speed_mph),
-    inducedVertBreakIn: row.induced_vert_break_in === null ? null : Number(row.induced_vert_break_in),
-    horzBreakIn: row.horz_break_in === null ? null : Number(row.horz_break_in),
-    pitchType: row.pitch_type,
-    pitcherThrows: row.pitcher_throws,
-    taggedPitcherName: row.tagged_pitcher_name,
-  }));
+  const repairedRows = result.rows.map((row) => {
+    // Re-normalizing the durable raw event makes the unit fix self-healing for
+    // pitches received before this correction was deployed. Force Kind because
+    // a later metadata event may have replaced that top-level property when the
+    // two payloads were merged.
+    const raw = object(row.raw_payload);
+    const normalized = normalizeTrackmanPitch(raw ? { ...raw, Kind: 'Pitch' } : null);
+    const storedNumbers = {
+      plateLocSideFt: row.plate_loc_side_ft === null ? null : Number(row.plate_loc_side_ft),
+      plateLocHeightFt: row.plate_loc_height_ft === null ? null : Number(row.plate_loc_height_ft),
+      relSpeedMph: row.rel_speed_mph === null ? null : Number(row.rel_speed_mph),
+      inducedVertBreakIn: row.induced_vert_break_in === null ? null : Number(row.induced_vert_break_in),
+      horzBreakIn: row.horz_break_in === null ? null : Number(row.horz_break_in),
+    };
+    const pitch: NormalizedTrackmanPitch = {
+      sessionId: row.session_id,
+      playId: row.play_id,
+      trackId: normalized?.trackId ?? row.track_id,
+      trackedAt: normalized?.trackedAt ?? (row.tracked_at ? new Date(row.tracked_at).toISOString() : null),
+      receivedAt: row.received_at ? new Date(row.received_at).toISOString() : null,
+      plateLocSideFt: normalized?.plateLocSideFt ?? storedNumbers.plateLocSideFt,
+      plateLocHeightFt: normalized?.plateLocHeightFt ?? storedNumbers.plateLocHeightFt,
+      relSpeedMph: normalized?.relSpeedMph ?? storedNumbers.relSpeedMph,
+      inducedVertBreakIn: normalized?.inducedVertBreakIn ?? storedNumbers.inducedVertBreakIn,
+      horzBreakIn: normalized?.horzBreakIn ?? storedNumbers.horzBreakIn,
+      pitchType: normalized?.pitchType ?? row.pitch_type,
+      pitcherThrows: normalized?.pitcherThrows ?? row.pitcher_throws,
+      taggedPitcherName: normalized?.taggedPitcherName ?? row.tagged_pitcher_name,
+      flightData: normalized?.flightData ?? null,
+    };
+    const repaired = Boolean(
+      normalized &&
+        (Object.keys(storedNumbers) as Array<keyof typeof storedNumbers>).some((key) => {
+          const before = storedNumbers[key];
+          const after = normalized[key];
+          if (before === null || after === null) return before !== after;
+          return Math.abs(before - after) > 0.000001;
+        })
+    );
+    return { pitch, repaired };
+  });
+
+  // Persist corrected values as well as returning them, so all later readers
+  // see the repaired event and not only this live-page poll.
+  await Promise.all(
+    repairedRows
+      .filter(({ repaired }) => repaired)
+      .map(({ pitch }) =>
+        pool.query(
+          `UPDATE trackman_live_ball_events SET
+             track_id = COALESCE($2, track_id),
+             tracked_at = COALESCE($3, tracked_at),
+             plate_loc_side_ft = $4,
+             plate_loc_height_ft = $5,
+             rel_speed_mph = $6,
+             induced_vert_break_in = $7,
+             horz_break_in = $8,
+             updated_at = NOW()
+           WHERE play_id = $1`,
+          [
+            pitch.playId,
+            pitch.trackId,
+            pitch.trackedAt,
+            pitch.plateLocSideFt,
+            pitch.plateLocHeightFt,
+            pitch.relSpeedMph,
+            pitch.inducedVertBreakIn,
+            pitch.horzBreakIn,
+          ]
+        )
+      )
+  );
+
+  return repairedRows.map(({ pitch }) => pitch);
 }

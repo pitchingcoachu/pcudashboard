@@ -22,6 +22,7 @@ function safeVideoMapTableName(value: unknown): string {
 
 type VideoLookupRow = {
   pitch_event_id: number;
+  school_code: string;
   play_id: string;
   video_clip_1: string | null;
   video_clip_2: string | null;
@@ -129,27 +130,33 @@ export async function lookupPitchVideoUrls(ids: number[], schoolCode: string): P
   const pool = getDbPool();
   const client = await pool.connect();
   try {
-    const videoMapMeta = await resolveVideoMapMeta(client, schoolCode);
-    const videoMapTable = videoMapMeta?.tableName ?? '';
-    const videoSchoolCode = videoMapMeta?.schoolCode ?? schoolCode;
-    const videoMapHasSchoolCode = videoMapMeta?.hasSchoolCode ?? false;
-
     const pitchResult = await client.query<VideoLookupRow>(
       `
       SELECT
         pe.id AS pitch_event_id,
+        UPPER(COALESCE(pe.school_code, '')) AS school_code,
         COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'playid', to_jsonb(pe)->>'play_id', pe.playid::text, '')), ''), '') AS play_id,
         COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'videoclip', '')), ''), '') AS video_clip_1,
         COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'videoclip2', '')), ''), '') AS video_clip_2,
         COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'videoclip3', '')), ''), '') AS video_clip_3
       FROM public.pitch_events pe
       WHERE pe.id = ANY($1::int[])
-        AND UPPER(COALESCE(pe.school_code, '')) = $2
+        AND (
+          UPPER(COALESCE(pe.school_code, '')) = $2
+          OR (
+            $2 = ANY(ARRAY['PCU', 'ARIZONA']::text[])
+            AND UPPER(COALESCE(pe.school_code, '')) = ANY(ARRAY['PCU', 'ARIZONA']::text[])
+            AND (
+              regexp_replace(lower(COALESCE(pe.pitcher, '')), '[^a-z0-9]', '', 'g') = ANY(ARRAY['tommypascanu', 'pascanutommy']::text[])
+              OR regexp_replace(lower(COALESCE(pe.batter, '')), '[^a-z0-9]', '', 'g') = ANY(ARRAY['tommypascanu', 'pascanutommy']::text[])
+            )
+          )
+        )
       `,
       [ids, schoolCode]
     );
 
-    const byPlayId = new Map<
+    const bySourceAndPlayId = new Map<
       string,
       {
         video_clip_1: string | null;
@@ -163,9 +170,22 @@ export async function lookupPitchVideoUrls(ids: number[], schoolCode: string): P
         video_clip_3_target: string | null;
       }
     >();
-    const playIds = Array.from(new Set(pitchResult.rows.map((row) => String(row.play_id ?? '').trim()).filter(Boolean)));
+    const sourceSchoolCodes = Array.from(new Set(pitchResult.rows.map((row) => row.school_code).filter(Boolean)));
 
-    if (videoMapTable && playIds.length) {
+    for (const sourceSchoolCode of sourceSchoolCodes) {
+      const videoMapMeta = await resolveVideoMapMeta(client, sourceSchoolCode);
+      const videoMapTable = videoMapMeta?.tableName ?? '';
+      const videoSchoolCode = videoMapMeta?.schoolCode ?? sourceSchoolCode;
+      const videoMapHasSchoolCode = videoMapMeta?.hasSchoolCode ?? false;
+      const playIds = Array.from(
+        new Set(
+          pitchResult.rows
+            .filter((row) => row.school_code === sourceSchoolCode)
+            .map((row) => String(row.play_id ?? '').trim())
+            .filter(Boolean)
+        )
+      );
+      if (!videoMapTable || !playIds.length) continue;
       try {
         await client.query(`SET statement_timeout = '3000ms'`);
         const schoolClause = videoMapHasSchoolCode
@@ -212,7 +232,7 @@ export async function lookupPitchVideoUrls(ids: number[], schoolCode: string): P
           videoMapHasSchoolCode ? [playIds, videoSchoolCode] : [playIds]
         );
         for (const row of mapResult.rows) {
-          byPlayId.set(String(row.play_id ?? '').trim(), row);
+          bySourceAndPlayId.set(`${sourceSchoolCode}:${String(row.play_id ?? '').trim()}`, row);
         }
       } catch {
         // Return embedded pitch video columns if the external video map is slow/unavailable.
@@ -226,7 +246,7 @@ export async function lookupPitchVideoUrls(ids: number[], schoolCode: string): P
     }
 
     return pitchResult.rows.map((row) => {
-      const mapped = byPlayId.get(String(row.play_id ?? '').trim());
+      const mapped = bySourceAndPlayId.get(`${row.school_code}:${String(row.play_id ?? '').trim()}`);
       return {
         pitch_event_id: Number(row.pitch_event_id),
         video_clip_1: mapped?.video_clip_1 ?? row.video_clip_1 ?? '',
@@ -341,7 +361,17 @@ export async function lookupPitchExportMetrics(ids: number[], schoolCode: string
         UPPER(COALESCE(pe.school_code, '')) AS school_code
       FROM public.pitch_events pe
       WHERE pe.id = ANY($1::int[])
-        AND UPPER(COALESCE(pe.school_code, '')) = $2
+        AND (
+          UPPER(COALESCE(pe.school_code, '')) = $2
+          OR (
+            $2 = ANY(ARRAY['PCU', 'ARIZONA']::text[])
+            AND UPPER(COALESCE(pe.school_code, '')) = ANY(ARRAY['PCU', 'ARIZONA']::text[])
+            AND (
+              regexp_replace(lower(COALESCE(pe.pitcher, '')), '[^a-z0-9]', '', 'g') = ANY(ARRAY['tommypascanu', 'pascanutommy']::text[])
+              OR regexp_replace(lower(COALESCE(pe.batter, '')), '[^a-z0-9]', '', 'g') = ANY(ARRAY['tommypascanu', 'pascanutommy']::text[])
+            )
+          )
+        )
       `,
       [ids, schoolCode]
     );

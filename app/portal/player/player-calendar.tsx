@@ -155,7 +155,8 @@ function isDrillsWorkoutName(value: string): boolean {
     || normalized.includes('mound drills');
 }
 
-function getCalendarLinkTarget(item: ProgramItemRow): 'none' | 'throwing' | 'bullpens' | 'velocity' | 'drills' {
+function getCalendarLinkTarget(item: ProgramItemRow): 'none' | 'details' | 'throwing' | 'bullpens' | 'velocity' | 'drills' {
+  if (item.calendarLinkTarget === 'details') return 'details';
   if (item.calendarLinkTarget && item.calendarLinkTarget !== 'none') return item.calendarLinkTarget;
   if (isThrowingCalendarWorkoutName(item.itemName)) return 'throwing';
   if (isBullpenWorkoutName(item.itemName)) return 'bullpens';

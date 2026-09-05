@@ -191,6 +191,185 @@
   gap: 18px;
 }
 
+.projectorShell {
+  --projector-zone-stroke: rgba(255, 255, 255, 0.86);
+  --projector-zone-strong: #fff;
+  --projector-zone-fill: rgba(255, 255, 255, 0.055);
+  --projector-zone-connector: rgba(255, 255, 255, 0.82);
+  --projector-pocket-color: rgba(255, 255, 255, 0.88);
+  --projector-number-halo: #000;
+  position: relative;
+  display: grid;
+  min-height: calc(100vh - 150px);
+  overflow: hidden;
+  place-items: center;
+  background: #000;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 18px;
+  isolation: isolate;
+}
+
+.projectorShell:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  min-height: 100vh;
+  border: 0;
+  border-radius: 0;
+}
+
+.projectorStage {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.projectorZoneSvg {
+  display: block;
+  width: min(96%, calc((100vh - 52px) * 0.923));
+  height: min(calc(100vh - 170px), 96%);
+  max-width: none;
+  filter: contrast(1.08);
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.projectorShell:fullscreen .projectorZoneSvg {
+  width: min(98vw, calc(98vh * 0.923));
+  height: 98vh;
+}
+
+.projectorPocketNumber {
+  fill: var(--projector-pocket-color);
+  stroke: var(--projector-number-halo);
+  stroke-width: 1.1px;
+  paint-order: stroke fill;
+  font-size: 12px;
+  font-weight: 900;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+  user-select: none;
+}
+
+.projectorUtilityDock,
+.projectorControlDock {
+  position: absolute;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 999px;
+  background: rgba(3, 7, 12, 0.84);
+  padding: 6px;
+  opacity: 0;
+  backdrop-filter: blur(12px);
+  transition: opacity 160ms ease, border-color 160ms ease;
+}
+
+.projectorUtilityDock:hover,
+.projectorUtilityDock:focus-within,
+.projectorControlDock:hover,
+.projectorControlDock:focus-within {
+  opacity: 1;
+  border-color: rgba(148, 163, 184, 0.34);
+}
+
+.projectorUtilityDock { top: 12px; right: 12px; opacity: 0.38; }
+.projectorShell:fullscreen .projectorUtilityDock { opacity: 0; }
+.projectorControlDock { bottom: 12px; left: 50%; transform: translateX(-50%); }
+.projectorControlDockActive { opacity: 0.92; }
+
+.projectorUtilityDock button,
+.projectorControlDock button,
+.projectorControlDock select,
+.projectorEmpty button {
+  min-height: 34px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.9);
+  padding: 7px 13px;
+  color: #e2e8f0;
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.projectorControlDock span {
+  padding: 0 9px;
+  color: #cbd5e1;
+  font-size: 0.68rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.projectorEmpty {
+  display: grid;
+  justify-items: center;
+  max-width: 470px;
+  gap: 10px;
+  padding: 36px;
+  color: #64748b;
+  text-align: center;
+}
+
+.projectorEmpty strong { color: #f8fafc; font-size: 1.1rem; }
+.projectorEmpty span { max-width: 38ch; font-size: 0.82rem; line-height: 1.5; }
+.projectorEmpty button { margin-top: 6px; border-color: rgba(var(--portal-accent-rgb, 200, 16, 46), 0.55); }
+
+.projectorEmptyZone {
+  width: 82px;
+  height: 98px;
+  margin-bottom: 8px;
+  border: 4px solid rgba(226, 232, 240, 0.72);
+  background:
+    linear-gradient(90deg, transparent 32%, rgba(148, 163, 184, 0.42) 32%, rgba(148, 163, 184, 0.42) 34%, transparent 34%, transparent 66%, rgba(148, 163, 184, 0.42) 66%, rgba(148, 163, 184, 0.42) 68%, transparent 68%),
+    linear-gradient(transparent 32%, rgba(148, 163, 184, 0.42) 32%, rgba(148, 163, 184, 0.42) 34%, transparent 34%, transparent 66%, rgba(148, 163, 184, 0.42) 66%, rgba(148, 163, 184, 0.42) 68%, transparent 68%);
+  box-shadow: 0 0 42px rgba(226, 232, 240, 0.08);
+}
+
+:global(body.theme-light) .projectorShell {
+  --projector-zone-stroke: rgba(0, 0, 0, 0.82);
+  --projector-zone-strong: #000;
+  --projector-zone-fill: rgba(0, 0, 0, 0.035);
+  --projector-zone-connector: rgba(0, 0, 0, 0.76);
+  --projector-pocket-color: rgba(0, 0, 0, 0.88);
+  --projector-number-halo: #fff;
+  border-color: rgba(0, 0, 0, 0.2);
+  background: #fff;
+}
+
+:global(body.theme-light) .projectorZoneSvg {
+  filter: drop-shadow(0 0 24px rgba(0, 0, 0, 0.06));
+}
+
+:global(body.theme-light) .projectorUtilityDock,
+:global(body.theme-light) .projectorControlDock {
+  border-color: rgba(0, 0, 0, 0.24);
+  background: rgba(255, 255, 255, 0.9);
+}
+
+:global(body.theme-light) .projectorUtilityDock button,
+:global(body.theme-light) .projectorControlDock button,
+:global(body.theme-light) .projectorControlDock select,
+:global(body.theme-light) .projectorEmpty button {
+  border-color: rgba(0, 0, 0, 0.28);
+  background: rgba(255, 255, 255, 0.96);
+  color: #050505;
+}
+
+:global(body.theme-light) .projectorControlDock span,
+:global(body.theme-light) .projectorEmpty,
+:global(body.theme-light) .projectorEmpty span { color: rgba(0, 0, 0, 0.68); }
+:global(body.theme-light) .projectorEmpty strong { color: #050505; }
+
+@media (hover: none) {
+  .projectorUtilityDock,
+  .projectorControlDock { opacity: 0.68; }
+}
+
 .liveHeader {
   display: flex;
   align-items: center;
@@ -280,6 +459,16 @@
   cursor: default;
 }
 
+.zonePocketNumber {
+  fill: rgba(148, 163, 184, 0.46);
+  font-size: 8px;
+  font-weight: 850;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+  user-select: none;
+}
+
 .actualDot {
   animation: landPulse 500ms ease-out;
 }
@@ -325,6 +514,88 @@
   font-size: 0.8rem;
   color: #64748b;
   text-align: center;
+}
+
+.inlineButton {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #cbd5e1;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.inlineButton:hover {
+  color: #f8fafc;
+}
+
+.targetLocationKey {
+  display: grid;
+  grid-template-columns: auto minmax(210px, 1fr);
+  gap: 12px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 12px;
+  background: rgba(148, 163, 184, 0.045);
+}
+
+.targetLocationKeyLabel {
+  display: block;
+  margin-bottom: 6px;
+  color: #94a3b8;
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.targetPocketGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 24px);
+  border: 1px solid rgba(226, 232, 240, 0.55);
+}
+
+.targetPocketGrid span {
+  display: grid;
+  width: 24px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid rgba(226, 232, 240, 0.22);
+  color: #f8fafc;
+  font-size: 0.69rem;
+  font-weight: 800;
+}
+
+.targetOuterGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(96px, 1fr));
+  gap: 5px 8px;
+}
+
+.targetOuterGrid span {
+  color: #94a3b8;
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.targetOuterGrid b {
+  display: inline-grid;
+  min-width: 21px;
+  height: 21px;
+  margin-right: 4px;
+  place-items: center;
+  border-radius: 6px;
+  background: rgba(var(--portal-accent-rgb, 200, 16, 46), 0.2);
+  color: #f8fafc;
+}
+
+@media (max-width: 680px) {
+  .targetLocationKey {
+    grid-template-columns: 1fr;
+  }
 }
 
 .statGrid {
@@ -395,6 +666,1121 @@
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+.targetingShell {
+  --target-gold: #f6c76d;
+  --target-green: #4ade80;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 72% 0%, rgba(var(--portal-accent-rgb, 200, 16, 46), 0.13), transparent 30%),
+    linear-gradient(145deg, #0c1016, #05070a 62%);
+  box-shadow: 0 28px 70px -42px #000;
+}
+
+.targetingShell::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(rgba(148, 163, 184, 0.025) 1px, transparent 1px), linear-gradient(90deg, rgba(148, 163, 184, 0.025) 1px, transparent 1px);
+  background-size: 34px 34px;
+  mask-image: linear-gradient(to bottom, black, transparent 68%);
+}
+
+.targetingHeader {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 26px 28px 22px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.targetingHeaderActions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.targetingUtilityButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 11px;
+  background: rgba(148, 163, 184, 0.045);
+  padding: 11px 14px;
+  color: #cbd5e1;
+  font-size: 0.76rem;
+  font-weight: 780;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease, transform 140ms ease;
+}
+
+.targetingUtilityButton:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(226, 232, 240, 0.4);
+  background: rgba(148, 163, 184, 0.09);
+  color: #f8fafc;
+}
+
+.targetingUtilityButton:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.targetingUtilityButton span {
+  color: var(--target-gold);
+  font-size: 0.9rem;
+}
+
+.targetingAddMap {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid rgba(246, 199, 109, 0.42);
+  border-radius: 11px;
+  background: linear-gradient(145deg, rgba(246, 199, 109, 0.16), rgba(246, 199, 109, 0.05));
+  padding: 11px 16px;
+  color: #fff1c9;
+  font-size: 0.78rem;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 14px 28px -20px rgba(246, 199, 109, 0.75);
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+.targetingAddMap:hover {
+  transform: translateY(-1px);
+  border-color: rgba(246, 199, 109, 0.72);
+  background: rgba(246, 199, 109, 0.2);
+}
+
+.targetingAddMap span {
+  color: var(--target-gold);
+  font-size: 1.05rem;
+  line-height: 0;
+}
+
+.targetingTitle {
+  margin: 0;
+  color: #f8fafc;
+  font-size: clamp(1.45rem, 3vw, 2rem);
+  font-weight: 850;
+  letter-spacing: -0.035em;
+}
+
+.targetingTitle span {
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.targetingSubtitle {
+  max-width: 660px;
+  margin: 7px 0 0;
+  color: #94a3b8;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.targetingControls {
+  position: relative;
+  display: grid;
+  flex: 0 0 220px;
+  gap: 6px;
+}
+
+.targetingControls label {
+  color: #64748b;
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.targetingControls select {
+  width: 100%;
+  min-height: 44px;
+  appearance: none;
+  border: 1px solid rgba(246, 199, 109, 0.3);
+  border-radius: 11px;
+  outline: none;
+  background: #11151c;
+  padding: 11px 36px 11px 34px;
+  color: #f8fafc;
+  font-weight: 750;
+  line-height: 1.25;
+}
+
+.targetingPdfPitchValue {
+  display: flex;
+  width: 100%;
+  min-height: 44px;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(246, 199, 109, 0.3);
+  border-radius: 11px;
+  background: #11151c;
+  padding: 11px 14px 11px 34px;
+  color: #f8fafc;
+  font-size: 0.82rem;
+  font-weight: 750;
+  line-height: 1.25;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.targetingPdfCapture {
+  position: fixed !important;
+  top: 0;
+  left: -20000px;
+  pointer-events: none;
+}
+
+.targetingPitchDot {
+  position: absolute;
+  bottom: 15px;
+  left: 13px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-shadow: 0 0 10px currentColor;
+}
+
+.targetingMapsGrid {
+  position: relative;
+  z-index: 1;
+}
+
+.targetingMapsGridMulti {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(520px, 100%), 1fr));
+  gap: 18px;
+  padding: 18px;
+  background: rgba(2, 6, 12, 0.34);
+}
+
+.targetingMapCard {
+  min-width: 0;
+}
+
+.targetingMapsGridMulti .targetingMapCard {
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 16px;
+  background: linear-gradient(150deg, rgba(12, 16, 22, 0.98), rgba(4, 7, 10, 0.98));
+  box-shadow: 0 22px 46px -36px #000;
+}
+
+.targetingMapHeader {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  padding: 16px 28px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  background: rgba(148, 163, 184, 0.025);
+}
+
+.targetingMapNumber {
+  margin-right: auto;
+  padding-bottom: 11px;
+  color: #64748b;
+  font-size: 0.66rem;
+  font-weight: 850;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.targetingMapHeader .targetingControls {
+  flex-basis: 210px;
+}
+
+.targetingRemoveMap {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  margin-bottom: 1px;
+  place-items: center;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 10px;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 1.25rem;
+  cursor: pointer;
+  transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
+}
+
+.targetingRemoveMap:hover {
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(248, 113, 113, 0.08);
+  color: #fca5a5;
+}
+
+.targetingGrid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(380px, 1.12fr) minmax(320px, 0.88fr);
+  min-height: 590px;
+}
+
+.targetingZonePanel {
+  padding: 24px 28px 28px;
+  border-right: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.targetingGridZonesOnly {
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 0;
+}
+
+.targetingGridZonesOnly .targetingZonePanel {
+  border-right: 0;
+}
+
+.targetingGridZonesOnly .targetingZoneFrame {
+  max-width: 600px;
+}
+
+.targetingMapsZonesOnly.targetingMapsGridMulti {
+  grid-template-columns: repeat(auto-fit, minmax(min(440px, 100%), 1fr));
+}
+
+.targetingMapsZonesOnly .targetingMapCard {
+  align-self: start;
+}
+
+.targetingZoneTopline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.targetingZoneTopline > span {
+  color: #cbd5e1;
+  font-size: 0.71rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.targetingZoneTopline button,
+.targetingError button {
+  border: 0;
+  background: transparent;
+  color: #94a3b8;
+  font: inherit;
+  font-size: 0.74rem;
+  font-weight: 750;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.targetingZoneTopline button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.targetingSizeRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -2px 0 12px;
+  padding: 8px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.11);
+  border-radius: 11px;
+  background: rgba(148, 163, 184, 0.035);
+}
+
+.targetingSizeRow > span {
+  color: #64748b;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.targetingSizeOptions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.targetingSizeOptions button {
+  min-width: 38px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 7px;
+  background: rgba(2, 6, 12, 0.42);
+  padding: 5px 7px;
+  color: #94a3b8;
+  font-size: 0.66rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.targetingSizeOptions button:hover {
+  border-color: rgba(246, 199, 109, 0.42);
+  color: #e2e8f0;
+}
+
+.targetingSizeOptions button.targetingSizeActive {
+  border-color: rgba(246, 199, 109, 0.7);
+  background: rgba(246, 199, 109, 0.16);
+  color: #fff1c9;
+  box-shadow: inset 0 0 0 1px rgba(246, 199, 109, 0.08);
+}
+
+.targetingZoneFrame {
+  position: relative;
+  max-width: 520px;
+  margin: 0 auto;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 18px;
+  background: radial-gradient(circle at 50% 40%, rgba(30, 41, 59, 0.58), rgba(2, 6, 12, 0.95) 70%);
+  box-shadow: inset 0 0 80px rgba(0, 0, 0, 0.55), 0 24px 42px -34px #000;
+}
+
+.targetingZoneSvg {
+  display: block;
+  width: 100%;
+  cursor: crosshair;
+  outline: none;
+}
+
+.targetingZoneSvg:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--target-gold);
+}
+
+.targetingPocketNumber,
+.targetingOuterNumber {
+  pointer-events: none;
+  fill: rgba(226, 232, 240, 0.2);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.targetingOuterNumber {
+  fill: rgba(148, 163, 184, 0.38);
+  font-size: 12px;
+}
+
+.targetingVector {
+  stroke: var(--target-gold);
+  stroke-width: 2;
+  stroke-dasharray: 6 5;
+  opacity: 0.85;
+}
+
+.targetingDesiredCircle {
+  fill: rgba(34, 197, 94, 0.16);
+  stroke: var(--target-green);
+  stroke-width: 2.5;
+}
+
+.targetingAimMarker circle,
+.targetingAimMarker line {
+  fill: rgba(246, 199, 109, 0.12);
+  stroke: var(--target-gold);
+  stroke-width: 2;
+}
+
+.targetingAimMarker circle:nth-child(2) {
+  fill: var(--target-gold);
+  stroke: #fff3cf;
+}
+
+.targetingClickPrompt {
+  position: absolute;
+  left: 50%;
+  bottom: 54px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transform: translateX(-50%);
+  border: 1px solid rgba(246, 199, 109, 0.28);
+  border-radius: 999px;
+  background: rgba(4, 7, 12, 0.88);
+  padding: 9px 14px;
+  color: #e2e8f0;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 14px 28px -18px #000;
+}
+
+.targetingClickPrompt span {
+  color: var(--target-gold);
+  font-size: 1rem;
+}
+
+.targetingLegend {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid rgba(148, 163, 184, 0.1);
+  color: #64748b;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.targetingLegend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.targetingLegend i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  transform: rotate(45deg);
+}
+
+.targetLegendDesired {
+  border-radius: 50%;
+  border: 2px solid var(--target-green);
+  background: rgba(34, 197, 94, 0.18);
+}
+
+.targetLegendAim {
+  border: 2px solid var(--target-gold);
+  background: rgba(246, 199, 109, 0.18);
+}
+
+.targetingReadout {
+  display: grid;
+  align-content: center;
+  gap: 14px;
+  padding: 28px;
+  background: linear-gradient(155deg, rgba(15, 23, 42, 0.15), rgba(0, 0, 0, 0.18));
+}
+
+.targetingRecommendation {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(246, 199, 109, 0.28);
+  border-radius: 16px;
+  background: linear-gradient(140deg, rgba(246, 199, 109, 0.12), rgba(246, 199, 109, 0.025));
+  padding: 20px;
+}
+
+.targetingRecommendation::after {
+  content: '';
+  position: absolute;
+  top: -55px;
+  right: -55px;
+  width: 120px;
+  height: 120px;
+  border: 1px solid rgba(246, 199, 109, 0.11);
+  border-radius: 50%;
+  box-shadow: 0 0 0 18px rgba(246, 199, 109, 0.035), 0 0 0 38px rgba(246, 199, 109, 0.02);
+}
+
+.targetingRecommendationTopline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 13px;
+}
+
+.targetingRecommendationTopline > span {
+  color: #d6b979;
+  font-size: 0.67rem;
+  font-weight: 850;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.targetingRecommendationTopline b {
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 0.61rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.targetingHighConfidence {
+  background: rgba(34, 197, 94, 0.13);
+  color: #86efac;
+}
+
+.targetingBaseline {
+  background: rgba(148, 163, 184, 0.12);
+  color: #cbd5e1;
+}
+
+.targetingRecommendation > strong {
+  display: block;
+  max-width: 18ch;
+  color: #fff4d6;
+  font-size: clamp(1.45rem, 3vw, 2.05rem);
+  line-height: 1.05;
+  letter-spacing: -0.035em;
+}
+
+.targetingRecommendation p,
+.targetingRecommendation small {
+  display: block;
+  margin: 10px 0 0;
+  color: #94a3b8;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.targetingRecommendation small {
+  color: #fbbf24;
+}
+
+.targetingMetricGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  border-radius: 14px;
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.targetingMetricGrid > div {
+  display: grid;
+  gap: 5px;
+  background: #090c11;
+  padding: 14px 15px;
+}
+
+.targetingMetricGrid span,
+.targetingHistoryLine span {
+  color: #64748b;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.targetingMetricGrid strong {
+  color: #f8fafc;
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.targetingModelNote {
+  display: flex;
+  gap: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  border-radius: 14px;
+  background: rgba(148, 163, 184, 0.04);
+  padding: 14px;
+}
+
+.targetingModelIcon {
+  color: var(--target-gold);
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.targetingModelNote strong {
+  color: #e2e8f0;
+  font-size: 0.78rem;
+}
+
+.targetingModelNote p {
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.targetingHistoryLine {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 2px;
+}
+
+.targetingHistoryLine strong {
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  text-align: right;
+}
+
+.targetingStandby,
+.targetingNoData,
+.targetingLoading {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  min-height: 300px;
+  color: #94a3b8;
+  text-align: center;
+}
+
+.targetingStandby > strong,
+.targetingNoData > strong {
+  margin-top: 18px;
+  color: #e2e8f0;
+  font-size: 1rem;
+}
+
+.targetingStandby p,
+.targetingNoData span {
+  max-width: 32ch;
+  margin: 7px 0 0;
+  color: #64748b;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.targetingStandby small {
+  margin-top: 16px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.08);
+  padding: 6px 10px;
+  color: #94a3b8;
+}
+
+.targetingRadar {
+  position: relative;
+  display: grid;
+  width: 74px;
+  height: 74px;
+  place-items: center;
+  border: 1px solid rgba(246, 199, 109, 0.32);
+  border-radius: 50%;
+  box-shadow: inset 0 0 30px rgba(246, 199, 109, 0.06), 0 0 32px rgba(246, 199, 109, 0.06);
+}
+
+.targetingRadar::before,
+.targetingRadar::after {
+  content: '';
+  position: absolute;
+  background: rgba(246, 199, 109, 0.22);
+}
+
+.targetingRadar::before { width: 1px; height: 100%; }
+.targetingRadar::after { width: 100%; height: 1px; }
+.targetingRadar i { position: absolute; border: 1px solid rgba(246, 199, 109, 0.17); border-radius: 50%; }
+.targetingRadar i:nth-child(1) { width: 26px; height: 26px; }
+.targetingRadar i:nth-child(2) { width: 48px; height: 48px; }
+.targetingRadar i:nth-child(3) { width: 5px; height: 5px; border: 0; background: var(--target-gold); box-shadow: 0 0 12px var(--target-gold); }
+
+.targetingError {
+  position: relative;
+  z-index: 2;
+  margin: 18px 28px 0;
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  border-radius: 10px;
+  background: rgba(248, 113, 113, 0.08);
+  padding: 10px 12px;
+  color: #fca5a5;
+  font-size: 0.78rem;
+}
+
+.targetingError button { color: #fecaca; }
+
+.targetingMapsGridMulti .targetingGrid {
+  grid-template-columns: 1fr;
+  min-height: 0;
+}
+
+.targetingMapsGridMulti .targetingZonePanel {
+  border-right: 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  padding: 18px;
+}
+
+.targetingMapsGridMulti .targetingReadout {
+  min-height: 390px;
+  padding: 20px;
+}
+
+.targetingMapsGridMulti .targetingMapHeader {
+  padding: 14px 18px;
+}
+
+.targetingMapsGridMulti .targetingError {
+  margin-inline: 18px;
+}
+
+.targetingEmpty {
+  display: grid;
+  min-height: 420px;
+  place-items: center;
+  align-content: center;
+  border: 1px dashed rgba(148, 163, 184, 0.22);
+  border-radius: 18px;
+  background: linear-gradient(145deg, #0c1016, #05070a);
+  text-align: center;
+}
+
+.targetingEmptyIcon {
+  display: grid;
+  width: 56px;
+  height: 56px;
+  place-items: center;
+  border: 1px solid rgba(246, 199, 109, 0.3);
+  border-radius: 50%;
+  color: #f6c76d;
+  font-size: 1.4rem;
+}
+
+.targetingEmpty h3 { margin: 18px 0 0; color: #f8fafc; }
+.targetingEmpty p { max-width: 38ch; margin: 7px 18px 0; color: #64748b; font-size: 0.82rem; }
+
+@media (max-width: 900px) {
+  .targetingGrid { grid-template-columns: 1fr; }
+  .targetingZonePanel { border-right: 0; border-bottom: 1px solid rgba(148, 163, 184, 0.12); }
+  .targetingReadout { min-height: 380px; }
+}
+
+@media (max-width: 620px) {
+  .targetingHeader { align-items: stretch; flex-direction: column; padding: 22px 18px 18px; }
+  .targetingControls { flex-basis: auto; }
+  .targetingGrid { min-height: 0; }
+  .targetingZonePanel, .targetingReadout { padding: 18px; }
+  .targetingClickPrompt { bottom: 50px; font-size: 0.68rem; }
+  .targetingAddMap { align-self: flex-start; }
+  .targetingHeaderActions { justify-content: flex-start; }
+  .targetingUtilityButton, .targetingAddMap { flex: 1 1 auto; justify-content: center; }
+  .targetingMapHeader { align-items: center; flex-wrap: wrap; padding: 14px 18px; }
+  .targetingMapNumber { width: 100%; padding-bottom: 0; }
+  .targetingMapHeader .targetingControls { flex: 1 1 190px; }
+  .targetingSizeRow { align-items: flex-start; flex-direction: column; }
+  .targetingSizeOptions { width: 100%; justify-content: flex-start; }
+}
+
+.historyLogShell {
+  --history-gold: #f6c76d;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(var(--portal-accent-rgb, 200, 16, 46), 0.11), transparent 28%),
+    linear-gradient(150deg, #0b0f15, #05070a 62%);
+  box-shadow: 0 28px 70px -42px #000;
+}
+
+.historyLogHeader {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 25px 28px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.historyLogHeader h3 {
+  margin: 0;
+  color: #f8fafc;
+  font-size: clamp(1.35rem, 2.6vw, 1.85rem);
+  letter-spacing: -0.025em;
+}
+
+.historyLogHeader h3 span {
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.historyLogHeader p:last-child {
+  max-width: 620px;
+  margin: 7px 0 0;
+  color: #64748b;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.historyLogHeaderTools {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.historyLogSummary {
+  display: flex;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 12px;
+  background: rgba(2, 6, 12, 0.42);
+}
+
+.historyLogSummary > div {
+  display: grid;
+  min-width: 92px;
+  gap: 3px;
+  padding: 11px 14px;
+  border-left: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.historyLogSummary > div:first-child { border-left: 0; }
+
+.historyLogSummary span,
+.historyPitchMetrics span {
+  color: #64748b;
+  font-size: 0.59rem;
+  font-weight: 850;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.historyLogSummary strong {
+  color: #f8fafc;
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.historyExportButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 124px;
+  border: 1px solid rgba(246, 199, 109, 0.34);
+  border-radius: 12px;
+  background: linear-gradient(145deg, rgba(246, 199, 109, 0.13), rgba(246, 199, 109, 0.045));
+  padding: 0 15px;
+  color: #f6c76d;
+  font-size: 0.68rem;
+  font-weight: 850;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease, transform 150ms ease;
+}
+
+.historyExportButton:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(246, 199, 109, 0.66);
+  background: rgba(246, 199, 109, 0.16);
+}
+
+.historyExportButton:disabled { cursor: default; opacity: 0.42; }
+
+.historyLogState {
+  display: grid;
+  min-height: 340px;
+  place-items: center;
+  align-content: center;
+  gap: 9px;
+  padding: 30px;
+  color: #64748b;
+  font-size: 0.84rem;
+  text-align: center;
+}
+
+.historyLogState strong { color: #e2e8f0; }
+.historyLogState span:not(.spinner) { max-width: 42ch; line-height: 1.5; }
+
+.historyPitchGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(440px, 100%), 1fr));
+  gap: 14px;
+  padding: 18px;
+}
+
+.historyPitchCard {
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 16px;
+  background: linear-gradient(145deg, rgba(13, 18, 25, 0.98), rgba(5, 8, 12, 0.98));
+  box-shadow: 0 18px 40px -34px #000;
+}
+
+.historyPitchCard > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px 15px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  background: rgba(148, 163, 184, 0.025);
+}
+
+.historyPitchCard > header > div { display: grid; gap: 5px; }
+
+.historyPitchSequence {
+  color: #64748b;
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.historyPitchCard > header strong {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #f8fafc;
+  font-size: 0.9rem;
+}
+
+.historyPitchCard > header strong i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-shadow: 0 0 9px currentColor;
+}
+
+.historyHitBadge,
+.historyMissBadge {
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-size: 0.59rem;
+  font-weight: 850;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.historyHitBadge {
+  border: 1px solid rgba(74, 222, 128, 0.28);
+  background: rgba(34, 197, 94, 0.1);
+  color: #86efac;
+}
+
+.historyMissBadge {
+  border: 1px solid rgba(248, 113, 113, 0.25);
+  background: rgba(248, 113, 113, 0.08);
+  color: #fca5a5;
+}
+
+.historyPitchBody {
+  display: grid;
+  grid-template-columns: minmax(155px, 0.84fr) minmax(190px, 1.16fr);
+  min-height: 250px;
+}
+
+.historyPitchVisual {
+  display: grid;
+  align-content: center;
+  border-right: 1px solid rgba(148, 163, 184, 0.1);
+  background: radial-gradient(circle at 50% 42%, rgba(30, 41, 59, 0.5), rgba(2, 6, 12, 0.82) 74%);
+}
+
+.historyPitchVisual svg {
+  display: block;
+  width: 100%;
+  max-height: 220px;
+}
+
+.historyPocketNumber {
+  fill: rgba(148, 163, 184, 0.48);
+  font-size: 8px;
+  font-weight: 850;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+}
+
+.historyPitchLegend {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  margin-top: -2px;
+  color: #64748b;
+  font-size: 0.58rem;
+  font-weight: 750;
+}
+
+.historyPitchLegend span { display: inline-flex; align-items: center; gap: 5px; }
+.historyPitchLegend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+.historyLegendTarget { width: 12px; height: 12px; overflow: visible; }
+.historyLegendTarget circle:first-child { fill: rgba(74, 222, 128, 0.13); stroke: #4ade80; stroke-width: 1.6; }
+.historyLegendTarget circle:last-child { fill: #86efac; }
+.historyLegendActual { box-shadow: 0 0 7px currentColor; }
+
+.historyPitchDetails {
+  display: grid;
+  align-content: center;
+  gap: 13px;
+  padding: 16px;
+}
+
+.historyPitchTimestamp { display: grid; gap: 3px; }
+.historyPitchTimestamp strong { color: #e2e8f0; font-size: 0.8rem; }
+.historyPitchTimestamp span { color: #64748b; font-size: 0.65rem; }
+
+.historyPitchMetrics {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 10px;
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.historyPitchMetrics > div {
+  display: grid;
+  gap: 3px;
+  background: #090c11;
+  padding: 9px 10px;
+}
+
+.historyPitchMetrics strong {
+  color: #f8fafc;
+  font-size: 0.86rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.historyPitchMeta { display: grid; gap: 6px; margin: 0; }
+.historyPitchMeta > div { display: flex; justify-content: space-between; gap: 10px; }
+.historyPitchMeta dt { color: #64748b; font-size: 0.63rem; }
+.historyPitchMeta dd { margin: 0; color: #cbd5e1; font-size: 0.63rem; font-weight: 700; text-align: right; }
+
+.historyPagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 20px;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+  color: #64748b;
+  font-size: 0.7rem;
+}
+
+.historyPagination > div { display: flex; align-items: center; gap: 10px; }
+.historyPagination strong { min-width: 48px; color: #cbd5e1; text-align: center; }
+.historyPagination button {
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  background: rgba(148, 163, 184, 0.05);
+  padding: 7px 11px;
+  color: #cbd5e1;
+  font-size: 0.68rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+.historyPagination button:disabled { opacity: 0.35; cursor: default; }
+
+@media (max-width: 720px) {
+  .historyLogHeader { align-items: stretch; flex-direction: column; padding: 22px 18px; }
+  .historyLogHeaderTools { align-items: stretch; flex-direction: column; }
+  .historyLogSummary { align-self: flex-start; }
+  .historyExportButton { min-height: 42px; }
+  .historyPitchGrid { padding: 12px; }
+  .historyPitchBody { grid-template-columns: 1fr; }
+  .historyPitchVisual { border-right: 0; border-bottom: 1px solid rgba(148, 163, 184, 0.1); padding: 8px 0; }
+  .historyPagination { align-items: flex-start; flex-direction: column; }
 }
 
 .summaryCard {
@@ -478,6 +1864,23 @@
 
 .logTable tbody tr:hover {
   background: rgba(148, 163, 184, 0.04);
+}
+
+.selectableLogRow {
+  cursor: pointer;
+  outline: none;
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+
+.selectableLogRow:hover,
+.selectableLogRow:focus-visible {
+  background: rgba(148, 163, 184, 0.085) !important;
+  box-shadow: inset 3px 0 rgb(var(--portal-accent-rgb, 200, 16, 46));
+}
+
+.selectableLogRow[data-selected='true'] {
+  background: rgba(var(--portal-accent-rgb, 200, 16, 46), 0.12);
+  box-shadow: inset 3px 0 rgb(var(--portal-accent-rgb, 200, 16, 46));
 }
 
 .logPitchType {

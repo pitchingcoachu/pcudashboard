@@ -4,6 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { pitchLocationLabel } from '../../../lib/pitch-location';
 import { downloadContentPdf } from '../../../lib/leaderboard-pdf-export';
 import IntendedZoneStats, { DirectionHeatmap, emptyIntendedZoneDirectionBreakdown, type MissDirection } from './intended-zone-stats';
+import IntendedZoneTargeting from './intended-zone-targeting';
+import IntendedZonePitchLog from './intended-zone-pitch-log';
+import LiveFlightReplay from './live-flight-replay';
 import styles from './intended-zone-panel.module.css';
 
 // Mirrors pitching-suite.tsx's single-pitch "action zone" SVG geometry
@@ -135,6 +138,15 @@ type IntendedZonePitch = {
   horzBreak: number | null;
   thrownAt: string | null;
   taggedPitcherName: string | null;
+  pitcherThrows: string | null;
+  flightData: {
+    position: { x: number; y: number; z: number };
+    velocity: { x: number; y: number; z: number };
+    acceleration: { x: number; y: number; z: number };
+    releaseSideFt: number | null;
+    releaseHeightFt: number | null;
+    releaseExtensionFt: number | null;
+  } | null;
 };
 
 type IntendedZoneSessionMode = 'live' | 'ftp_deferred' | 'manual';
@@ -164,7 +176,8 @@ type TrackmanDiscoveredSession = {
   state?: string | null;
 };
 
-const POLL_INTERVAL_MS = 4000;
+const POLL_INTERVAL_MS = 2000;
+const DATA_API_SYNC_EVERY_POLLS = 8;
 
 export default function IntendedZonePanel({
   pitcherName,
@@ -179,7 +192,7 @@ export default function IntendedZonePanel({
   selectedPitchTypes?: string[];
   selectedBallTypes?: string[];
 }) {
-  const [page, setPage] = useState<'live' | 'stats'>('live');
+  const [page, setPage] = useState<'live' | 'stats' | 'targeting' | 'pitchLog' | 'strikeZoneTest'>('live');
   const [mode, setMode] = useState<IntendedZoneSessionMode>('live');
   const [activeSession, setActiveSession] = useState<IntendedZoneSession | null>(null);
   const [discoveredSessions, setDiscoveredSessions] = useState<TrackmanDiscoveredSession[]>([]);
@@ -194,14 +207,35 @@ export default function IntendedZonePanel({
   const [checkingFtp, setCheckingFtp] = useState(false);
   const [resettingMatches, setResettingMatches] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pollWarning, setPollWarning] = useState<string | null>(null);
+  const [discoveryWarning, setDiscoveryWarning] = useState<string | null>(null);
   const [history, setHistory] = useState<IntendedZoneSession[]>([]);
   const [deletingSessionId, setDeletingSessionId] = useState<number | null>(null);
   const [resumingSessionId, setResumingSessionId] = useState<number | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollInFlightRef = useRef(false);
+  const fallbackSyncInFlightRef = useRef(false);
+  const pollCountRef = useRef(0);
   const sessionExportRef = useRef<HTMLDivElement | null>(null);
   const [isExportingSessionPdf, setIsExportingSessionPdf] = useState(false);
   const lastSeenPitchId = useRef<number | null>(null);
   const [justLanded, setJustLanded] = useState(false);
+  const activeQueuedTargetIdRef = useRef<number | null>(null);
+  const targetPlacementVersionRef = useRef(0);
+  const targetWriteChainRef = useRef<Promise<void>>(Promise.resolve());
+  const projectorRef = useRef<HTMLDivElement | null>(null);
+  const [projectorFullscreen, setProjectorFullscreen] = useState(false);
+  const [showFlightReplay, setShowFlightReplay] = useState(true);
+  // null means follow the newest pitch as live data arrives. Selecting an
+  // older pitch pauses that auto-follow behavior until navigation returns to
+  // the newest pitch.
+  const [selectedFlightPitchId, setSelectedFlightPitchId] = useState<number | null>(null);
+
+  useEffect(() => {
+    const updateFullscreenState = () => setProjectorFullscreen(document.fullscreenElement === projectorRef.current);
+    document.addEventListener('fullscreenchange', updateFullscreenState);
+    return () => document.removeEventListener('fullscreenchange', updateFullscreenState);
+  }, []);
 
   const loadDiscoveredSessions = useCallback(async () => {
     try {
@@ -209,8 +243,12 @@ export default function IntendedZonePanel({
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error ?? 'Failed to load TrackMan sessions.');
       setDiscoveredSessions(Array.isArray(payload.sessions) ? payload.sessions : []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load TrackMan sessions.');
+      setDiscoveryWarning(null);
+    } catch {
+      // Session discovery is optional: coaches can start unlinked and attach
+      // later. A brief TrackMan/browser failure must not poison the entire
+      // Intended Zones page with a raw DOMException.
+      setDiscoveryWarning('Live TrackMan sessions are temporarily unavailable. You can still start unlinked or try again.');
     }
   }, []);
 
@@ -231,11 +269,32 @@ export default function IntendedZonePanel({
   }, [loadDiscoveredSessions, loadHistory]);
 
   const poll = useCallback(async (sessionId: number) => {
+    if (pollInFlightRef.current) return;
+    pollInFlightRef.current = true;
+    pollCountRef.current += 1;
+    const syncFallback = pollCountRef.current % DATA_API_SYNC_EVERY_POLLS === 0;
     try {
-      const response = await fetch(`/api/dashboard/pitching/intended-zone/pitches?sessionId=${sessionId}`);
+      const params = new URLSearchParams({ sessionId: String(sessionId) });
+      const response = await fetch(`/api/dashboard/pitching/intended-zone/pitches?${params.toString()}`, { cache: 'no-store' });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error ?? 'Failed to poll for pitches.');
       const nextPitches: IntendedZonePitch[] = Array.isArray(payload.pitches) ? payload.pitches : [];
+      const queuedTargets = nextPitches.filter((pitch) => !pitch.trackmanPlayId && pitch.plateLocSide === null && pitch.plateLocHeight === null);
+      const nextQueuedTarget = queuedTargets.length ? queuedTargets[0] : null;
+      const previouslyActiveTargetId = activeQueuedTargetIdRef.current;
+      if (nextQueuedTarget) {
+        activeQueuedTargetIdRef.current = nextQueuedTarget.id;
+        // Hydrate a pending target when resuming/reloading. While a local
+        // move is already visible, don't let a slightly older poll snap it
+        // back before the serialized PUT finishes.
+        if (previouslyActiveTargetId === null || previouslyActiveTargetId !== nextQueuedTarget.id) {
+          setPendingTarget({ sideFt: nextQueuedTarget.intendedSideFt, heightFt: nextQueuedTarget.intendedHeightFt });
+          setTargetRadiusFt(nextQueuedTarget.targetRadiusFt);
+        }
+      } else if (previouslyActiveTargetId !== null) {
+        activeQueuedTargetIdRef.current = null;
+        setPendingTarget(null);
+      }
       const matched = nextPitches.filter((p) => p.trackmanPlayId);
       const newest = matched.length ? matched[matched.length - 1] : null;
       if (newest && newest.id !== lastSeenPitchId.current) {
@@ -244,8 +303,26 @@ export default function IntendedZonePanel({
         setTimeout(() => setJustLanded(false), 550);
       }
       setPitches(nextPitches);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to poll for pitches.');
+      setPollWarning(null);
+
+      // TrackMan's pull API is useful for classification enrichment and as a
+      // delivery fallback, but it can take several seconds. Run it separately
+      // so a slow upstream response never freezes the two-second webhook loop.
+      if (syncFallback && !fallbackSyncInFlightRef.current) {
+        fallbackSyncInFlightRef.current = true;
+        const fallbackParams = new URLSearchParams({ sessionId: String(sessionId), fallback: '1' });
+        void fetch(`/api/dashboard/pitching/intended-zone/pitches?${fallbackParams.toString()}`, { cache: 'no-store' })
+          .catch(() => undefined)
+          .finally(() => {
+            fallbackSyncInFlightRef.current = false;
+          });
+      }
+    } catch {
+      // Keep the existing data visible and
+      // clear this notice automatically as soon as the next poll succeeds.
+      setPollWarning('Live pitch refresh was briefly interrupted. Retrying automatically…');
+    } finally {
+      pollInFlightRef.current = false;
     }
   }, []);
 
@@ -282,7 +359,10 @@ export default function IntendedZonePanel({
       setPendingTarget(null);
       setManualActual(null);
       setLastManualPitchId(null);
+      setSelectedFlightPitchId(null);
       lastSeenPitchId.current = null;
+      activeQueuedTargetIdRef.current = null;
+      pollCountRef.current = 0;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start session.');
     } finally {
@@ -303,6 +383,8 @@ export default function IntendedZonePanel({
     } finally {
       setActiveSession(null);
       setPendingTarget(null);
+      setSelectedFlightPitchId(null);
+      activeQueuedTargetIdRef.current = null;
       loadHistory();
     }
   }
@@ -343,6 +425,8 @@ export default function IntendedZonePanel({
         setActiveSession(null);
         setPitches([]);
         setPendingTarget(null);
+        setSelectedFlightPitchId(null);
+        activeQueuedTargetIdRef.current = null;
       }
       setHistory((prev) => prev.filter((s) => s.id !== sessionId));
     } catch (err) {
@@ -376,13 +460,46 @@ export default function IntendedZonePanel({
       setPendingTarget(null);
       setManualActual(null);
       setLastManualPitchId(null);
+      setSelectedFlightPitchId(null);
       lastSeenPitchId.current = null;
+      activeQueuedTargetIdRef.current = null;
+      pollCountRef.current = 0;
       await poll(target.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to resume session.');
     } finally {
       setResumingSessionId(null);
     }
+  }
+
+  function placeOrMoveLiveTarget(target: { sideFt: number; heightFt: number }) {
+    if (!activeSession || activeSession.mode === 'manual') return;
+    const sessionId = activeSession.id;
+    const placementVersion = targetPlacementVersionRef.current + 1;
+    targetPlacementVersionRef.current = placementVersion;
+    setPendingTarget(target);
+    setError(null);
+    targetWriteChainRef.current = targetWriteChainRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        const response = await fetch('/api/dashboard/pitching/intended-zone/pitches', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId,
+            intendedSideFt: target.sideFt,
+            intendedHeightFt: target.heightFt,
+            targetRadiusFt,
+          }),
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error ?? 'Failed to place target.');
+        activeQueuedTargetIdRef.current = Number(payload.pitchId) || null;
+      })
+      .catch((placementError) => {
+        if (targetPlacementVersionRef.current === placementVersion) setPendingTarget(null);
+        setError(placementError instanceof Error ? placementError.message : 'Failed to place target.');
+      });
   }
 
   function handleZoneClick(event: React.MouseEvent<SVGSVGElement>) {
@@ -399,28 +516,7 @@ export default function IntendedZonePanel({
       else if (!manualActual) setManualActual({ sideFt, heightFt });
       return;
     }
-    if (pendingTarget) return;
-    setPendingTarget({ sideFt, heightFt });
-  }
-
-  async function handleConfirmTarget() {
-    if (!activeSession || !pendingTarget) return;
-    try {
-      await fetch('/api/dashboard/pitching/intended-zone/pitches', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: activeSession.id,
-          intendedSideFt: pendingTarget.sideFt,
-          intendedHeightFt: pendingTarget.heightFt,
-          targetRadiusFt,
-        }),
-      });
-      setPendingTarget(null);
-      poll(activeSession.id);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to queue target.');
-    }
+    placeOrMoveLiveTarget({ sideFt, heightFt });
   }
 
   async function handleConfirmManualPitch() {
@@ -469,6 +565,7 @@ export default function IntendedZonePanel({
     try {
       await fetch(`/api/dashboard/pitching/intended-zone/pitches?pitchId=${pitchId}`, { method: 'DELETE' });
       setPitches((prev) => prev.filter((p) => p.id !== pitchId));
+      setSelectedFlightPitchId((selectedId) => selectedId === pitchId ? null : selectedId);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete pitch.');
     }
@@ -519,9 +616,34 @@ export default function IntendedZonePanel({
     }
   }
 
-  const lastMatchedPitch = useMemo(() => {
-    const matched = pitches.filter((p) => p.trackmanPlayId);
-    return matched.length ? matched[matched.length - 1] : null;
+  const matchedPitches = useMemo(() => {
+    return pitches
+      .filter((pitch) => pitch.trackmanPlayId)
+      .sort((a, b) => a.pitchIndex - b.pitchIndex || a.id - b.id);
+  }, [pitches]);
+
+  const lastMatchedPitch = matchedPitches.length ? matchedPitches[matchedPitches.length - 1] : null;
+  const selectedFlightPitchIndex = selectedFlightPitchId === null
+    ? matchedPitches.length - 1
+    : matchedPitches.findIndex((pitch) => pitch.id === selectedFlightPitchId);
+  const normalizedFlightPitchIndex = selectedFlightPitchIndex >= 0 ? selectedFlightPitchIndex : matchedPitches.length - 1;
+  const viewedFlightPitch = normalizedFlightPitchIndex >= 0 ? matchedPitches[normalizedFlightPitchIndex] : null;
+  const followingLiveFlight = selectedFlightPitchId === null || normalizedFlightPitchIndex === matchedPitches.length - 1;
+
+  const viewPreviousFlight = useCallback(() => {
+    if (normalizedFlightPitchIndex <= 0) return;
+    setSelectedFlightPitchId(matchedPitches[normalizedFlightPitchIndex - 1].id);
+  }, [matchedPitches, normalizedFlightPitchIndex]);
+
+  const viewNextFlight = useCallback(() => {
+    if (normalizedFlightPitchIndex < 0 || normalizedFlightPitchIndex >= matchedPitches.length - 1) return;
+    const nextIndex = normalizedFlightPitchIndex + 1;
+    setSelectedFlightPitchId(nextIndex === matchedPitches.length - 1 ? null : matchedPitches[nextIndex].id);
+  }, [matchedPitches, normalizedFlightPitchIndex]);
+
+  const lastQueuedPitch = useMemo(() => {
+    const queued = pitches.filter((pitch) => !pitch.trackmanPlayId && pitch.plateLocSide === null && pitch.plateLocHeight === null);
+    return queued.length ? queued[0] : null;
   }, [pitches]);
 
   const sessionAverages = useMemo(() => {
@@ -553,8 +675,8 @@ export default function IntendedZonePanel({
 
     const byType = new Map<string, ReturnType<typeof tally>>();
     for (const p of matched) {
-      const key = p.pitchType ?? 'Undefined';
-      if (!byType.has(key)) byType.set(key, tally(matched.filter((m) => (m.pitchType ?? 'Undefined') === key)));
+      const key = p.pitchType ?? 'Untagged';
+      if (!byType.has(key)) byType.set(key, tally(matched.filter((m) => (m.pitchType ?? 'Untagged') === key)));
     }
 
     return { overall: tally(matched), byType };
@@ -566,6 +688,15 @@ export default function IntendedZonePanel({
       if (p.missDirection) breakdown[p.missDirection as MissDirection] += 1;
     }
     return breakdown;
+  }, [pitches]);
+
+  // Drives which screen side (left/right) the live direction heatmap
+  // renders "glove" vs "arm" in -- majority vote across this session's
+  // pitches (virtually always unanimous, one session = one pitcher).
+  const liveThrowsLeft = useMemo(() => {
+    if (!pitches.length) return false;
+    const leftN = pitches.filter((p) => String(p.pitcherThrows ?? '').trim().toLowerCase().startsWith('l')).length;
+    return leftN * 2 > pitches.length;
   }, [pitches]);
 
   // Compares the pitcher tagged on the TrackMan iPad to who was selected
@@ -582,7 +713,7 @@ export default function IntendedZonePanel({
   }, [pitcherName, pitches]);
 
   const lastPitchColor = lastMatchedPitch ? PITCH_COLORS[lastMatchedPitch.pitchType ?? 'Undefined'] ?? PITCH_COLORS.Undefined : null;
-  const lastMissSeverity = lastMatchedPitch ? missSeverity(lastMatchedPitch.missDistanceFt) : null;
+  const viewedMissSeverity = viewedFlightPitch ? missSeverity(viewedFlightPitch.missDistanceFt) : null;
 
   const pageSwitcher = (
     <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
@@ -602,6 +733,30 @@ export default function IntendedZonePanel({
       >
         Stats
       </button>
+      <button
+        type="button"
+        className={styles.resetButton}
+        style={page === 'targeting' ? { borderColor: 'rgb(var(--portal-accent-rgb, 200, 16, 46))', color: '#f8fafc' } : undefined}
+        onClick={() => setPage('targeting')}
+      >
+        Targeting
+      </button>
+      <button
+        type="button"
+        className={styles.resetButton}
+        style={page === 'pitchLog' ? { borderColor: 'rgb(var(--portal-accent-rgb, 200, 16, 46))', color: '#f8fafc' } : undefined}
+        onClick={() => setPage('pitchLog')}
+      >
+        Pitch Log
+      </button>
+      <button
+        type="button"
+        className={styles.resetButton}
+        style={page === 'strikeZoneTest' ? { borderColor: 'rgb(var(--portal-accent-rgb, 200, 16, 46))', color: '#f8fafc' } : undefined}
+        onClick={() => setPage('strikeZoneTest')}
+      >
+        Strike Zone Test
+      </button>
     </div>
   );
 
@@ -617,6 +772,141 @@ export default function IntendedZonePanel({
           sidebarPitchTypes={selectedPitchTypes ?? ['All']}
           sidebarBallTypes={selectedBallTypes ?? ['Baseball']}
         />
+      </div>
+    );
+  }
+
+  if (page === 'targeting') {
+    return (
+      <div>
+        {pageSwitcher}
+        <IntendedZoneTargeting
+          pitcherName={pitcherName}
+          startDate={startDate ?? ''}
+          endDate={endDate ?? ''}
+          selectedPitchTypes={selectedPitchTypes ?? ['All']}
+          selectedBallTypes={selectedBallTypes ?? ['Baseball']}
+        />
+      </div>
+    );
+  }
+
+  if (page === 'pitchLog') {
+    return (
+      <div>
+        {pageSwitcher}
+        <IntendedZonePitchLog
+          pitcherName={pitcherName}
+          startDate={startDate ?? ''}
+          endDate={endDate ?? ''}
+          selectedPitchTypes={selectedPitchTypes ?? ['All']}
+          selectedBallTypes={selectedBallTypes ?? ['Baseball']}
+        />
+      </div>
+    );
+  }
+
+  if (page === 'strikeZoneTest') {
+    const projectedTarget = pendingTarget
+      ?? (lastQueuedPitch ? { sideFt: lastQueuedPitch.intendedSideFt, heightFt: lastQueuedPitch.intendedHeightFt, radiusFt: lastQueuedPitch.targetRadiusFt } : null)
+      ?? (lastMatchedPitch ? { sideFt: lastMatchedPitch.intendedSideFt, heightFt: lastMatchedPitch.intendedHeightFt, radiusFt: lastMatchedPitch.targetRadiusFt } : null);
+    const projectedRadius = projectedTarget && 'radiusFt' in projectedTarget ? projectedTarget.radiusFt : targetRadiusFt;
+    const showActual = Boolean(
+      !pendingTarget
+      && !lastQueuedPitch
+      && lastMatchedPitch
+      && lastMatchedPitch.plateLocSide !== null
+      && lastMatchedPitch.plateLocHeight !== null,
+    );
+
+    const toggleProjectorFullscreen = async () => {
+      try {
+        if (document.fullscreenElement) await document.exitFullscreen();
+        else await projectorRef.current?.requestFullscreen();
+      } catch (fullscreenError) {
+        setError(fullscreenError instanceof Error ? fullscreenError.message : 'Unable to enter full screen.');
+      }
+    };
+
+    return (
+      <div ref={projectorRef} className={styles.projectorShell}>
+        <div className={styles.projectorUtilityDock}>
+          <button type="button" onClick={() => void toggleProjectorFullscreen()}>
+            {projectorFullscreen ? 'Exit Full Screen' : 'Full Screen'}
+          </button>
+          <button type="button" onClick={() => setPage('live')}>Exit Test</button>
+        </div>
+
+        {!activeSession ? (
+          <div className={styles.projectorEmpty}>
+            <div className={styles.projectorEmptyZone} aria-hidden="true" />
+            <strong>Start or resume a session first</strong>
+            <span>Select Live Webhook, FTP Sync, or Manual in Live Tracking, then return here.</span>
+            <button type="button" onClick={() => setPage('live')}>Open Live Tracking</button>
+          </div>
+        ) : (
+          <div className={styles.projectorStage}>
+            <svg
+              viewBox={`0 0 ${ZONE_W} ${ZONE_H}`}
+              className={styles.projectorZoneSvg}
+              onClick={handleZoneClick}
+              role="img"
+              aria-label="Projected strike zone target"
+            >
+              <rect x={zonePx(COMP_LEFT)} y={zonePy(COMP_TOP)} width={zonePx(COMP_RIGHT) - zonePx(COMP_LEFT)} height={zonePy(COMP_BOTTOM) - zonePy(COMP_TOP)} fill="none" stroke="var(--projector-zone-stroke)" strokeWidth="4.5" />
+              <line x1={zonePx(COMP_LEFT)} y1={zonePy(STRIKE_CENTER_Y)} x2={zonePx(STRIKE_LEFT)} y2={zonePy(STRIKE_CENTER_Y)} stroke="var(--projector-zone-stroke)" strokeWidth="3.5" />
+              <line x1={zonePx(STRIKE_RIGHT)} y1={zonePy(STRIKE_CENTER_Y)} x2={zonePx(COMP_RIGHT)} y2={zonePy(STRIKE_CENTER_Y)} stroke="var(--projector-zone-stroke)" strokeWidth="3.5" />
+              <line x1={zonePx(STRIKE_CENTER_X)} y1={zonePy(COMP_BOTTOM)} x2={zonePx(STRIKE_CENTER_X)} y2={zonePy(STRIKE_BOTTOM)} stroke="var(--projector-zone-stroke)" strokeWidth="3.5" />
+              <line x1={zonePx(STRIKE_CENTER_X)} y1={zonePy(STRIKE_TOP)} x2={zonePx(STRIKE_CENTER_X)} y2={zonePy(COMP_TOP)} stroke="var(--projector-zone-stroke)" strokeWidth="3.5" />
+              <rect x={zonePx(STRIKE_LEFT)} y={zonePy(STRIKE_TOP)} width={zonePx(STRIKE_RIGHT) - zonePx(STRIKE_LEFT)} height={zonePy(STRIKE_BOTTOM) - zonePy(STRIKE_TOP)} fill="var(--projector-zone-fill)" stroke="var(--projector-zone-strong)" strokeWidth="7" />
+              <line x1={zonePx(STRIKE_LEFT + (STRIKE_RIGHT - STRIKE_LEFT) / 3)} y1={zonePy(STRIKE_BOTTOM)} x2={zonePx(STRIKE_LEFT + (STRIKE_RIGHT - STRIKE_LEFT) / 3)} y2={zonePy(STRIKE_TOP)} stroke="var(--projector-zone-stroke)" strokeWidth="3" />
+              <line x1={zonePx(STRIKE_LEFT + ((STRIKE_RIGHT - STRIKE_LEFT) * 2) / 3)} y1={zonePy(STRIKE_BOTTOM)} x2={zonePx(STRIKE_LEFT + ((STRIKE_RIGHT - STRIKE_LEFT) * 2) / 3)} y2={zonePy(STRIKE_TOP)} stroke="var(--projector-zone-stroke)" strokeWidth="3" />
+              <line x1={zonePx(STRIKE_LEFT)} y1={zonePy(STRIKE_BOTTOM + (STRIKE_TOP - STRIKE_BOTTOM) / 3)} x2={zonePx(STRIKE_RIGHT)} y2={zonePy(STRIKE_BOTTOM + (STRIKE_TOP - STRIKE_BOTTOM) / 3)} stroke="var(--projector-zone-stroke)" strokeWidth="3" />
+              <line x1={zonePx(STRIKE_LEFT)} y1={zonePy(STRIKE_BOTTOM + ((STRIKE_TOP - STRIKE_BOTTOM) * 2) / 3)} x2={zonePx(STRIKE_RIGHT)} y2={zonePy(STRIKE_BOTTOM + ((STRIKE_TOP - STRIKE_BOTTOM) * 2) / 3)} stroke="var(--projector-zone-stroke)" strokeWidth="3" />
+              {Array.from({ length: 9 }, (_, index) => {
+                const column = index % 3;
+                const row = Math.floor(index / 3);
+                const x = STRIKE_LEFT + ((STRIKE_RIGHT - STRIKE_LEFT) / 3) * (column + 0.5);
+                const y = STRIKE_TOP - ((STRIKE_TOP - STRIKE_BOTTOM) / 3) * (row + 0.5);
+                return <text key={index + 1} x={zonePx(x)} y={zonePy(y)} className={styles.projectorPocketNumber}>{index + 1}</text>;
+              })}
+              <text x={zonePx(-1.19)} y={zonePy(3.825)} className={styles.projectorPocketNumber}>10</text>
+              <text x={zonePx(1.19)} y={zonePy(3.825)} className={styles.projectorPocketNumber}>11</text>
+              <text x={zonePx(-1.19)} y={zonePy(1.275)} className={styles.projectorPocketNumber}>12</text>
+              <text x={zonePx(1.19)} y={zonePy(1.275)} className={styles.projectorPocketNumber}>13</text>
+
+              {projectedTarget ? <IntendedTargetGlove xFt={projectedTarget.sideFt} yFt={projectedTarget.heightFt} radiusFt={projectedRadius} /> : null}
+              {activeSession.mode === 'manual' && manualActual ? (
+                <circle cx={zonePx(manualActual.sideFt)} cy={zonePy(manualActual.heightFt)} r="12" fill={PITCH_COLORS[manualPitchType] ?? PITCH_COLORS.Undefined} stroke="var(--projector-zone-strong)" strokeWidth="3.5" />
+              ) : null}
+              {showActual && lastMatchedPitch && lastMatchedPitch.plateLocSide !== null && lastMatchedPitch.plateLocHeight !== null ? (
+                <>
+                  <line x1={zonePx(lastMatchedPitch.intendedSideFt)} y1={zonePy(lastMatchedPitch.intendedHeightFt)} x2={zonePx(lastMatchedPitch.plateLocSide)} y2={zonePy(lastMatchedPitch.plateLocHeight)} stroke="var(--projector-zone-connector)" strokeWidth="3" strokeDasharray="6 4" />
+                  <circle className={justLanded ? styles.actualDot : undefined} cx={zonePx(lastMatchedPitch.plateLocSide)} cy={zonePy(lastMatchedPitch.plateLocHeight)} r="12" fill={lastPitchColor ?? PITCH_COLORS.Undefined} stroke="var(--projector-zone-strong)" strokeWidth="3.5" />
+                </>
+              ) : null}
+            </svg>
+
+            <div className={`${styles.projectorControlDock} ${activeSession.mode === 'manual' && pendingTarget ? styles.projectorControlDockActive : ''}`}>
+              {activeSession.mode === 'manual' && pendingTarget && manualActual ? (
+                <>
+                  <select value={manualPitchType} onChange={(event) => setManualPitchType(event.target.value)} aria-label="Pitch type">
+                    <option value="">Pitch type…</option>
+                    {Object.keys(PITCH_COLORS).filter((type) => type !== 'Undefined').map((type) => <option key={type} value={type}>{type}</option>)}
+                  </select>
+                  <button type="button" onClick={handleConfirmManualPitch}>Save Pitch</button>
+                  <button type="button" onClick={() => { setPendingTarget(null); setManualActual(null); setManualPitchType(''); }}>Reset</button>
+                </>
+              ) : activeSession.mode === 'manual' && pendingTarget ? (
+                <><span>Tap actual location</span><button type="button" onClick={() => setPendingTarget(null)}>Reset</button></>
+              ) : activeSession.mode !== 'manual' && pendingTarget ? (
+                <span>Target ready · tap elsewhere to move it</span>
+              ) : (
+                <span>Tap anywhere to place the next target</span>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -640,6 +930,7 @@ export default function IntendedZonePanel({
       </div>
 
       {error ? <p className={styles.errorBanner}>{error}</p> : null}
+      {!error && pollWarning ? <p className={styles.errorBanner}>{pollWarning}</p> : null}
 
       {!pitcherName ? (
         <p className={styles.noPitcher}>Select a single pitcher above (Split By Pitcher, one selected) to start a live session.</p>
@@ -704,6 +995,12 @@ export default function IntendedZonePanel({
                   </option>
                 ))}
               </select>
+              {discoveryWarning ? (
+                <p className={styles.zoneHint} style={{ textAlign: 'left', marginTop: 8 }}>
+                  {discoveryWarning}{' '}
+                  <button type="button" className={styles.inlineButton} onClick={loadDiscoveredSessions}>Try again</button>
+                </p>
+              ) : null}
             </div>
           ) : null}
 
@@ -765,14 +1062,19 @@ export default function IntendedZonePanel({
         <div className={styles.liveLayout} ref={sessionExportRef}>
           <div className={styles.liveHeader}>
             <p className={styles.pitchCounter}>
-              Pitch <strong>#{pitches.length + (pendingTarget ? 1 : 0)}</strong>
-              {lastMatchedPitch?.pitchType ? (
+              Pitch <strong>#{lastQueuedPitch?.pitchIndex ?? pitches.length + (pendingTarget ? 1 : 0)}</strong>
+              {lastMatchedPitch ? (
                 <span className={styles.pitchTypeChip} style={{ color: lastPitchColor ?? undefined, borderColor: lastPitchColor ?? undefined }}>
-                  {lastMatchedPitch.pitchType}
+                  {lastMatchedPitch.pitchType ?? 'Untagged'}
                 </span>
               ) : null}
             </p>
             <div style={{ display: 'flex', gap: 8 }}>
+              {activeSession.mode === 'live' ? (
+                <button type="button" className={styles.deleteLink} onClick={() => setShowFlightReplay((visible) => !visible)}>
+                  {showFlightReplay ? 'Hide Flight' : 'Show Flight'}
+                </button>
+              ) : null}
               <button type="button" className={styles.deleteLink} onClick={handleExportSessionPdf} disabled={isExportingSessionPdf}>
                 {isExportingSessionPdf ? 'Exporting…' : 'Export PDF'}
               </button>
@@ -821,7 +1123,7 @@ export default function IntendedZonePanel({
               <div className={styles.zoneFrame}>
                 <svg
                   viewBox={`0 0 ${ZONE_W} ${ZONE_H}`}
-                  className={`${styles.zoneSvg} ${pendingTarget ? styles.locked : ''}`}
+                  className={styles.zoneSvg}
                   onClick={handleZoneClick}
                 >
                   <polygon
@@ -856,9 +1158,22 @@ export default function IntendedZonePanel({
                   <line x1={zonePx(STRIKE_LEFT + ((STRIKE_RIGHT - STRIKE_LEFT) * 2) / 3)} y1={zonePy(STRIKE_BOTTOM)} x2={zonePx(STRIKE_LEFT + ((STRIKE_RIGHT - STRIKE_LEFT) * 2) / 3)} y2={zonePy(STRIKE_TOP)} stroke={ZONE_STROKE} strokeWidth="2" />
                   <line x1={zonePx(STRIKE_LEFT)} y1={zonePy(STRIKE_BOTTOM + (STRIKE_TOP - STRIKE_BOTTOM) / 3)} x2={zonePx(STRIKE_RIGHT)} y2={zonePy(STRIKE_BOTTOM + (STRIKE_TOP - STRIKE_BOTTOM) / 3)} stroke={ZONE_STROKE} strokeWidth="2" />
                   <line x1={zonePx(STRIKE_LEFT)} y1={zonePy(STRIKE_BOTTOM + ((STRIKE_TOP - STRIKE_BOTTOM) * 2) / 3)} x2={zonePx(STRIKE_RIGHT)} y2={zonePy(STRIKE_BOTTOM + ((STRIKE_TOP - STRIKE_BOTTOM) * 2) / 3)} stroke={ZONE_STROKE} strokeWidth="2" />
+                  {Array.from({ length: 9 }, (_, index) => {
+                    const column = index % 3;
+                    const row = Math.floor(index / 3);
+                    const x = STRIKE_LEFT + ((STRIKE_RIGHT - STRIKE_LEFT) / 3) * (column + 0.5);
+                    const y = STRIKE_TOP - ((STRIKE_TOP - STRIKE_BOTTOM) / 3) * (row + 0.5);
+                    return <text key={index + 1} x={zonePx(x)} y={zonePy(y)} className={styles.zonePocketNumber}>{index + 1}</text>;
+                  })}
+                  <text x={zonePx(-1.19)} y={zonePy(3.825)} className={styles.zonePocketNumber}>10</text>
+                  <text x={zonePx(1.19)} y={zonePy(3.825)} className={styles.zonePocketNumber}>11</text>
+                  <text x={zonePx(-1.19)} y={zonePy(1.275)} className={styles.zonePocketNumber}>12</text>
+                  <text x={zonePx(1.19)} y={zonePy(1.275)} className={styles.zonePocketNumber}>13</text>
 
                   {pendingTarget ? (
                     <IntendedTargetGlove xFt={pendingTarget.sideFt} yFt={pendingTarget.heightFt} radiusFt={targetRadiusFt} />
+                  ) : activeSession.mode !== 'manual' && lastQueuedPitch ? (
+                    <IntendedTargetGlove xFt={lastQueuedPitch.intendedSideFt} yFt={lastQueuedPitch.intendedHeightFt} radiusFt={lastQueuedPitch.targetRadiusFt} />
                   ) : activeSession.mode !== 'manual' && lastMatchedPitch ? (
                     <IntendedTargetGlove xFt={lastMatchedPitch.intendedSideFt} yFt={lastMatchedPitch.intendedHeightFt} radiusFt={lastMatchedPitch.targetRadiusFt} />
                   ) : null}
@@ -874,7 +1189,7 @@ export default function IntendedZonePanel({
                     />
                   ) : null}
 
-                  {lastMatchedPitch && !pendingTarget && activeSession.mode !== 'manual' && lastMatchedPitch.plateLocSide !== null && lastMatchedPitch.plateLocHeight !== null ? (
+                  {lastMatchedPitch && !pendingTarget && !lastQueuedPitch && activeSession.mode !== 'manual' && lastMatchedPitch.plateLocSide !== null && lastMatchedPitch.plateLocHeight !== null ? (
                     <>
                       <line
                         x1={zonePx(lastMatchedPitch.intendedSideFt)}
@@ -969,15 +1284,8 @@ export default function IntendedZonePanel({
                     ) : null}
                   </div>
                 )
-              ) : pendingTarget ? (
-                <div className={styles.actionRow}>
-                  <button type="button" className={styles.confirmButton} onClick={handleConfirmTarget}>
-                    Confirm Target — Ready for Pitch
-                  </button>
-                  <button type="button" className={styles.resetButton} onClick={() => setPendingTarget(null)}>
-                    Reset
-                  </button>
-                </div>
+              ) : pendingTarget || lastQueuedPitch ? (
+                <p className={styles.zoneHint}>Target ready — tap anywhere else to move it.</p>
               ) : (
                 <p className={styles.zoneHint}>
                   {activeSession.trackmanSessionId ? 'Tap the zone to set the next target.' : 'No TrackMan session linked — data will not auto-populate.'}
@@ -999,23 +1307,35 @@ export default function IntendedZonePanel({
             </div>
 
             <div style={{ display: 'grid', gap: 14 }}>
-              {lastMatchedPitch ? (
+              {activeSession.mode === 'live' && showFlightReplay ? (
+                <LiveFlightReplay
+                  pitch={viewedFlightPitch}
+                  currentPitchNumber={normalizedFlightPitchIndex + 1}
+                  totalPitches={matchedPitches.length}
+                  hasPrevious={normalizedFlightPitchIndex > 0}
+                  hasNext={normalizedFlightPitchIndex >= 0 && normalizedFlightPitchIndex < matchedPitches.length - 1}
+                  followingLive={followingLiveFlight}
+                  onPrevious={viewPreviousFlight}
+                  onNext={viewNextFlight}
+                />
+              ) : null}
+              {viewedFlightPitch ? (
                 <div className={styles.statGrid}>
-                  <StatTile label="Velocity" value={lastMatchedPitch.relSpeed !== null ? `${lastMatchedPitch.relSpeed.toFixed(1)}` : '—'} suffix="mph" />
-                  <StatTile label="IVB" value={lastMatchedPitch.inducedVertBreak !== null ? lastMatchedPitch.inducedVertBreak.toFixed(1) : '—'} suffix='"' />
-                  <StatTile label="HB" value={lastMatchedPitch.horzBreak !== null ? lastMatchedPitch.horzBreak.toFixed(1) : '—'} suffix='"' />
+                  <StatTile label="Velocity" value={viewedFlightPitch.relSpeed !== null ? `${viewedFlightPitch.relSpeed.toFixed(1)}` : '—'} suffix="mph" />
+                  <StatTile label="IVB" value={viewedFlightPitch.inducedVertBreak !== null ? viewedFlightPitch.inducedVertBreak.toFixed(1) : '—'} suffix='"' />
+                  <StatTile label="HB" value={viewedFlightPitch.horzBreak !== null ? viewedFlightPitch.horzBreak.toFixed(1) : '—'} suffix='"' />
                   <StatTile
                     label="Miss Distance"
-                    value={lastMatchedPitch.missDistanceFt !== null ? (lastMatchedPitch.missDistanceFt * 12).toFixed(1) : '—'}
+                    value={viewedFlightPitch.missDistanceFt !== null ? (viewedFlightPitch.missDistanceFt * 12).toFixed(1) : '—'}
                     suffix='"'
-                    severity={lastMissSeverity}
+                    severity={viewedMissSeverity}
                   />
                   <StatTile
                     label="Miss Direction"
-                    value={lastMatchedPitch.missDirection ? MISS_DIRECTION_LABELS[lastMatchedPitch.missDirection] ?? lastMatchedPitch.missDirection : '—'}
+                    value={viewedFlightPitch.missDirection ? MISS_DIRECTION_LABELS[viewedFlightPitch.missDirection] ?? viewedFlightPitch.missDirection : '—'}
                     small
                   />
-                  <StatTile label="Target Size" value={(lastMatchedPitch.targetRadiusFt * 12).toFixed(0)} suffix='" radius' />
+                  <StatTile label="Target Size" value={(viewedFlightPitch.targetRadiusFt * 12).toFixed(0)} suffix='" radius' />
                 </div>
               ) : (
                 <div className={styles.waitingCard}>
@@ -1105,7 +1425,7 @@ export default function IntendedZonePanel({
                   <p className={styles.zoneHint} style={{ textAlign: 'left', alignSelf: 'flex-start', marginBottom: 8 }}>
                     Where misses land relative to the target — glove/arm side is from the pitcher&apos;s own throwing-hand perspective.
                   </p>
-                  <DirectionHeatmap breakdown={liveDirectionBreakdown} />
+                  <DirectionHeatmap breakdown={liveDirectionBreakdown} throwsLeft={liveThrowsLeft} />
                 </div>
               ) : null}
             </div>
@@ -1133,12 +1453,28 @@ export default function IntendedZonePanel({
                       const severity = missSeverity(p.missDistanceFt);
                       const color = PITCH_COLORS[p.pitchType ?? 'Undefined'] ?? PITCH_COLORS.Undefined;
                       return (
-                        <tr key={p.id}>
+                        <tr
+                          key={p.id}
+                          className={p.trackmanPlayId ? styles.selectableLogRow : undefined}
+                          data-selected={viewedFlightPitch?.id === p.id ? 'true' : undefined}
+                          tabIndex={p.trackmanPlayId ? 0 : undefined}
+                          aria-label={p.trackmanPlayId ? `View flight for pitch ${p.pitchIndex}` : undefined}
+                          onClick={p.trackmanPlayId ? () => {
+                            setSelectedFlightPitchId(p.id === lastMatchedPitch?.id ? null : p.id);
+                            setShowFlightReplay(true);
+                          } : undefined}
+                          onKeyDown={p.trackmanPlayId ? (event) => {
+                            if (event.key !== 'Enter' && event.key !== ' ') return;
+                            event.preventDefault();
+                            setSelectedFlightPitchId(p.id === lastMatchedPitch?.id ? null : p.id);
+                            setShowFlightReplay(true);
+                          } : undefined}
+                        >
                           <td>{p.pitchIndex}</td>
                           <td>
                             <span className={styles.logPitchType}>
                               <span className={styles.logPitchDot} style={{ background: color }} />
-                              {p.pitchType ?? '—'}
+                              {p.pitchType ?? 'Untagged'}
                             </span>
                           </td>
                           <td>{p.relSpeed !== null ? p.relSpeed.toFixed(1) : '—'}</td>
@@ -1149,7 +1485,7 @@ export default function IntendedZonePanel({
                           </td>
                           <td>{p.missDirection ? MISS_DIRECTION_LABELS[p.missDirection] ?? p.missDirection : '—'}</td>
                           <td>
-                            <button type="button" className={styles.deleteLink} onClick={() => handleDeletePitch(p.id)}>
+                            <button type="button" className={styles.deleteLink} onClick={(event) => { event.stopPropagation(); void handleDeletePitch(p.id); }}>
                               Delete
                             </button>
                           </td>
@@ -1175,8 +1511,16 @@ function IntendedTargetGlove({ xFt, yFt, radiusFt }: { xFt: number; yFt: number;
 
   return (
     <g>
-      <circle cx={cx} cy={cy} r={r} fill="rgba(74, 222, 128, 0.18)" stroke="#4ade80" strokeWidth={2} strokeDasharray="5 4" />
-      <circle cx={cx} cy={cy} r={3} fill="#4ade80" />
+      <circle
+        cx={cx}
+        cy={cy}
+        r={r}
+        fill="rgba(74, 222, 128, 0.18)"
+        stroke="#4ade80"
+        strokeWidth="2"
+        strokeDasharray="5 4"
+      />
+      <circle cx={cx} cy={cy} r="3" fill="#4ade80" />
     </g>
   );
 }
