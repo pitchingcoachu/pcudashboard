@@ -34,4 +34,14 @@ Use a Google Cloud project owned by the `pitchingcoachu.com` Workspace organizat
 4. Authorize only `https://www.googleapis.com/auth/gmail.readonly` for the export mailbox.
 5. Store the client ID, client secret, and offline refresh token in the GitHub secrets above.
 
+The one-time local authorization helper is:
+
+```bash
+node scripts/authorize-pulse-gmail.mjs /absolute/path/to/client_secret.json
+```
+
+It opens Google's consent screen and writes the resulting credentials only to a
+temporary file under `/private/tmp`; that file must be deleted immediately after
+the three Gmail GitHub secrets are created.
+
 Do not put a Google password, PULSE password, OAuth credential JSON file, or refresh token in this repository.
