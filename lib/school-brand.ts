@@ -187,6 +187,7 @@ export function isKnownSchoolBrand(schoolCode: string | null | undefined): boole
 
 export function schoolBrandCssVars(schoolCode: string | null | undefined): Record<string, string> {
   const brand = resolveSchoolBrand(schoolCode);
+  const isArizona = brand.schoolCode === 'ARIZONA';
   const hex = brand.accent.replace('#', '');
   const channels = hex.length === 3
     ? hex.split('').map((value) => Number.parseInt(`${value}${value}`, 16))
@@ -201,5 +202,14 @@ export function schoolBrandCssVars(schoolCode: string | null | undefined): Recor
     '--portal-accent-rgb': brand.accentRgb,
     '--portal-accent-rgb-secondary': brand.accentRgbSecondary ?? brand.accentRgb,
     '--portal-accent-contrast': luminance > 0.179 ? '#08090a' : '#ffffff',
+    ...(isArizona ? {
+      '--portal-school-theme': 'arizona',
+      '--portal-bg-deep': '#010309',
+      '--portal-bg-mid': '#030a14',
+      '--portal-bg-high': '#05111f',
+      '--portal-surface-rgb': '4, 14, 27',
+      '--portal-surface-strong-rgb': '5, 18, 34',
+      '--portal-pulse-accent-rgb': '171, 5, 32',
+    } : {}),
   } as Record<string, string>;
 }

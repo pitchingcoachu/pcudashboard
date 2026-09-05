@@ -8,15 +8,21 @@ export async function POST(request: Request) {
   const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const body = (await request.json().catch(() => ({}))) as { expoPushToken?: string; platform?: string };
-  const expoPushToken = String(body.expoPushToken ?? '').trim();
-  if (!expoPushToken) {
-    return NextResponse.json({ error: 'expoPushToken is required.' }, { status: 400 });
+  const body = (await request.json().catch(() => ({}))) as {
+    deviceToken?: string;
+    expoPushToken?: string;
+    provider?: string;
+    platform?: string;
+  };
+  const deviceToken = String(body.deviceToken ?? body.expoPushToken ?? '').trim();
+  if (!deviceToken) {
+    return NextResponse.json({ error: 'deviceToken is required.' }, { status: 400 });
   }
 
   await upsertDevicePushToken({
     userId: session.userId ?? 0,
-    expoPushToken,
+    deviceToken,
+    provider: body.provider === 'apns' ? 'apns' : 'expo',
     platform: body.platform,
   });
 
@@ -28,12 +34,12 @@ export async function DELETE(request: Request) {
   const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const body = (await request.json().catch(() => ({}))) as { expoPushToken?: string };
-  const expoPushToken = String(body.expoPushToken ?? '').trim();
-  if (!expoPushToken) {
-    return NextResponse.json({ error: 'expoPushToken is required.' }, { status: 400 });
+  const body = (await request.json().catch(() => ({}))) as { deviceToken?: string; expoPushToken?: string };
+  const deviceToken = String(body.deviceToken ?? body.expoPushToken ?? '').trim();
+  if (!deviceToken) {
+    return NextResponse.json({ error: 'deviceToken is required.' }, { status: 400 });
   }
 
-  await deleteDevicePushToken(expoPushToken);
+  await deleteDevicePushToken(deviceToken);
   return NextResponse.json({ ok: true });
 }

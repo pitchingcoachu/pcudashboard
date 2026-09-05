@@ -17,6 +17,7 @@ import { uploadPlayerMediaFile } from '../../../lib/upload-player-media';
 import PlayerProLinkPanel from './player-pro-link-panel';
 import PlayerMediaSection from './player-media-section';
 import PlayerOwnNotes from './player-own-notes';
+import NutritionSection from './nutrition-section';
 
 type TrackedExercise = {
   exerciseId: number;
@@ -524,6 +525,7 @@ export default function ProfileDashboard({
   const [defaultForceMetricKey, setDefaultForceMetricKey] = useState('');
   const [profileExpanded, setProfileExpanded] = useState(false);
   const [mediaExpanded, setMediaExpanded] = useState(false);
+  const [nutritionExpanded, setNutritionExpanded] = useState(true);
   const [assessmentExpanded, setAssessmentExpanded] = useState(true);
 
   const [selectedItem, setSelectedItem] = useState<ProgramItemRow | null>(null);
@@ -1104,6 +1106,16 @@ export default function ProfileDashboard({
           </button>
         </div>
         {mediaExpanded ? <PlayerMediaSection playerId={playerId} isPlayer={sessionRole === 'player'} /> : null}
+      </article>
+
+      <article className="portal-admin-card">
+        <div className="portal-row-between" style={{ alignItems: 'center' }}>
+          <h3 style={{ margin: 0 }}>Nutrition</h3>
+          <button type="button" className="btn btn-ghost" onClick={() => setNutritionExpanded((v) => !v)}>
+            {nutritionExpanded ? 'Collapse' : 'Expand'}
+          </button>
+        </div>
+        {nutritionExpanded ? <NutritionSection playerId={playerId} /> : null}
       </article>
 
       {showProfileDetailsPanel && (

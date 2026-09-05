@@ -8,47 +8,40 @@ import PortalUserMenu from '../user-menu';
 import PortalNotificationsBell from '../notifications-bell';
 import PortalThemeToggle from '../theme-toggle';
 import { MessagesShell } from './messages-shell';
+import { resolveStaffPrimaryNavigation } from '../../../lib/portal-primary-nav-server';
+import StaffPrimaryNav, { staffPrimaryMobileItems } from '../staff-primary-nav';
 
 export default async function MessagesPage() {
   const session = await requirePortalSession();
   const isStaff = session.role === 'admin' || session.role === 'coach';
   const selectedSchool = resolveDashboardSchoolCode(session);
+  const primaryNav = isStaff ? await resolveStaffPrimaryNavigation(session) : null;
 
   return (
     <PortalChrome
       schoolBrandStyle={schoolBrandCssVars(selectedSchool)}
       left={null}
       navLinks={
-        <>
-          {isStaff ? (
-            <Link href="/portal/admin" className="portal-nav-link">
-              Admin
-            </Link>
-          ) : null}
+        isStaff && primaryNav ? (
+          <StaffPrimaryNav {...primaryNav} />
+        ) : (
+          <>
           <Link href="/portal/player" className="portal-nav-link">
             Profile
           </Link>
           <Link href="/portal/messages" className="portal-nav-link active">
             Messages
           </Link>
-          {session.role === 'player' ? (
-            <Link href="/portal/dashboard" className="portal-nav-link">
-              Dashboard
-            </Link>
-          ) : (
-            <Link href="/profiles" className="portal-nav-link">
-              Profiles
-            </Link>
-          )}
-        </>
+          <Link href="/portal/dashboard" className="portal-nav-link">Dashboard</Link>
+          </>
+        )
       }
       mobileNavCurrentHref="/portal/messages"
       mobileNavLoggedInAs={session.name ?? session.email}
-      mobileNavItems={[
-        ...(isStaff ? [{ href: '/portal/admin', label: 'Admin' }] : []),
+      mobileNavItems={primaryNav ? staffPrimaryMobileItems(primaryNav) : [
         { href: '/portal/player', label: 'Profile' },
         { href: '/portal/messages', label: 'Messages' },
-        session.role === 'player' ? { href: '/portal/dashboard', label: 'Dashboard' } : { href: '/profiles', label: 'Profiles' },
+        { href: '/portal/dashboard', label: 'Dashboard' },
       ]}
       right={
         <>

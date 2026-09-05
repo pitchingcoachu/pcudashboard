@@ -205,29 +205,44 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
   const [hittingPage, setHittingPage] = useState(1);
   const pageSize = 25;
   const isProSchool = String(selectedSchoolCode ?? '').trim().toUpperCase() === 'PRO';
+  const isArizonaSchool = String(selectedSchoolCode ?? '').trim().toUpperCase() === 'ARIZONA';
   const isLeagueSchool = String(selectedSchoolCode ?? '').trim().toUpperCase() === 'LEAGUE';
   const isHeavySchool = isProSchool || isLeagueSchool;
   const shouldLoadAlerts = !isHeavySchool && role !== 'player';
   const homeSearchBorder = isProSchool
     ? '1px solid rgba(88, 132, 198, 0.62)'
+    : isArizonaSchool
+      ? '1px solid rgba(129, 211, 235, 0.2)'
     : '1px solid rgba(var(--portal-accent-rgb, 200, 16, 46), 0.45)';
   const homeSearchBackground = isProSchool
     ? 'linear-gradient(145deg, rgba(6, 17, 38, 0.95), rgba(7, 23, 50, 0.92))'
+    : isArizonaSchool
+      ? 'rgba(2, 7, 15, 0.96)'
     : 'rgba(3, 3, 3, 0.72)';
   const homeSearchDropdownBorder = isProSchool
     ? '1px solid rgba(88, 132, 198, 0.58)'
+    : isArizonaSchool
+      ? '1px solid rgba(129, 211, 235, 0.2)'
     : '1px solid rgba(var(--portal-accent-rgb, 200, 16, 46), 0.45)';
   const homeSearchDropdownBackground = isProSchool
     ? 'linear-gradient(150deg, rgba(6, 16, 35, 0.98), rgba(7, 25, 54, 0.96))'
+    : isArizonaSchool
+      ? 'linear-gradient(150deg, rgba(7, 23, 43, 0.99), rgba(2, 7, 15, 0.99))'
     : 'rgba(var(--portal-accent-rgb, 200, 16, 46), 0.12)';
   const homePanelBorder = isProSchool
     ? '1px solid rgba(88, 132, 198, 0.62)'
+    : isArizonaSchool
+      ? '1px solid rgba(129, 211, 235, 0.2)'
     : '1px solid rgba(var(--portal-accent-rgb, 200, 16, 46), 0.55)';
   const homePanelBackground = isProSchool
     ? 'linear-gradient(155deg, rgba(11, 38, 84, 0.34), rgba(5, 11, 24, 0.86))'
+    : isArizonaSchool
+      ? 'linear-gradient(155deg, rgba(5, 18, 34, 0.94), rgba(2, 7, 15, 0.98))'
     : 'linear-gradient(155deg, rgba(var(--portal-accent-rgb, 200, 16, 46), 0.24), rgba(4, 4, 4, 0.62))';
   const homePanelShadow = isProSchool
     ? '0 16px 32px rgba(2, 8, 23, 0.44), 0 0 0 1px rgba(59, 92, 150, 0.2)'
+    : isArizonaSchool
+      ? '0 12px 28px rgba(0, 0, 0, 0.22)'
     : '0 14px 28px rgba(2, 6, 23, 0.28)';
 
   useEffect(() => {

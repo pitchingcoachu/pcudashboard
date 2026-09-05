@@ -16,6 +16,8 @@ import ViewModeToggle from '../view-mode-toggle';
 import ExportsCard from './exports-card';
 import NotificationsCard from './notifications-card';
 import MySavedViewsCard from './my-saved-views-card';
+import { resolveStaffPrimaryNavigation } from '../../../lib/portal-primary-nav-server';
+import StaffPrimaryNav, { staffPrimaryMobileItems } from '../staff-primary-nav';
 
 export default async function PortalSettingsPage() {
   const session = await requirePortalSession();
@@ -23,6 +25,7 @@ export default async function PortalSettingsPage() {
   const selectedSchool = resolveDashboardSchoolCode(session);
   const schoolOptions = await resolveSessionDashboardSchoolOptions(session);
   const canAccessProgramming = await canUseProgrammingData(session);
+  const primaryNav = isStaff ? await resolveStaffPrimaryNavigation(session) : null;
   const viewMode = await resolveViewMode();
 
   return (
@@ -30,12 +33,10 @@ export default async function PortalSettingsPage() {
       schoolBrandStyle={schoolBrandCssVars(selectedSchool)}
       left={<DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />}
       navLinks={
-        <>
-          {isStaff ? (
-            <Link href="/portal/admin" className="portal-nav-link">
-              Admin
-            </Link>
-          ) : null}
+        isStaff && primaryNav ? (
+          <StaffPrimaryNav {...primaryNav} />
+        ) : (
+          <>
           <Link href="/portal/player" className="portal-nav-link">
             Profile
           </Link>
@@ -47,12 +48,12 @@ export default async function PortalSettingsPage() {
           <Link href="/portal/settings" className="portal-nav-link active">
             Settings
           </Link>
-        </>
+          </>
+        )
       }
       mobileNavCurrentHref="/portal/settings"
       mobileNavLoggedInAs={session.name ?? session.email}
-      mobileNavItems={[
-        ...(isStaff ? [{ href: '/portal/admin', label: 'Admin' }] : []),
+      mobileNavItems={primaryNav ? staffPrimaryMobileItems(primaryNav) : [
         { href: '/portal/player', label: 'Profile' },
         ...(canAccessProgramming ? [{ href: '/portal/player/program', label: 'Program' }] : []),
         { href: '/portal/settings', label: 'Settings' },

@@ -13,7 +13,7 @@ type Props = {
   axisColumns?: string[];
   rows: LeaderboardRow[];
   minPointsRequired?: number;
-  viewByLabel: 'Player' | 'Team';
+  viewByLabel: string;
   primaryColumnName?: string;
   siteLogoSrc?: string | null;
   siteLogoAlt?: string;

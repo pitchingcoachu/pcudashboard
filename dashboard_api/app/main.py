@@ -5879,6 +5879,12 @@ def _name_filter_keys(values: List[str]) -> List[str]:
             legacy = _legacy_uppercase_stripped_name_key(candidate)
             if legacy:
                 keys.add(legacy)
+    # Selecting any known identity alias must include every spelling attached
+    # to that athlete. This keeps split TrackMan profiles in one data scope.
+    for link in CROSS_SCHOOL_PLAYER_DATA_LINKS:
+        aliases = {str(value).strip().lower() for value in link.get("aliases", set())}
+        if keys.intersection(aliases):
+            keys.update(aliases)
     return sorted(keys)
 
 
@@ -5889,10 +5895,46 @@ def _name_filter_keys(values: List[str]) -> List[str]:
 # _name_filter_keys.
 CROSS_SCHOOL_PLAYER_DATA_LINKS: tuple[Dict[str, Any], ...] = (
     {
-        "aliases": {"tommypascanu", "pascanutommy"},
+        "aliases": {"tommypascanu", "pascanutommy", "thomaspascanu", "pascanuthomas"},
         "school_codes": {"PCU", "ARIZONA"},
     },
 )
+
+
+SCHOOL_PLAYER_DISPLAY_ALIASES: Dict[str, Dict[str, str]] = {
+    "ARIZONA": {
+        "thomaspascanu": "Pascanu, Tommy",
+        "pascanuthomas": "Pascanu, Tommy",
+    },
+}
+
+
+def _canonical_school_player_name(school_code: str, value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return raw
+    school_aliases = SCHOOL_PLAYER_DISPLAY_ALIASES.get((school_code or "").strip().upper(), {})
+    return school_aliases.get(_normalize_name_key(raw), raw)
+
+
+def _canonicalize_school_player_names(school_code: str, values: List[str]) -> List[str]:
+    by_key: Dict[str, str] = {}
+    for value in values:
+        canonical = _canonical_school_player_name(school_code, value)
+        key = _normalize_name_key(canonical)
+        if key and key not in by_key:
+            by_key[key] = canonical
+    return sorted(by_key.values(), key=lambda name: _display_name_first_last(name).lower())
+
+
+def _canonicalize_school_player_name_map(
+    school_code: str,
+    values_by_team: Dict[str, List[str]],
+) -> Dict[str, List[str]]:
+    return {
+        team: _canonicalize_school_player_names(school_code, [str(name) for name in names])
+        for team, names in values_by_team.items()
+    }
 
 
 def _cross_school_player_sources(current_school: str, selected_names: List[str]) -> List[str]:
@@ -22104,7 +22146,12 @@ def pitching_filters(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"filters query failed: {exc}") from exc
 
-    csv_pitcher_names = _load_dashboard_csv_pitchers(school_code)
+    pitchers = _canonicalize_school_player_names(school_code, pitchers)
+    opp_hitters = _canonicalize_school_player_names(school_code, opp_hitters)
+    pitchers_by_team_code = _canonicalize_school_player_name_map(school_code, pitchers_by_team_code)
+    opp_hitters_by_team_code = _canonicalize_school_player_name_map(school_code, opp_hitters_by_team_code)
+
+    csv_pitcher_names = _canonicalize_school_player_names(school_code, _load_dashboard_csv_pitchers(school_code))
     allowed_pitcher_keys = set(team_norm | campers_norm)
     allowed_pitcher_keys.update(
         _normalize_name_key(name)
@@ -26012,6 +26059,11 @@ def hitting_filters(
                 }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"hitting filters query failed: {exc}") from exc
+
+    hitters = _canonicalize_school_player_names(school_code, hitters)
+    opp_pitchers = _canonicalize_school_player_names(school_code, opp_pitchers)
+    hitters_by_team_code = _canonicalize_school_player_name_map(school_code, hitters_by_team_code)
+    opp_pitchers_by_team_code = _canonicalize_school_player_name_map(school_code, opp_pitchers_by_team_code)
 
     allowed_hitter_keys = set(team_hitter_norm)
     roster_hitters = [

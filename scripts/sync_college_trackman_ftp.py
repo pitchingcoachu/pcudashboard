@@ -366,6 +366,24 @@ def source_column_map(row: dict[str, str], db_columns: dict[str, str]) -> dict[s
     return mapped
 
 
+SCHOOL_PLAYER_NAME_ALIASES: dict[str, dict[str, str]] = {
+    "ARIZONA": {
+        "thomaspascanu": "Pascanu, Tommy",
+        "pascanuthomas": "Pascanu, Tommy",
+    },
+}
+
+
+def canonical_player_name(school_code: str, value: object) -> object:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return value
+    aliases = SCHOOL_PLAYER_NAME_ALIASES.get(school_code.strip().upper(), {})
+    return aliases.get(normalize_key(raw), value)
+
+
 def ensure_school(conn: psycopg.Connection, school_code: str) -> None:
     conn.execute("INSERT INTO public.schools (school_code) VALUES (%s) ON CONFLICT DO NOTHING", (school_code,))
 
@@ -443,6 +461,9 @@ def sync_file(
         payloads: list[dict[str, object]] = []
         for row in rows:
             payload = source_column_map(row, db_columns)
+            for player_column in ("pitcher", "batter", "catcher"):
+                if player_column in payload:
+                    payload[player_column] = canonical_player_name(school_code, payload[player_column])
             payload.update(
                 school_code=school_code,
                 file_id=file_id,

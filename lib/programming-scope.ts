@@ -116,6 +116,7 @@ type SchoolProductAccess = {
   mobileWorkouts?: boolean;
   gameTracker?: boolean;
   mobileGameTracker?: boolean;
+  mobileNutrition?: boolean;
 };
 
 type SchoolProductAccessRecord = {
@@ -126,6 +127,7 @@ type SchoolProductAccessRecord = {
   mobileWorkouts: boolean;
   gameTracker: boolean;
   mobileGameTracker: boolean;
+  mobileNutrition: boolean;
 };
 
 declare global {
@@ -150,6 +152,7 @@ function parseSchoolProductAccessMap(raw: string): Record<string, SchoolProductA
         mobileWorkouts: typeof record.mobileWorkouts === 'boolean' ? record.mobileWorkouts : undefined,
         gameTracker: typeof record.gameTracker === 'boolean' ? record.gameTracker : undefined,
         mobileGameTracker: typeof record.mobileGameTracker === 'boolean' ? record.mobileGameTracker : undefined,
+        mobileNutrition: typeof record.mobileNutrition === 'boolean' ? record.mobileNutrition : undefined,
       };
     }
     return out;
@@ -167,6 +170,7 @@ function normalizeAccess(value: SchoolProductAccess): SchoolProductAccessRecord 
     mobileWorkouts: value.mobileWorkouts !== false,
     gameTracker: value.gameTracker !== false,
     mobileGameTracker: value.mobileGameTracker !== false,
+    mobileNutrition: value.mobileNutrition !== false,
   };
 }
 
@@ -185,7 +189,7 @@ function getCachedSchoolAccessMap(): Record<string, SchoolProductAccessRecord> {
   return global.__pcuSchoolAccessCache;
 }
 
-function mergeWithEnvDefaults(rows: Array<{ school_code: string; dashboard: boolean; programming: boolean; client_management: boolean; mobile_schedule: boolean; mobile_workouts: boolean; game_tracker: boolean; mobile_game_tracker: boolean }>) {
+function mergeWithEnvDefaults(rows: Array<{ school_code: string; dashboard: boolean; programming: boolean; client_management: boolean; mobile_schedule: boolean; mobile_workouts: boolean; game_tracker: boolean; mobile_game_tracker: boolean; mobile_nutrition: boolean }>) {
   const map: Record<string, SchoolProductAccessRecord> = parseEnvSchoolProductAccessMap();
   for (const row of rows) {
     const schoolCode = normalizeSchoolCode(row.school_code);
@@ -198,6 +202,7 @@ function mergeWithEnvDefaults(rows: Array<{ school_code: string; dashboard: bool
       mobileWorkouts: Boolean(row.mobile_workouts),
       gameTracker: Boolean(row.game_tracker),
       mobileGameTracker: Boolean(row.mobile_game_tracker),
+      mobileNutrition: Boolean(row.mobile_nutrition),
     };
   }
   return map;
@@ -227,6 +232,7 @@ async function ensureSchoolProductAccessTable(): Promise<void> {
   // mobile_workouts -- deliberately independent of `game_tracker`, which
   // continues to gate web+API access.
   await pool.query(`ALTER TABLE school_product_access ADD COLUMN IF NOT EXISTS mobile_game_tracker BOOLEAN NOT NULL DEFAULT TRUE;`);
+  await pool.query(`ALTER TABLE school_product_access ADD COLUMN IF NOT EXISTS mobile_nutrition BOOLEAN NOT NULL DEFAULT TRUE;`);
 }
 
 export async function refreshSchoolProductAccessCache(force = false): Promise<void> {
@@ -254,8 +260,9 @@ export async function refreshSchoolProductAccessCache(force = false): Promise<vo
       mobile_workouts: boolean;
       game_tracker: boolean;
       mobile_game_tracker: boolean;
+      mobile_nutrition: boolean;
     }>(
-      `SELECT school_code, dashboard, programming, client_management, mobile_schedule, mobile_workouts, game_tracker, mobile_game_tracker FROM school_product_access`
+      `SELECT school_code, dashboard, programming, client_management, mobile_schedule, mobile_workouts, game_tracker, mobile_game_tracker, mobile_nutrition FROM school_product_access`
     );
     global.__pcuSchoolAccessCache = mergeWithEnvDefaults(rows.rows);
     global.__pcuSchoolAccessCacheAt = Date.now();
@@ -284,6 +291,7 @@ export async function getSchoolProductAccess(schoolCode: string): Promise<School
     mobileWorkouts: true,
     gameTracker: true,
     mobileGameTracker: true,
+    mobileNutrition: true,
   });
   return fallback;
 }
@@ -349,6 +357,7 @@ export async function setSchoolMobileAccess(
     mobileSchedule: boolean;
     mobileWorkouts: boolean;
     mobileGameTracker: boolean;
+    mobileNutrition: boolean;
     updatedByUserId?: number | null;
   }
 ): Promise<void> {
@@ -357,15 +366,16 @@ export async function setSchoolMobileAccess(
   if (isDatabaseConfigured()) {
     await ensureSchoolProductAccessTable();
     const pool = getDbPool();
-    const params = [schoolCode, input.mobileSchedule, input.mobileWorkouts, input.mobileGameTracker, input.updatedByUserId ?? null];
+    const params = [schoolCode, input.mobileSchedule, input.mobileWorkouts, input.mobileGameTracker, input.mobileNutrition, input.updatedByUserId ?? null];
     const upsertSql = `
-      INSERT INTO school_product_access (school_code, mobile_schedule, mobile_workouts, mobile_game_tracker, updated_at, updated_by_user_id)
-      VALUES ($1, $2, $3, $4, NOW(), $5)
+      INSERT INTO school_product_access (school_code, mobile_schedule, mobile_workouts, mobile_game_tracker, mobile_nutrition, updated_at, updated_by_user_id)
+      VALUES ($1, $2, $3, $4, $5, NOW(), $6)
       ON CONFLICT (school_code)
       DO UPDATE SET
         mobile_schedule = EXCLUDED.mobile_schedule,
         mobile_workouts = EXCLUDED.mobile_workouts,
         mobile_game_tracker = EXCLUDED.mobile_game_tracker,
+        mobile_nutrition = EXCLUDED.mobile_nutrition,
         updated_at = NOW(),
         updated_by_user_id = EXCLUDED.updated_by_user_id
     `;
@@ -374,7 +384,7 @@ export async function setSchoolMobileAccess(
     } catch (error) {
       const typed = error as { code?: string } | null;
       if (typed?.code === '23503') {
-        await pool.query(upsertSql, [schoolCode, input.mobileSchedule, input.mobileWorkouts, input.mobileGameTracker, null]);
+        await pool.query(upsertSql, [schoolCode, input.mobileSchedule, input.mobileWorkouts, input.mobileGameTracker, input.mobileNutrition, null]);
       } else {
         throw error;
       }
@@ -386,6 +396,7 @@ export async function setSchoolMobileAccess(
     mobileSchedule: input.mobileSchedule,
     mobileWorkouts: input.mobileWorkouts,
     mobileGameTracker: input.mobileGameTracker,
+    mobileNutrition: input.mobileNutrition,
   };
   global.__pcuSchoolAccessCache = { ...map };
   global.__pcuSchoolAccessCacheAt = Date.now();
@@ -450,6 +461,11 @@ export async function canUseMobileWorkouts(session: SessionLike): Promise<boolea
 export async function canUseMobileGameTracker(session: SessionLike): Promise<boolean> {
   const access = await resolveSchoolProductAccess(session);
   return access.mobileGameTracker;
+}
+
+export async function canUseMobileNutrition(session: SessionLike): Promise<boolean> {
+  const access = await resolveSchoolProductAccess(session);
+  return access.mobileNutrition;
 }
 
 export async function canUseClientManagement(session: SessionLike): Promise<boolean> {

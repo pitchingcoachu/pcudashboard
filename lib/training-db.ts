@@ -165,6 +165,36 @@ export type BodyWeightLogRow = {
   mediaId: number | null;
 };
 
+export type NutritionLogRow = {
+  id: number;
+  logDate: string;
+  mealLabel: string | null;
+  calories: number | null;
+  proteinG: number | null;
+  carbsG: number | null;
+  fatG: number | null;
+  notes: string | null;
+};
+
+export type NutritionTargetRow = {
+  calories: number | null;
+  proteinG: number | null;
+  carbsG: number | null;
+  fatG: number | null;
+  setByUserId: number | null;
+  setByRole: string | null;
+  updatedAt: string | null;
+};
+
+export type NutritionAdherenceRow = {
+  playerId: number;
+  playerName: string;
+  daysLogged: number;
+  daysInRange: number;
+  avgCalories: number | null;
+  targetCalories: number | null;
+};
+
 export type PlayerPlanGoalRow = {
   slotIndex: 1 | 2 | 3;
   category: string | null;
@@ -783,6 +813,44 @@ export async function ensureTrainingDbReady(): Promise<void> {
       );
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_hitting_log_entries_player ON hitting_log_entries (organization_id, player_id, template_id, hitting_date DESC);`);
+    // Nutrition logs deliberately have no organization_id (mirrors
+    // body_weight_logs in lib/auth-db.ts) -- scoping is entirely via
+    // player_id + the canManagePlayer access check at the API layer, not a
+    // per-org table. Multiple rows per day are allowed (one per meal); a
+    // day's total is computed by summing, not stored redundantly.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS nutrition_logs (
+        id BIGSERIAL PRIMARY KEY,
+        player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        log_date DATE NOT NULL,
+        meal_label TEXT,
+        calories INTEGER,
+        protein_g NUMERIC(6,1),
+        carbs_g NUMERIC(6,1),
+        fat_g NUMERIC(6,1),
+        notes TEXT,
+        created_by_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_nutrition_logs_player_date ON nutrition_logs (player_id, log_date);`);
+    // One row per player -- the CURRENT active target, not a history. Either
+    // a coach or the player themselves can set/overwrite it (set_by_role
+    // records who last touched it, so a coach can see "player set their own
+    // target" without a separate audit table).
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS nutrition_targets (
+        player_id INTEGER PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+        calories INTEGER,
+        protein_g NUMERIC(6,1),
+        carbs_g NUMERIC(6,1),
+        fat_g NUMERIC(6,1),
+        set_by_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL,
+        set_by_role TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS master_calendar_notes (
         id BIGSERIAL PRIMARY KEY,
@@ -1044,6 +1112,8 @@ export type IntendedZoneMissDirection =
   | 'down-arm'
   | 'down-middle'
   | 'down-glove';
+
+const INTENDED_ZONE_MISSING_LOCATION_MISS_DISTANCE_FT = 35 / 12;
 
 export type IntendedZonePitchRow = {
   id: number;
@@ -1338,8 +1408,11 @@ export async function matchIntendedZonePitch(input: {
     intended_side_ft: number;
     intended_height_ft: number;
     target_radius_ft: number;
+    plate_loc_side: number | null;
+    plate_loc_height: number | null;
   }>(
-    `SELECT id, pitch_index, intended_side_ft, intended_height_ft, target_radius_ft
+    `SELECT id, pitch_index, intended_side_ft, intended_height_ft, target_radius_ft,
+            plate_loc_side, plate_loc_height
      FROM intended_zone_pitches
      WHERE session_id = $1 AND organization_id = $2 AND trackman_play_id = $3
      LIMIT 1`,
@@ -1369,11 +1442,25 @@ export async function matchIntendedZonePitch(input: {
   const target = existing.rows[0] ?? pending?.rows[0];
   if (!target) return { ok: false, error: 'No pending intended target to match this pitch to.' };
 
-  let missDistanceFt: number | null = null;
+  // A Plays API metadata refresh can omit location even when the webhook
+  // supplied it earlier. Keep the already-recorded coordinates in that case;
+  // a genuinely location-less new pitch still receives the 35-inch fallback.
+  const hasIncomingLocation = input.plateLocSide !== null && input.plateLocHeight !== null;
+  const plateLocSide = hasIncomingLocation
+    ? input.plateLocSide
+    : existing.rows[0]?.plate_loc_side !== null && existing.rows[0]?.plate_loc_side !== undefined
+      ? Number(existing.rows[0].plate_loc_side)
+      : null;
+  const plateLocHeight = hasIncomingLocation
+    ? input.plateLocHeight
+    : existing.rows[0]?.plate_loc_height !== null && existing.rows[0]?.plate_loc_height !== undefined
+      ? Number(existing.rows[0].plate_loc_height)
+      : null;
+  let missDistanceFt = INTENDED_ZONE_MISSING_LOCATION_MISS_DISTANCE_FT;
   let missDirection: IntendedZoneMissDirection | null = null;
-  if (input.plateLocSide !== null && input.plateLocHeight !== null) {
-    const missSideFt = input.plateLocSide - target.intended_side_ft;
-    const missHeightFt = input.plateLocHeight - target.intended_height_ft;
+  if (plateLocSide !== null && plateLocHeight !== null) {
+    const missSideFt = plateLocSide - target.intended_side_ft;
+    const missHeightFt = plateLocHeight - target.intended_height_ft;
     missDistanceFt = Math.sqrt(missSideFt * missSideFt + missHeightFt * missHeightFt);
     missDirection = classifyMissDirection({
       missSideFt,
@@ -1403,8 +1490,8 @@ export async function matchIntendedZonePitch(input: {
        horz_break, pitch_events_id, thrown_at, tagged_pitcher_name`,
     [
       input.trackmanPlayId,
-      input.plateLocSide,
-      input.plateLocHeight,
+      plateLocSide,
+      plateLocHeight,
       missDistanceFt,
       missDirection,
       input.pitchType,
@@ -1535,7 +1622,11 @@ export async function listIntendedZonePitches(input: { organizationId: number; s
     targetRadiusFt: Number(row.target_radius_ft),
     plateLocSide: row.plate_loc_side !== null ? Number(row.plate_loc_side) : null,
     plateLocHeight: row.plate_loc_height !== null ? Number(row.plate_loc_height) : null,
-    missDistanceFt: row.miss_distance_ft !== null ? Number(row.miss_distance_ft) : null,
+    missDistanceFt: row.miss_distance_ft !== null
+      ? Number(row.miss_distance_ft)
+      : row.trackman_play_id !== null
+        ? INTENDED_ZONE_MISSING_LOCATION_MISS_DISTANCE_FT
+        : null,
     missDirection: row.miss_direction,
     pitchType: row.pitch_type,
     relSpeed: row.rel_speed !== null ? Number(row.rel_speed) : null,
@@ -1827,7 +1918,9 @@ export async function matchIntendedZoneSessionByPitcherAndTime(input: {
 
     const missSideFt = plateLocSide !== null && plateLocHeight !== null ? plateLocSide - Number(target.intended_side_ft) : null;
     const missHeightFt = plateLocSide !== null && plateLocHeight !== null ? plateLocHeight - Number(target.intended_height_ft) : null;
-    const missDistanceFt = missSideFt !== null && missHeightFt !== null ? Math.sqrt(missSideFt * missSideFt + missHeightFt * missHeightFt) : null;
+    const missDistanceFt = missSideFt !== null && missHeightFt !== null
+      ? Math.sqrt(missSideFt * missSideFt + missHeightFt * missHeightFt)
+      : INTENDED_ZONE_MISSING_LOCATION_MISS_DISTANCE_FT;
     const missDirection = missSideFt !== null && missHeightFt !== null
       ? classifyMissDirection({
           missSideFt,
@@ -2044,15 +2137,15 @@ async function fetchIntendedZoneStatRows(input: {
     pitchType: string;
     ballType: string;
     missDistanceFt: number;
-    missDirection: IntendedZoneMissDirection;
+    missDirection: IntendedZoneMissDirection | null;
     inZone: boolean;
     competitive: boolean;
     targetRadiusFt: number;
     targetLocation: number;
     targetHit: boolean;
     throwsLeft: boolean;
-    missSideFt: number;
-    missHeightFt: number;
+    missSideFt: number | null;
+    missHeightFt: number | null;
   }[]
 > {
   if (!isDatabaseConfigured()) return [];
@@ -2068,7 +2161,7 @@ async function fetchIntendedZoneStatRows(input: {
       THEN TRIM(SPLIT_PART(${resolvedPitcherNameSql}, ',', 2)) || ' ' || TRIM(SPLIT_PART(${resolvedPitcherNameSql}, ',', 1))
     ELSE TRIM(${resolvedPitcherNameSql})
   END)`;
-  const conditions = ['izp.organization_id = $1', 'izp.miss_distance_ft IS NOT NULL', 'izp.miss_direction IS NOT NULL'];
+  const conditions = ['izp.organization_id = $1', 'izp.trackman_play_id IS NOT NULL'];
   const params: (string | number | string[])[] = [input.organizationId];
 
   if (input.pitcherName) {
@@ -2100,7 +2193,8 @@ async function fetchIntendedZoneStatRows(input: {
     `SELECT ${firstLastPitcherNameSql} AS pitcher_name,
             COALESCE(izp.pitch_type, 'Undefined') AS pitch_type,
             COALESCE(NULLIF(TRIM(pe.customlabel), ''), 'Baseball') AS ball_type,
-            izp.miss_distance_ft, izp.miss_direction, izp.plate_loc_side, izp.plate_loc_height,
+            COALESCE(izp.miss_distance_ft, ${INTENDED_ZONE_MISSING_LOCATION_MISS_DISTANCE_FT}) AS miss_distance_ft,
+            izp.miss_direction, izp.plate_loc_side, izp.plate_loc_height,
             izp.intended_side_ft, izp.intended_height_ft, izp.target_radius_ft,
             pe.pitcherthrows
      FROM intended_zone_pitches izp
@@ -2125,7 +2219,7 @@ async function fetchIntendedZoneStatRows(input: {
         pitchType: String(row.pitch_type),
         ballType: String(row.ball_type),
         missDistanceFt,
-        missDirection: row.miss_direction as IntendedZoneMissDirection,
+        missDirection: row.miss_direction as IntendedZoneMissDirection | null,
         inZone: label === 'Yes',
         competitive: label === 'Yes' || label === 'Competitive',
         targetRadiusFt,
@@ -2135,11 +2229,11 @@ async function fetchIntendedZoneStatRows(input: {
         // to right-handed framing when unknown (unlinked pitch_events row,
         // e.g. manual-mode sessions), matching that function's convention.
         throwsLeft: String(row.pitcherthrows ?? '').trim().toLowerCase().startsWith('l'),
-        missSideFt: (plateLocSide ?? Number.NaN) - intendedSideFt,
-        missHeightFt: (plateLocHeight ?? Number.NaN) - intendedHeightFt,
+        missSideFt: plateLocSide === null ? null : plateLocSide - intendedSideFt,
+        missHeightFt: plateLocHeight === null ? null : plateLocHeight - intendedHeightFt,
       };
     })
-    .filter((row) => Number.isFinite(row.missSideFt) && Number.isFinite(row.missHeightFt));
+    .filter((row) => Number.isFinite(row.missDistanceFt));
 }
 
 export type IntendedZoneStatsSplitBy = 'pitchType' | 'targetSize' | 'targetLocation' | 'ballType';
@@ -2179,7 +2273,10 @@ export async function getIntendedZoneTargetingProfiles(input: {
   pitchTypes?: string[] | null;
   ballTypes?: string[] | null;
 }): Promise<IntendedZoneTargetingProfile[]> {
-  const rows = await fetchIntendedZoneStatRows(input);
+  const rows = (await fetchIntendedZoneStatRows(input)).filter(
+    (row): row is typeof row & { missSideFt: number; missHeightFt: number } =>
+      row.missSideFt !== null && row.missHeightFt !== null
+  );
   const byPitchType = new Map<string, typeof rows>();
 
   for (const row of rows) {
@@ -2258,7 +2355,7 @@ export async function getIntendedZonePitchTypeStats(input: {
     if (!byType.has(key)) byType.set(key, { distances: [], breakdown: emptyDirectionBreakdown(), inZoneN: 0, competitiveN: 0, targetRows: [], throwsLeftN: 0 });
     const bucket = byType.get(key)!;
     bucket.distances.push(row.missDistanceFt);
-    bucket.breakdown[row.missDirection] += 1;
+    if (row.missDirection) bucket.breakdown[row.missDirection] += 1;
     if (row.inZone) bucket.inZoneN += 1;
     if (row.competitive) bucket.competitiveN += 1;
     bucket.targetRows.push({ targetRadiusFt: row.targetRadiusFt, targetHit: row.targetHit });
@@ -2284,7 +2381,7 @@ export async function getIntendedZonePitchTypeStats(input: {
   );
 
   const allBreakdown = emptyDirectionBreakdown();
-  for (const row of rows) allBreakdown[row.missDirection] += 1;
+  for (const row of rows) if (row.missDirection) allBreakdown[row.missDirection] += 1;
   const allDistances = rows.map((row) => row.missDistanceFt);
   const allInZoneN = rows.filter((row) => row.inZone).length;
   const allCompetitiveN = rows.filter((row) => row.competitive).length;
@@ -2334,7 +2431,7 @@ export async function getIntendedZonePitcherLeaderboard(input: {
     }
     const bucket = byPitcher.get(row.pitcherName)!;
     bucket.distances.push(row.missDistanceFt);
-    bucket.breakdown[row.missDirection] += 1;
+    if (row.missDirection) bucket.breakdown[row.missDirection] += 1;
     if (row.inZone) bucket.inZoneN += 1;
     if (row.competitive) bucket.competitiveN += 1;
     bucket.targetRows.push({ targetRadiusFt: row.targetRadiusFt, targetHit: row.targetHit });
@@ -5339,39 +5436,44 @@ async function ensureDevicePushTokensTable(): Promise<void> {
       id BIGSERIAL PRIMARY KEY,
       user_id INTEGER NOT NULL,
       expo_push_token TEXT NOT NULL,
+      provider TEXT NOT NULL DEFAULT 'expo',
       platform TEXT NOT NULL DEFAULT 'unknown',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
+  await pool.query(`ALTER TABLE device_push_tokens ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'expo';`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_device_push_tokens_token ON device_push_tokens (expo_push_token);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_device_push_tokens_user ON device_push_tokens (user_id);`);
 }
 
 export async function upsertDevicePushToken(input: {
   userId: number;
-  expoPushToken: string;
+  deviceToken?: string;
+  expoPushToken?: string;
+  provider?: 'apns' | 'expo' | null;
   platform?: string | null;
 }): Promise<void> {
   const userId = Number(input.userId ?? 0);
-  const expoPushToken = String(input.expoPushToken ?? '').trim();
-  if (!isDatabaseConfigured() || !Number.isFinite(userId) || userId <= 0 || !expoPushToken) return;
+  const deviceToken = String(input.deviceToken ?? input.expoPushToken ?? '').trim();
+  const provider = input.provider === 'apns' ? 'apns' : 'expo';
+  if (!isDatabaseConfigured() || !Number.isFinite(userId) || userId <= 0 || !deviceToken) return;
   await ensureTrainingDbReady();
   await ensureDevicePushTokensTable();
   const pool = getDbPool();
   await pool.query(
     `
-      INSERT INTO device_push_tokens (user_id, expo_push_token, platform, last_seen_at)
-      VALUES ($1, $2, $3, NOW())
+      INSERT INTO device_push_tokens (user_id, expo_push_token, provider, platform, last_seen_at)
+      VALUES ($1, $2, $3, $4, NOW())
       ON CONFLICT (expo_push_token)
-      DO UPDATE SET user_id = EXCLUDED.user_id, platform = EXCLUDED.platform, last_seen_at = NOW()
+      DO UPDATE SET user_id = EXCLUDED.user_id, provider = EXCLUDED.provider, platform = EXCLUDED.platform, last_seen_at = NOW()
     `,
-    [userId, expoPushToken, String(input.platform ?? '').trim().toLowerCase() || 'unknown']
+    [userId, deviceToken, provider, String(input.platform ?? '').trim().toLowerCase() || 'unknown']
   );
 }
 
-export async function deleteDevicePushToken(expoPushToken: string): Promise<void> {
-  const token = String(expoPushToken ?? '').trim();
+export async function deleteDevicePushToken(deviceToken: string): Promise<void> {
+  const token = String(deviceToken ?? '').trim();
   if (!isDatabaseConfigured() || !token) return;
   await ensureTrainingDbReady();
   await ensureDevicePushTokensTable();
@@ -5379,17 +5481,23 @@ export async function deleteDevicePushToken(expoPushToken: string): Promise<void
   await pool.query(`DELETE FROM device_push_tokens WHERE expo_push_token = $1`, [token]);
 }
 
-export async function listDevicePushTokensForUsers(userIds: number[]): Promise<string[]> {
+export type DevicePushTokenRow = { token: string; provider: 'apns' | 'expo'; platform: string };
+
+export async function listDevicePushTokensForUsers(userIds: number[]): Promise<DevicePushTokenRow[]> {
   const ids = Array.from(new Set(userIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)));
   if (!isDatabaseConfigured() || ids.length === 0) return [];
   await ensureTrainingDbReady();
   await ensureDevicePushTokensTable();
   const pool = getDbPool();
-  const result = await pool.query<{ expo_push_token: string }>(
-    `SELECT expo_push_token FROM device_push_tokens WHERE user_id = ANY($1::int[])`,
+  const result = await pool.query<{ expo_push_token: string; provider: string; platform: string }>(
+    `SELECT expo_push_token, provider, platform FROM device_push_tokens WHERE user_id = ANY($1::int[])`,
     [ids]
   );
-  return result.rows.map((row) => row.expo_push_token);
+  return result.rows.map((row) => ({
+    token: row.expo_push_token,
+    provider: row.provider === 'apns' ? 'apns' : 'expo',
+    platform: row.platform,
+  }));
 }
 
 export async function listPortalActivityOverview(input: {
@@ -12196,6 +12304,250 @@ export async function upsertBodyWeightLog(input: {
   );
 
   return { ok: true };
+}
+
+export async function listNutritionLogsForPlayer(input: {
+  playerId: number;
+  startDate?: string | null;
+  endDate?: string | null;
+}): Promise<NutritionLogRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const conditions = ['player_id = $1'];
+  const params: (string | number)[] = [input.playerId];
+  if (input.startDate) {
+    params.push(input.startDate);
+    conditions.push(`log_date >= $${params.length}::date`);
+  }
+  if (input.endDate) {
+    params.push(input.endDate);
+    conditions.push(`log_date <= $${params.length}::date`);
+  }
+
+  const result = await pool.query<{
+    id: number;
+    log_date: string;
+    meal_label: string | null;
+    calories: number | null;
+    protein_g: string | null;
+    carbs_g: string | null;
+    fat_g: string | null;
+    notes: string | null;
+  }>(
+    `
+      SELECT id, log_date::text, meal_label, calories, protein_g::text, carbs_g::text, fat_g::text, notes
+      FROM nutrition_logs
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY log_date ASC, id ASC
+    `,
+    params
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    logDate: row.log_date,
+    mealLabel: row.meal_label,
+    calories: row.calories,
+    proteinG: row.protein_g !== null ? Number(row.protein_g) : null,
+    carbsG: row.carbs_g !== null ? Number(row.carbs_g) : null,
+    fatG: row.fat_g !== null ? Number(row.fat_g) : null,
+    notes: row.notes,
+  }));
+}
+
+/** Creates a new meal entry, or updates an existing one when `logId` is
+ * passed (editing a specific meal rather than always inserting a new row --
+ * nutrition_logs allows multiple rows per day, so there's no natural
+ * (player_id, log_date) upsert key like body_weight_logs has). */
+export async function upsertNutritionLog(input: {
+  playerId: number;
+  loggedByUserId: number;
+  logDate: string;
+  logId?: number | null;
+  mealLabel?: string | null;
+  calories?: number | null;
+  proteinG?: number | null;
+  carbsG?: number | null;
+  fatG?: number | null;
+  notes?: string | null;
+}): Promise<{ ok: true; logId: number } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.logDate.trim())) return { ok: false, error: 'Date must be YYYY-MM-DD.' };
+
+  const calories = Number.isFinite(input.calories) ? Number(input.calories) : null;
+  const proteinG = Number.isFinite(input.proteinG) ? Number(input.proteinG) : null;
+  const carbsG = Number.isFinite(input.carbsG) ? Number(input.carbsG) : null;
+  const fatG = Number.isFinite(input.fatG) ? Number(input.fatG) : null;
+  const mealLabel = (input.mealLabel ?? '').trim() || null;
+  const notes = (input.notes ?? '').trim() || null;
+
+  if (input.logId) {
+    const updated = await pool.query<{ id: number }>(
+      `
+        UPDATE nutrition_logs
+        SET meal_label = $1, calories = $2, protein_g = $3, carbs_g = $4, fat_g = $5, notes = $6, updated_at = NOW()
+        WHERE id = $7 AND player_id = $8
+        RETURNING id
+      `,
+      [mealLabel, calories, proteinG, carbsG, fatG, notes, input.logId, input.playerId]
+    );
+    if ((updated.rowCount ?? 0) !== 1) return { ok: false, error: 'Log entry not found.' };
+    return { ok: true, logId: updated.rows[0].id };
+  }
+
+  const inserted = await pool.query<{ id: number }>(
+    `
+      INSERT INTO nutrition_logs (player_id, log_date, meal_label, calories, protein_g, carbs_g, fat_g, notes, created_by_user_id)
+      VALUES ($1, $2::date, $3, $4, $5, $6, $7, $8, $9)
+      RETURNING id
+    `,
+    [input.playerId, input.logDate.trim(), mealLabel, calories, proteinG, carbsG, fatG, notes, input.loggedByUserId]
+  );
+  return { ok: true, logId: inserted.rows[0].id };
+}
+
+export async function deleteNutritionLog(input: { playerId: number; logId: number }): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query(`DELETE FROM nutrition_logs WHERE id = $1 AND player_id = $2`, [input.logId, input.playerId]);
+  if ((result.rowCount ?? 0) !== 1) return { ok: false, error: 'Log entry not found.' };
+  return { ok: true };
+}
+
+export async function getNutritionTarget(input: { playerId: number }): Promise<NutritionTargetRow | null> {
+  if (!isDatabaseConfigured()) return null;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{
+    calories: number | null;
+    protein_g: string | null;
+    carbs_g: string | null;
+    fat_g: string | null;
+    set_by_user_id: number | null;
+    set_by_role: string | null;
+    updated_at: string;
+  }>(
+    `SELECT calories, protein_g::text, carbs_g::text, fat_g::text, set_by_user_id, set_by_role, updated_at::text
+     FROM nutrition_targets WHERE player_id = $1`,
+    [input.playerId]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    calories: row.calories,
+    proteinG: row.protein_g !== null ? Number(row.protein_g) : null,
+    carbsG: row.carbs_g !== null ? Number(row.carbs_g) : null,
+    fatG: row.fat_g !== null ? Number(row.fat_g) : null,
+    setByUserId: row.set_by_user_id,
+    setByRole: row.set_by_role,
+    updatedAt: row.updated_at,
+  };
+}
+
+/** Either a coach/admin managing the player OR the player themselves can
+ * call this -- there's no coach-only restriction, matching the product
+ * decision that a player training independently can set their own target.
+ * setByRole is purely informational (lets a coach see who last touched it),
+ * not an access gate. */
+export async function setNutritionTarget(input: {
+  playerId: number;
+  calories?: number | null;
+  proteinG?: number | null;
+  carbsG?: number | null;
+  fatG?: number | null;
+  setByUserId: number;
+  setByRole: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const calories = Number.isFinite(input.calories) ? Number(input.calories) : null;
+  const proteinG = Number.isFinite(input.proteinG) ? Number(input.proteinG) : null;
+  const carbsG = Number.isFinite(input.carbsG) ? Number(input.carbsG) : null;
+  const fatG = Number.isFinite(input.fatG) ? Number(input.fatG) : null;
+
+  await pool.query(
+    `
+      INSERT INTO nutrition_targets (player_id, calories, protein_g, carbs_g, fat_g, set_by_user_id, set_by_role, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+      ON CONFLICT (player_id)
+      DO UPDATE SET
+        calories = EXCLUDED.calories,
+        protein_g = EXCLUDED.protein_g,
+        carbs_g = EXCLUDED.carbs_g,
+        fat_g = EXCLUDED.fat_g,
+        set_by_user_id = EXCLUDED.set_by_user_id,
+        set_by_role = EXCLUDED.set_by_role,
+        updated_at = NOW()
+    `,
+    [input.playerId, calories, proteinG, carbsG, fatG, input.setByUserId, input.setByRole]
+  );
+
+  return { ok: true };
+}
+
+/** Coach-facing roster rollup: for every active player in the org, how many
+ * days in range they logged nutrition vs. the range length, their average
+ * calories, and their current target -- powers the "who's been under/over
+ * target" adherence view. Players with no target set still show up (with a
+ * null target) so a coach can see who hasn't been assigned one yet. */
+export async function listNutritionAdherenceForOrg(input: {
+  organizationId: number;
+  startDate: string;
+  endDate: string;
+}): Promise<NutritionAdherenceRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const result = await pool.query<{
+    player_id: number;
+    player_name: string;
+    days_logged: string;
+    avg_calories: string | null;
+    target_calories: number | null;
+  }>(
+    `
+      SELECT
+        p.id AS player_id,
+        p.full_name AS player_name,
+        COUNT(DISTINCT nl.log_date) AS days_logged,
+        AVG(daily.total_calories) AS avg_calories,
+        nt.calories AS target_calories
+      FROM players p
+      LEFT JOIN nutrition_logs nl
+        ON nl.player_id = p.id AND nl.log_date >= $2::date AND nl.log_date <= $3::date
+      LEFT JOIN (
+        SELECT player_id, log_date, SUM(calories) AS total_calories
+        FROM nutrition_logs
+        WHERE log_date >= $2::date AND log_date <= $3::date
+        GROUP BY player_id, log_date
+      ) daily ON daily.player_id = p.id AND daily.log_date = nl.log_date
+      LEFT JOIN nutrition_targets nt ON nt.player_id = p.id
+      WHERE p.organization_id = $1
+        AND LOWER(COALESCE(NULLIF(TRIM(p.status), ''), 'active')) = 'active'
+      GROUP BY p.id, p.full_name, nt.calories
+      ORDER BY p.full_name ASC
+    `,
+    [input.organizationId, input.startDate, input.endDate]
+  );
+
+  const daysInRange = Math.max(1, Math.round((new Date(`${input.endDate}T00:00:00Z`).getTime() - new Date(`${input.startDate}T00:00:00Z`).getTime()) / 86_400_000) + 1);
+
+  return result.rows.map((row) => ({
+    playerId: row.player_id,
+    playerName: row.player_name,
+    daysLogged: Number(row.days_logged),
+    daysInRange,
+    avgCalories: row.avg_calories !== null ? Number(row.avg_calories) : null,
+    targetCalories: row.target_calories,
+  }));
 }
 
 export async function listExerciseTrendForPlayer(input: { playerId: number; exerciseId: number }): Promise<Array<{ dayDate: string; averageLoad: number }>> {

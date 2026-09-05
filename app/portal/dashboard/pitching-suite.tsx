@@ -18318,6 +18318,8 @@ export default function PitchingSuite({
               startDate={startDate}
               endDate={endDate}
               selectedPitchTypes={selectedPitchTypes}
+              siteLogoSrc={activeSchoolBrand.logoSrc ?? '/pearl-clam-transparent.png'}
+              siteLogoAlt={activeSchoolBrand.logoAlt}
             />
           ) : dashboardPage === 'Pitcher DNA' ? (
             <PitcherDnaPanel

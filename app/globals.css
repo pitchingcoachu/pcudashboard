@@ -5413,6 +5413,55 @@ body.theme-light .portal-color-toggle .portal-color-toggle-btn.is-on::before {
   grid-column: span 2;
 }
 
+.portal-nutrition-section {
+  display: grid;
+  gap: 1rem;
+}
+
+.portal-nutrition-summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.portal-nutrition-summary-tile {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.75rem 1rem;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  min-width: 160px;
+}
+
+.portal-nutrition-summary-tile strong {
+  font-size: 1.15rem;
+}
+
+.portal-nutrition-meal-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.portal-nutrition-meal-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.portal-nutrition-meal-label {
+  font-weight: 600;
+  min-width: 90px;
+}
+
 .portal-table-wrap {
   overflow-x: auto;
 }
@@ -13308,4 +13357,477 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
 .portal-roster-cards,
 .portal-roster-card {
   display: none;
+}
+
+/* University of Arizona portal theme. The wrapper supplies these colors to
+   every portal surface, including pages that render their own PortalChrome. */
+.portal-school-theme {
+  display: contents;
+}
+
+body:not(.theme-light):has(.portal-school-theme--arizona),
+body:not(.theme-light):has(.portal-shell--arizona) {
+  --bg: #010309;
+  --panel: rgba(4, 14, 27, 0.92);
+  --panel-strong: rgba(5, 18, 34, 0.97);
+  --border: rgba(129, 211, 235, 0.15);
+  background:
+    radial-gradient(circle at 94% 0%, rgba(12, 35, 75, 0.3), transparent 32%),
+    linear-gradient(135deg, #010309 0%, #030a14 60%, #05111f 100%);
+}
+
+body:not(.theme-light) :is(.portal-shell--arizona, .portal-school-theme--arizona .portal-shell),
+body:not(.theme-light) :is(.portal-shell--arizona, .portal-school-theme--arizona .portal-shell)::after {
+  --bg: #010309;
+  --panel: rgba(4, 14, 27, 0.92);
+  --panel-strong: rgba(5, 18, 34, 0.97);
+  --border: rgba(129, 211, 235, 0.15);
+  background:
+    radial-gradient(circle at 94% 0%, rgba(12, 35, 75, 0.34), transparent 32%),
+    linear-gradient(135deg, #010309 0%, #030a14 60%, #05111f 100%);
+}
+
+body:not(.theme-light) :is(.portal-shell--arizona, .portal-school-theme--arizona .portal-shell)::before {
+  background: rgba(1, 4, 10, 0.99);
+}
+
+body:not(.theme-light) :is(.portal-shell--arizona, .portal-school-theme--arizona .portal-shell) :is(
+  .portal-header,
+  .portal-panel,
+  .portal-admin-card,
+  .portal-day-card,
+  .portal-modal-card,
+  .portal-table,
+  .dashboard-panel,
+  .portal-search-select-menu,
+  .portal-search-dropdown,
+  .portal-workout-palette,
+  .portal-testing-panel,
+  .portal-messages-list-pane,
+  .portal-messages-detail-pane
+) {
+  border-color: rgba(129, 211, 235, 0.16);
+  background:
+    linear-gradient(145deg, rgba(5, 18, 34, 0.94), rgba(2, 7, 15, 0.97));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.025),
+    0 12px 30px rgba(0, 0, 0, 0.12);
+}
+
+body:not(.theme-light) :is(.portal-shell--arizona, .portal-school-theme--arizona .portal-shell) :is(
+  .portal-header,
+  .portal-modal-card,
+  .portal-search-select-menu,
+  .portal-search-dropdown,
+  .portal-nav-overflow-dropdown,
+  .portal-notifications-menu
+) {
+  background: rgba(2, 7, 15, 0.98);
+  border-color: rgba(129, 211, 235, 0.17);
+}
+
+body:not(.theme-light) :is(.portal-shell--arizona, .portal-school-theme--arizona .portal-shell) :is(
+  .portal-theme-toggle,
+  .portal-notifications-btn,
+  .portal-mobile-page-select,
+  .portal-search,
+  .portal-search-select-trigger,
+  .portal-form-grid input,
+  .portal-form-grid textarea,
+  .portal-form-grid select
+) {
+  background-color: rgba(8, 24, 44, 0.92);
+  border-color: rgba(129, 211, 235, 0.16);
+}
+
+body:not(.theme-light) .portal-shell--arizona .portal-nav-link:is(:hover, :focus-visible, .active) {
+  color: #f8fbff;
+  background: rgba(171, 5, 32, 0.045);
+  box-shadow: inset 0 0 0 1px rgba(171, 5, 32, 0.88);
+  outline: none;
+}
+
+body:not(.theme-light) .portal-shell--arizona .home-suite-panel-card:hover {
+  border-color: rgba(171, 5, 32, 0.88) !important;
+  box-shadow:
+    0 16px 30px rgba(0, 0, 0, 0.28),
+    0 0 0 1px rgba(171, 5, 32, 0.16);
+}
+
+/* Arizona schedule and master-calendar controls use the same midnight/navy
+   surface system instead of the generic charcoal calendar palette. */
+body:not(.theme-light) .portal-shell--arizona :is(
+  .portal-schedule-player-combobox .portal-schedule-control,
+  .portal-schedule-control,
+  .portal-schedule-toolbar input,
+  .portal-schedule-toolbar select
+) {
+  color-scheme: dark;
+  color: rgba(245, 248, 255, 0.96);
+  background: rgba(9, 30, 56, 0.97);
+  border-color: rgba(129, 211, 235, 0.23);
+}
+
+body:not(.theme-light) .portal-shell--arizona :is(
+  .portal-schedule-control option,
+  .portal-schedule-toolbar select option
+) {
+  color: #f5f8ff;
+  background: #0a203c;
+}
+
+body:not(.theme-light) .portal-shell--arizona .portal-schedule-player-options {
+  border-color: rgba(129, 211, 235, 0.2);
+  background: linear-gradient(155deg, rgba(10, 32, 60, 0.99), rgba(5, 20, 38, 0.99));
+  box-shadow: 0 22px 48px rgba(0, 0, 0, 0.48);
+}
+
+body:not(.theme-light) .portal-shell--arizona :is(
+  .portal-schedule-player-option:hover,
+  .portal-schedule-player-option:focus-visible,
+  .portal-schedule-player-option.is-selected
+) {
+  color: #f8fbff;
+  background: rgba(129, 211, 235, 0.1);
+}
+
+body:not(.theme-light) .portal-shell--arizona .portal-schedule-player-option.is-selected {
+  box-shadow: inset 3px 0 0 rgba(171, 5, 32, 0.9);
+}
+
+body:not(.theme-light) .portal-shell--arizona :is(
+  .portal-schedule-day,
+  .portal-throwing-cell
+) {
+  border-color: rgba(129, 211, 235, 0.17);
+  background: rgba(7, 25, 47, 0.9);
+}
+
+body:not(.theme-light) .portal-shell--arizona :is(
+  .portal-throwing-field,
+  .portal-throwing-notes
+) {
+  color: #edf4ff;
+  background: rgba(11, 35, 65, 0.97);
+  border-color: rgba(129, 211, 235, 0.22);
+}
+
+body:not(.theme-light) .portal-shell--arizona .portal-throwing-week-rail {
+  background: rgba(3, 10, 20, 0.94);
+}
+
+body:not(.theme-light) .portal-shell--arizona .portal-script-visibility-menu {
+  background: #0a203c;
+  border-color: rgba(129, 211, 235, 0.2);
+}
+
+body:not(.theme-light) .portal-shell--arizona [data-master-calendar-export-root='true'] .portal-table :is(th, td) {
+  border-color: rgba(129, 211, 235, 0.14);
+  background-color: rgba(7, 24, 45, 0.88);
+}
+
+/* Complete Arizona form/menu pass. These selectors intentionally cover the
+   shared controls used across admin, schedules, profiles, reports, and the
+   dashboard while leaving toggles, checks, files, and visualization inputs
+   to their purpose-built styling. */
+body:not(.theme-light) .portal-shell--arizona :is(
+  input:not([type='button']):not([type='submit']):not([type='reset']):not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not([type='file']):not([type='image']),
+  textarea,
+  select,
+  .portal-search-select-trigger,
+  .portal-nav-mobile
+) {
+  color-scheme: dark;
+  color: #f3f7ff;
+  background: rgba(7, 24, 45, 0.97) !important;
+  border-color: rgba(129, 211, 235, 0.2) !important;
+}
+
+body:not(.theme-light) .portal-shell--arizona :is(input, textarea)::placeholder {
+  color: rgba(220, 229, 242, 0.58);
+}
+
+body:not(.theme-light) .portal-shell--arizona select option {
+  color: #f3f7ff;
+  background: #07182d;
+}
+
+body:not(.theme-light) .portal-shell--arizona :is(
+  .portal-notifications-menu,
+  .portal-user-menu-dropdown,
+  .portal-school-switcher-menu,
+  .portal-app-menu,
+  .portal-nav-overflow-dropdown,
+  .portal-search-select-menu,
+  .portal-custom-reports-export-menu,
+  .portal-workout-exercise-select-menu,
+  .portal-search-dropdown,
+  .portal-script-visibility-menu,
+  .portal-schedule-player-options,
+  .portal-messages-context-menu,
+  .portal-messages-reaction-picker,
+  .portal-messages-reaction-names-popover,
+  .portal-nav-mobile-sheet
+) {
+  color: #f3f7ff;
+  background: rgba(6, 20, 38, 0.99) !important;
+  border-color: rgba(129, 211, 235, 0.2) !important;
+}
+
+body:not(.theme-light) .portal-shell--arizona :is(
+  .portal-nav-overflow-item:hover,
+  .portal-nav-overflow-item:focus-visible,
+  .portal-nav-overflow-item.portal-nav-overflow-item-active,
+  .portal-nav-mobile-sheet-option:hover,
+  .portal-nav-mobile-sheet-option:focus-visible,
+  .portal-nav-mobile-sheet-option.active
+) {
+  color: #f8fbff;
+  background: rgba(171, 5, 32, 0.045);
+  box-shadow: inset 0 0 0 1px rgba(171, 5, 32, 0.86);
+  outline: none;
+}
+
+body:not(.theme-light) .portal-shell--arizona :is(
+  .portal-suite-page-tabs,
+  .portal-dashboard-suite-tabs
+) .btn.btn-ghost:is(:hover, :focus-visible) {
+  border-color: rgba(171, 5, 32, 0.86);
+  background: rgba(171, 5, 32, 0.045);
+  box-shadow: inset 0 0 0 1px rgba(171, 5, 32, 0.12);
+  outline: none;
+}
+
+body:not(.theme-light) .portal-shell--arizona :is(
+  .portal-schedule-day,
+  .portal-throwing-cell
+) {
+  background: rgba(5, 17, 32, 0.92);
+}
+
+body:not(.theme-light) .portal-shell--arizona [data-master-calendar-export-root='true'] .portal-table :is(th, td) {
+  background-color: rgba(5, 18, 34, 0.92);
+}
+
+.portal-master-calendar-group-filter {
+  position: relative;
+  display: grid;
+  align-content: end;
+  gap: 0.35rem;
+  min-width: 0;
+  font-size: 0.82rem;
+}
+
+.portal-master-calendar-group-dropdown {
+  position: relative;
+  min-width: 0;
+}
+
+.portal-master-calendar-group-dropdown > summary {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.62rem 0.72rem;
+  border-radius: 10px;
+  cursor: pointer;
+  list-style: none;
+  font: 600 0.88rem/1.2 Manrope, sans-serif;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.portal-master-calendar-group-dropdown > summary::-webkit-details-marker {
+  display: none;
+}
+
+.portal-master-calendar-group-dropdown > summary::after {
+  content: '▾';
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.portal-master-calendar-group-dropdown[open] > summary::after {
+  transform: rotate(180deg);
+}
+
+.portal-master-calendar-group-menu {
+  position: absolute;
+  z-index: 80;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  left: 0;
+  display: grid;
+  gap: 0.2rem;
+  max-height: min(320px, 55vh);
+  overflow: auto;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(8, 8, 8, 0.98);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.42);
+}
+
+.portal-master-calendar-group-menu label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.5rem 0.55rem;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.portal-master-calendar-group-menu label:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.portal-master-calendar-group-menu input {
+  margin: 0;
+}
+
+.portal-master-calendar-group-menu p {
+  margin: 0;
+  padding: 0.55rem;
+  color: var(--text-muted);
+}
+
+body.theme-light .portal-master-calendar-group-menu {
+  border-color: rgba(15, 23, 42, 0.18);
+  background: rgba(255, 255, 255, 0.99);
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.18);
+}
+
+body.theme-light .portal-master-calendar-group-menu label:hover {
+  background: rgba(15, 23, 42, 0.06);
+}
+
+body:not(.theme-light) .portal-shell--arizona .portal-master-calendar-group-menu {
+  border-color: rgba(129, 211, 235, 0.2);
+  background: rgba(6, 20, 38, 0.99);
+}
+
+.portal-master-calendar-controls {
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) minmax(140px, 0.8fr) minmax(220px, 1fr) auto auto;
+  align-items: end;
+  gap: 0.8rem;
+}
+
+.portal-master-calendar-controls > label,
+.portal-master-calendar-group-filter {
+  display: grid;
+  align-content: end;
+  gap: 0.42rem;
+  margin: 0;
+  color: var(--text-main);
+  font: 700 0.8rem/1.1 Manrope, sans-serif;
+}
+
+.portal-master-calendar-controls > label > :is(input, select),
+.portal-master-calendar-group-dropdown > summary {
+  box-sizing: border-box;
+  width: 100%;
+  height: 48px;
+  min-height: 48px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(var(--portal-surface-rgb, 8, 14, 23), 0.82);
+  color: var(--text-main);
+}
+
+.portal-master-calendar-group-dropdown > summary {
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0.9rem;
+  overflow: hidden;
+  list-style: none !important;
+}
+
+.portal-master-calendar-group-dropdown > summary::marker,
+.portal-master-calendar-group-dropdown > summary::after {
+  display: none;
+  content: '';
+}
+
+.portal-master-calendar-group-dropdown > summary > svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  color: var(--text-muted);
+  transition: transform 160ms ease;
+}
+
+.portal-master-calendar-group-dropdown[open] > summary > svg {
+  transform: rotate(180deg);
+}
+
+.portal-master-calendar-group-summary-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.portal-master-calendar-group-menu {
+  min-width: 260px;
+}
+
+.portal-master-calendar-period-actions,
+.portal-master-calendar-load-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 48px;
+  white-space: nowrap;
+}
+
+.portal-master-calendar-period-actions .btn,
+.portal-master-calendar-load-actions .btn {
+  min-height: 46px;
+  align-items: center;
+}
+
+body.theme-light .portal-master-calendar-controls > label > :is(input, select),
+body.theme-light .portal-master-calendar-group-dropdown > summary {
+  background: #fff;
+}
+
+body:not(.theme-light) .portal-shell--arizona .portal-social-row .social-link {
+  border-color: rgba(171, 5, 32, 0.72);
+  background: rgba(171, 5, 32, 0.11);
+  color: #f8fbff;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.035), 0 0 16px rgba(171, 5, 32, 0.1);
+}
+
+body:not(.theme-light) .portal-shell--arizona .portal-social-row .social-link:is(:hover, :focus-visible) {
+  border-color: rgba(255, 54, 82, 0.95);
+  background: rgba(171, 5, 32, 0.32);
+  color: #fff;
+  box-shadow: 0 0 18px rgba(171, 5, 32, 0.3);
+  outline: none;
+}
+
+@media (max-width: 1180px) {
+  .portal-master-calendar-controls {
+    grid-template-columns: repeat(3, minmax(180px, 1fr));
+  }
+
+  .portal-master-calendar-period-actions,
+  .portal-master-calendar-load-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  .portal-master-calendar-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .portal-master-calendar-load-actions {
+    flex-wrap: wrap;
+  }
 }

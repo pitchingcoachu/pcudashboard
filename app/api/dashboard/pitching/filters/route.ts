@@ -7,13 +7,14 @@ import { schoolRosterAdditions } from '../../../../../lib/dashboard-roster-addit
 import { listDashboardCsvPitcherNames } from '../../../../../lib/dashboard-csv-imports';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 import { applyManagedRosterTeamScope } from '../../../../../lib/dashboard-managed-roster';
+import { canonicalizeDashboardFilterPlayers } from '../../../../../lib/cross-school-player-data';
 
 const RESPONSE_CACHE_HEADERS = {
   'cache-control': 'private, max-age=30, stale-while-revalidate=300',
   vary: 'Cookie',
 } as const;
 const SLOW_ROUTE_MS = 2500;
-const PITCHING_FILTERS_ROSTER_CACHE_VERSION = 'managed-roster-team-scope-2026-09-01-v1';
+const PITCHING_FILTERS_ROSTER_CACHE_VERSION = 'managed-roster-team-scope-2026-09-04-v2';
 
 function resolveFiltersTimeoutMs(schoolCode: string): number {
   const upper = String(schoolCode ?? '').trim().toUpperCase();
@@ -108,6 +109,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: String(result.payload.detail ?? result.payload.error ?? 'Dashboard API request failed.') }, { status: result.status });
     }
     const payload = result.payload as Record<string, unknown>;
+    canonicalizeDashboardFilterPlayers({ payload, schoolCode, playerField: 'pitchers', mapField: 'pitchers_by_team_code' });
     await applyManagedRosterTeamScope({
       payload,
       schoolCode,
@@ -139,6 +141,7 @@ export async function GET(request: Request) {
         ...additions.pitchers,
       ]);
     }
+    canonicalizeDashboardFilterPlayers({ payload, schoolCode, playerField: 'pitchers', mapField: 'pitchers_by_team_code' });
     let scopedPitcher: string | null = null;
     if (shouldScopePlayer && playerIdentity && Array.isArray(payload.pitchers)) {
       const scoped = selectScopedPlayerName(payload.pitchers, playerIdentity);

@@ -1,4 +1,5 @@
 import { deleteDevicePushToken, listDevicePushTokensForUsers } from './training-db';
+import { sendApnsNotifications } from './apns-push';
 
 const EXPO_PUSH_API_URL = 'https://exp.host/--/api/v2/push/send';
 const MAX_TOKENS_PER_REQUEST = 100;
@@ -35,8 +36,25 @@ export async function sendPushNotificationToUsers(input: {
   data?: Record<string, unknown>;
 }): Promise<void> {
   try {
-    const tokens = await listDevicePushTokensForUsers(input.userIds);
-    if (tokens.length === 0) return;
+    const registeredDevices = await listDevicePushTokensForUsers(input.userIds);
+    if (registeredDevices.length === 0) return;
+
+    const apnsTokens = registeredDevices.filter((device) => device.provider === 'apns').map((device) => device.token);
+    if (apnsTokens.length > 0) {
+      const results = await sendApnsNotifications(apnsTokens.map((token) => ({
+        token,
+        title: input.title,
+        body: input.body,
+        data: input.data,
+      })));
+      await Promise.all(
+        results
+          .filter((result) => !result.ok && (result.reason === 'BadDeviceToken' || result.reason === 'Unregistered'))
+          .map((result) => deleteDevicePushToken(result.token).catch(() => {}))
+      );
+    }
+
+    const tokens = registeredDevices.filter((device) => device.provider === 'expo').map((device) => device.token);
 
     for (const batch of chunk(tokens, MAX_TOKENS_PER_REQUEST)) {
       const messages: ExpoPushMessage[] = batch.map((to) => ({

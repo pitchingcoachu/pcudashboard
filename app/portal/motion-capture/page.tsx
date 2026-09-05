@@ -12,6 +12,8 @@ import PortalNotificationsBell from '../notifications-bell';
 import PortalThemeToggle from '../theme-toggle';
 import PortalMessagesNavButton from '../messages-nav-button';
 import MotionCaptureDashboard from './motion-capture-dashboard';
+import { resolveStaffPrimaryNavigation } from '../../../lib/portal-primary-nav-server';
+import StaffPrimaryNav, { staffPrimaryMobileItems } from '../staff-primary-nav';
 
 export default async function MotionCapturePage() {
   const session = await requirePortalSession();
@@ -21,6 +23,8 @@ export default async function MotionCapturePage() {
   const selectedSchoolCode = resolveProgrammingSchoolCode(session);
   const orgId = await resolveProgrammingOrganizationId(session);
   const isPcu = String(selectedSchoolCode ?? '').trim().toUpperCase() === 'PCU';
+  const isStaff = session.role === 'admin' || session.role === 'coach';
+  const primaryNav = isStaff ? await resolveStaffPrimaryNavigation(session) : null;
   const ownPlayer = session.role === 'player' && orgId > 0 ? await getPlayerForUser({ organizationId: orgId, userId: session.userId ?? 0 }) : null;
   const error = !isPcu
     ? 'Motion Capture is currently enabled only for PCU.'
@@ -32,12 +36,10 @@ export default async function MotionCapturePage() {
     <PortalChrome
       left={<DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />}
       navLinks={
-        <>
-          {(session.role === 'admin' || session.role === 'coach') && (
-            <Link href="/portal/admin" className="portal-nav-link">
-              Home
-            </Link>
-          )}
+        isStaff && primaryNav ? (
+          <StaffPrimaryNav {...primaryNav} />
+        ) : (
+          <>
           {session.role === 'player' && canAccessProgramming ? (
             <>
               <Link href="/portal/player" className="portal-nav-link">
@@ -51,12 +53,12 @@ export default async function MotionCapturePage() {
           <Link href="/portal/dashboard" className="portal-nav-link">
             Dashboard
           </Link>
-        </>
+          </>
+        )
       }
       mobileNavCurrentHref="/portal/motion-capture"
       mobileNavLoggedInAs={session.name ?? session.email}
-      mobileNavItems={[
-        ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Home' }] : []),
+      mobileNavItems={primaryNav ? staffPrimaryMobileItems(primaryNav) : [
         ...(session.role === 'player' && canAccessProgramming
           ? [
               { href: '/portal/player', label: 'Profile' },

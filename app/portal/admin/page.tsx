@@ -46,7 +46,7 @@ export default async function AdminHomePage() {
   const schoolAccess = await withTimeout(
     getSchoolProductAccess(programmingSchoolCode),
     3_000,
-    { dashboard: true, programming: false, clientManagement: true, mobileSchedule: true, mobileWorkouts: true, gameTracker: true, mobileGameTracker: true }
+    { dashboard: true, programming: false, clientManagement: true, mobileSchedule: true, mobileWorkouts: true, gameTracker: true, mobileGameTracker: true, mobileNutrition: true }
   );
   const [clientManagementAllowed, programmingDataAllowed, gameTrackerAllowed, clientManagementFallbackOrgId, programmingFallbackOrgId] =
     await Promise.all([
@@ -223,6 +223,13 @@ export default async function AdminHomePage() {
         <p>Log and review notes for players.</p>
         <Link href="/portal/admin/player-notes" className="btn btn-primary as-link">
           Open Player Notes
+        </Link>
+      </article>
+      <article className="portal-admin-card">
+        <h2>Nutrition</h2>
+        <p>See roster-wide logging consistency and calorie targets.</p>
+        <Link href="/portal/admin/nutrition" className="btn btn-primary as-link">
+          Open Nutrition
         </Link>
       </article>
       {!isTrialSchool && canViewPortalActivity(session) ? (

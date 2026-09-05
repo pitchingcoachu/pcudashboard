@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { downloadLeaderboardTablePdf, downloadContentPdf } from '../../../lib/leaderboard-pdf-export';
+import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
 import styles from './intended-zone-panel.module.css';
 
 // Same fixed pitch-type ordering used everywhere else in the dashboard
@@ -292,6 +293,8 @@ export default function IntendedZoneStats({
   sidebarEndDate,
   sidebarPitchTypes,
   sidebarBallTypes,
+  siteLogoSrc,
+  siteLogoAlt,
 }: {
   pitcherName: string | null;
   organizationHasMultiplePitchers: boolean;
@@ -299,6 +302,8 @@ export default function IntendedZoneStats({
   sidebarEndDate: string;
   sidebarPitchTypes: string[];
   sidebarBallTypes?: string[];
+  siteLogoSrc?: string | null;
+  siteLogoAlt?: string;
 }) {
   const [mode, setMode] = useState<'pitcher' | 'leaderboard'>('pitcher');
   const [pitchTypeStats, setPitchTypeStats] = useState<PitchTypeStat[]>([]);
@@ -319,6 +324,7 @@ export default function IntendedZoneStats({
   const [splitBy, setSplitBy] = useState<StatsSplitBy>('pitchType');
   const [isExportingPitcherPdf, setIsExportingPitcherPdf] = useState(false);
   const [isExportingLeaderboardPdf, setIsExportingLeaderboardPdf] = useState(false);
+  const [showCorrelation, setShowCorrelation] = useState(false);
   const pitcherExportRef = useRef<HTMLDivElement | null>(null);
   const leaderboardExportRef = useRef<HTMLDivElement | null>(null);
 
@@ -485,6 +491,72 @@ export default function IntendedZoneStats({
     [selectedPitcherPerTypeRows, splitBy]
   );
 
+  const correlationData = useMemo(() => {
+    if (mode === 'leaderboard') {
+      const columns = [
+        'Pitcher',
+        'Pitches',
+        'In Zone%',
+        'Comp%',
+        ...leaderboardTargetColumns.map((inches) => `${inches}\" Target Hit%`),
+        'Avg Miss Distance',
+        'Med. Miss Distance',
+        'Consistency (Std Dev)',
+      ];
+      const rows = leaderboard.map((row) => {
+        const flat: Record<string, string | number | null> = {
+          Pitcher: row.pitcherName,
+          Pitches: row.pitchCount,
+          'In Zone%': row.inZonePct,
+          'Comp%': row.competitivePct,
+          'Avg Miss Distance': row.avgMissDistanceFt === null ? null : row.avgMissDistanceFt * 12,
+          'Med. Miss Distance': row.medianMissDistanceFt === null ? null : row.medianMissDistanceFt * 12,
+          'Consistency (Std Dev)': row.missDistanceStdDevFt === null ? null : row.missDistanceStdDevFt * 12,
+        };
+        for (const inches of leaderboardTargetColumns) {
+          flat[`${inches}\" Target Hit%`] = row.targetHitRates.find((rate) => rate.targetInches === inches)?.hitPct ?? null;
+        }
+        return flat;
+      });
+      return { columns, rows, label: 'Player' };
+    }
+
+    const label = splitByLabel(splitBy);
+    const columns = [
+      label,
+      'Pitches',
+      'In Zone%',
+      'Comp%',
+      ...perTypeTargetColumns.map((inches) => `${inches}\" Target Hit%`),
+      'Avg Miss Distance',
+      'Med. Miss Distance',
+    ];
+    const rows = perTypeRows.map((row) => {
+      const flat: Record<string, string | number | null> = {
+        [label]: row.pitchType,
+        Pitches: row.pitchCount,
+        'In Zone%': row.inZonePct,
+        'Comp%': row.competitivePct,
+        'Avg Miss Distance': row.avgMissDistanceFt === null ? null : row.avgMissDistanceFt * 12,
+        'Med. Miss Distance': row.medianMissDistanceFt === null ? null : row.medianMissDistanceFt * 12,
+      };
+      for (const inches of perTypeTargetColumns) {
+        flat[`${inches}\" Target Hit%`] = row.targetHitRates.find((rate) => rate.targetInches === inches)?.hitPct ?? null;
+      }
+      return flat;
+    });
+    return { columns, rows, label };
+  }, [leaderboard, leaderboardTargetColumns, mode, perTypeRows, perTypeTargetColumns, splitBy]);
+
+  const formatCorrelationValue = useCallback((column: string, value: unknown) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return String(value ?? '—');
+    if (column.includes('%')) return `${numeric.toFixed(1).replace(/\.0$/, '')}%`;
+    if (column.includes('Distance') || column.includes('Consistency')) return `${numeric.toFixed(1)}\"`;
+    if (column === 'Pitches') return Math.round(numeric).toString();
+    return numeric.toFixed(2).replace(/\.00$/, '');
+  }, []);
+
   // Higher-is-better columns (zone/competitive/target-hit rate) default to
   // descending on first click; lower-is-better (miss distance, std dev) and
   // text columns (name, pitch type, direction) default to ascending --
@@ -640,6 +712,18 @@ export default function IntendedZoneStats({
                 </div>
               </div>
             ) : null}
+          </div>
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>Chart</label>
+            <button
+              type="button"
+              className={styles.resetButton}
+              onClick={() => setShowCorrelation(true)}
+              disabled={loading || correlationData.rows.length < 1}
+              title={correlationData.rows.length < 1 ? 'No chartable rows in the current filters.' : 'Compare two Intended Target metrics.'}
+            >
+              View Chart
+            </button>
           </div>
         </div>
         <p className={styles.zoneHint} style={{ textAlign: 'left' }}>
@@ -920,6 +1004,19 @@ export default function IntendedZoneStats({
           </div>
         </>
       ) : null}
+      <LeaderboardCorrelationModal
+        open={showCorrelation}
+        onClose={() => setShowCorrelation(false)}
+        title={mode === 'leaderboard' ? 'Intended Target Leaderboard Correlation' : `Intended Target Correlation — ${pitcherName ?? 'Pitcher'}`}
+        columns={correlationData.columns}
+        rows={correlationData.rows}
+        minPointsRequired={2}
+        viewByLabel={correlationData.label}
+        primaryColumnName={correlationData.columns[0] ?? ''}
+        siteLogoSrc={siteLogoSrc}
+        siteLogoAlt={siteLogoAlt}
+        formatValue={formatCorrelationValue}
+      />
     </div>
   );
 }

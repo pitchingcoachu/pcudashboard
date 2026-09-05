@@ -5,7 +5,7 @@ import PortalChrome from '../portal-chrome';
 import LogoutButton from '../logout-button';
 import PortalUserMenu from '../user-menu';
 import { resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
-import { canUseDashboardData, canUseGameTracker, canUseProgrammingData } from '../../../lib/programming-scope';
+import { canUseClientManagement, canUseDashboardData, canUseGameTracker, canUseProgrammingData } from '../../../lib/programming-scope';
 import { schoolBrandCssVars } from '../../../lib/school-brand';
 import DashboardSchoolSelector from './dashboard-school-selector';
 import DashboardShell from './dashboard-shell';
@@ -13,6 +13,9 @@ import { resolveSessionDashboardSchoolOptions } from '../../../lib/dashboard-sch
 import PortalThemeToggle from '../theme-toggle';
 import PortalNotificationsBell from '../notifications-bell';
 import PortalMessagesNavButton from '../messages-nav-button';
+import PortalNavOverflowMenu from '../nav-overflow-menu';
+import { canViewPortalActivity } from '../../../lib/portal-activity';
+import { buildStaffMoreNavItems } from '../../../lib/portal-primary-nav';
 
 type PortalDashboardPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -79,10 +82,29 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
   const schoolOptions = await resolveSessionDashboardSchoolOptions(session);
   const selectedSchool = resolveDashboardSchoolCode(session);
   const canAccessDashboard = await canUseDashboardData(session);
-  const canAccessProgramming = await canUseProgrammingData(session);
-  const canAccessGameTracker = await canUseGameTracker(session);
+  const [canAccessProgramming, canAccessGameTracker, canAccessClientManagement] = await Promise.all([
+    canUseProgrammingData(session),
+    canUseGameTracker(session),
+    canUseClientManagement(session),
+  ]);
 
   const isProSchool = String(selectedSchool ?? '').trim().toUpperCase() === 'PRO';
+  const isLeagueSchool = String(selectedSchool ?? '').trim().toUpperCase() === 'LEAGUE';
+  const isTrialSchool = String(selectedSchool ?? '').trim().toUpperCase() === 'TRIAL';
+  const isStaff = session.role === 'admin' || session.role === 'coach';
+  const canAccessPlayerNotes = isStaff && !isLeagueSchool;
+  const canAccessActivityTracker = !isTrialSchool && canViewPortalActivity(session);
+  const canAccessEmailAutomations =
+    !isTrialSchool && session.role === 'admin' && session.email.trim().toLowerCase() === 'jgaynor@pitchingcoachu.com';
+  const moreItems = buildStaffMoreNavItems({
+    role: session.role,
+    selectedSchool,
+    canAccessProgramming,
+    canAccessClientManagement,
+    canAccessGameTracker,
+    canAccessActivityTracker,
+    canAccessEmailAutomations,
+  });
 
   return (
     <PortalChrome
@@ -91,51 +113,50 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
       wrapNavInStack
       left={<DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />}
       navLinks={
-        <>
-          {(session.role === 'admin' || session.role === 'coach') && (
+        isStaff ? (
+          <>
             <Link href="/portal/admin" className="portal-nav-link">
               Home
             </Link>
-          )}
-          {session.role === 'player' ? (
-            <>
-              {canAccessProgramming ? (
-                <>
-                  <Link href="/portal/player" className="portal-nav-link">
-                    Profile
-                  </Link>
-                  <Link href="/portal/player/program" className="portal-nav-link">
-                    Program
-                  </Link>
-                </>
-              ) : null}
-            </>
-          ) : (
-            canAccessProgramming ? (
+            {canAccessProgramming ? (
               <Link href="/portal/admin/schedule" className="portal-nav-link">
                 Schedule
               </Link>
-            ) : null
-          )}
-          <Link href="/portal/dashboard" className="portal-nav-link active">
-            Dashboard
-          </Link>
-          {(session.role === 'admin' || session.role === 'coach') && (
-            <Link href="/profiles" className="portal-nav-link">
-              Profiles
+            ) : null}
+            <Link href="/portal/dashboard" className="portal-nav-link active">
+              Dashboard
             </Link>
-          )}
-        </>
+            {canAccessPlayerNotes ? (
+              <Link href="/portal/admin/player-notes" className="portal-nav-link">
+                Player Notes
+              </Link>
+            ) : null}
+            <PortalNavOverflowMenu items={moreItems} />
+          </>
+        ) : (
+          <>
+            {canAccessProgramming ? (
+              <>
+                <Link href="/portal/player" className="portal-nav-link">Profile</Link>
+                <Link href="/portal/player/program" className="portal-nav-link">Program</Link>
+              </>
+            ) : null}
+            <Link href="/portal/dashboard" className="portal-nav-link active">Dashboard</Link>
+          </>
+        )
       }
       mobileNavCurrentHref="/portal/dashboard"
       mobileNavLoggedInAs={session.name ?? session.email}
       mobileNavItems={[
-        ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Home' }] : []),
-        ...(session.role === 'player'
+        ...(isStaff ? [{ href: '/portal/admin', label: 'Home' }] : []),
+        ...(isStaff
+          ? [...(canAccessProgramming ? [{ href: '/portal/admin/schedule', label: 'Schedule' }] : [])]
+          : session.role === 'player'
           ? [...(canAccessProgramming ? [{ href: '/portal/player', label: 'Profile' }, { href: '/portal/player/program', label: 'Program' }] : [])]
-          : [...(canAccessProgramming ? [{ href: '/portal/admin/schedule', label: 'Schedule' }] : [])]),
+          : []),
         { href: '/portal/dashboard', label: 'Dashboard' },
-        ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/profiles', label: 'Profiles' }] : []),
+        ...(canAccessPlayerNotes ? [{ href: '/portal/admin/player-notes', label: 'Player Notes' }] : []),
+        ...(isStaff ? moreItems : []),
       ]}
       right={
         <>

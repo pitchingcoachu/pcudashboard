@@ -5,6 +5,8 @@ import {
   getMasterCalendarTitle,
   getScheduleThrowingState,
   getThrowingFieldSchema,
+  listPlayerGroups,
+  listPlayerIdsForGroup,
   listPlayerChoicesByOrganization,
   listProgramItemsForPlayerByDateRange,
   resolveOrganizationIdForSchool,
@@ -18,6 +20,7 @@ import {
 } from '../../../../lib/programming-scope';
 import { resolveSchoolBrand } from '../../../../lib/school-brand';
 import MasterCalendarTabs from './master-calendar-tabs';
+import MasterCalendarGroupFilter from './master-calendar-group-filter';
 
 type MasterCalendarPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -46,6 +49,15 @@ function parseDays(value: string | string[] | undefined): 1 | 3 | 7 {
   return 7;
 }
 
+function parseGroupIds(value: string | string[] | undefined): number[] | null {
+  const values = Array.isArray(value) ? value : typeof value === 'string' ? [value] : [];
+  if (values.length === 0 || values.some((item) => item.trim().toLowerCase() === 'all')) return null;
+  const ids = values
+    .map((item) => Number(item))
+    .filter((id) => Number.isInteger(id) && id > 0);
+  return [...new Set(ids)];
+}
+
 export default async function MasterCalendarPage({ searchParams }: MasterCalendarPageProps) {
   const session = await requirePortalSession();
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
@@ -66,20 +78,39 @@ export default async function MasterCalendarPage({ searchParams }: MasterCalenda
   const params = await searchParams;
   const startDateRaw = typeof params.startDate === 'string' ? params.startDate : '';
   const days = parseDays(params.days);
+  const requestedGroupIds = parseGroupIds(params.groupId);
   const startDate = /^\d{4}-\d{2}-\d{2}$/.test(startDateRaw) ? startDateRaw : todayIsoDate();
   const endDate = addDays(startDate, days);
   const dayKeys = Array.from({ length: days }, (_, i) => addDays(startDate, i));
   const previousStartDate = addDays(startDate, -days);
   const nextStartDate = addDays(startDate, days);
 
-  const players =
-    programmingOrganizationId > 0
-      ? await listPlayerChoicesByOrganization({
+  const [allPlayers, playerGroups] = programmingOrganizationId > 0
+    ? await Promise.all([
+        listPlayerChoicesByOrganization({
           organizationId: programmingOrganizationId,
           assignedCoachUserId: null,
           activeOnly: true,
-        }).catch(() => [])
-      : [];
+        }).catch(() => []),
+        listPlayerGroups({ organizationId: programmingOrganizationId }).catch(() => []),
+      ])
+    : [[], []];
+  const matchedGroupIds = requestedGroupIds?.filter((id) => playerGroups.some((group) => group.id === id)) ?? null;
+  const validGroupIds = matchedGroupIds && matchedGroupIds.length > 0 ? matchedGroupIds : null;
+  const selectedPlayerIds = validGroupIds === null
+    ? null
+    : new Set((await Promise.all(
+        validGroupIds.map((groupId) => listPlayerIdsForGroup({ organizationId: programmingOrganizationId, groupId }).catch(() => []))
+      )).flat());
+  const players = selectedPlayerIds === null
+    ? allPlayers
+    : allPlayers.filter((player) => selectedPlayerIds.has(player.playerId));
+
+  const calendarHref = (date: string) => {
+    const query = new URLSearchParams({ startDate: date, days: String(days) });
+    validGroupIds?.forEach((groupId) => query.append('groupId', String(groupId)));
+    return `/portal/admin/master-calendar?${query.toString()}`;
+  };
 
   const itemsByPlayer = new Map<number, Awaited<ReturnType<typeof listProgramItemsForPlayerByDateRange>>>();
   const throwingByPlayer = new Map<number, Record<string, unknown>>();
@@ -137,7 +168,7 @@ export default async function MasterCalendarPage({ searchParams }: MasterCalenda
   return (
     <div className="portal-admin-stack">
       <article className="portal-admin-card">
-        <form method="get" className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(5, minmax(140px, 1fr))' }}>
+        <form method="get" className="portal-master-calendar-controls">
           <label>
             Start Date
             <input type="date" name="startDate" defaultValue={startDate} />
@@ -150,23 +181,27 @@ export default async function MasterCalendarPage({ searchParams }: MasterCalenda
               <option value="7">7 days</option>
             </select>
           </label>
-          <div style={{ display: 'flex', alignItems: 'end', gap: 8 }}>
+          <MasterCalendarGroupFilter
+            groups={playerGroups.map((group) => ({ id: group.id, name: group.name }))}
+            initialSelectedIds={validGroupIds ?? []}
+          />
+          <div className="portal-master-calendar-period-actions">
             <Link
-              href={`/portal/admin/master-calendar?startDate=${previousStartDate}&days=${days}`}
+              href={calendarHref(previousStartDate)}
               className="btn btn-ghost as-link"
               aria-label="Previous period"
             >
               ← Prev
             </Link>
             <Link
-              href={`/portal/admin/master-calendar?startDate=${nextStartDate}&days=${days}`}
+              href={calendarHref(nextStartDate)}
               className="btn btn-ghost as-link"
               aria-label="Next period"
             >
               Next →
             </Link>
           </div>
-          <div style={{ display: 'flex', alignItems: 'end', gap: 8 }}>
+          <div className="portal-master-calendar-load-actions">
             <button type="submit" className="btn btn-primary">Load</button>
             <Link href="/portal/admin/schedule" className="btn btn-ghost as-link">Back to Schedule</Link>
           </div>
@@ -183,6 +218,7 @@ export default async function MasterCalendarPage({ searchParams }: MasterCalenda
         initialTitle={initialTitle}
         schoolLogoSrc={schoolBrand.logoSrc}
         schoolLogoAlt={schoolBrand.logoAlt}
+        schoolCode={programmingSchoolCode}
         dateRangeLabel={`${startDate} to ${dayKeys[dayKeys.length - 1]}`}
       />
     </div>

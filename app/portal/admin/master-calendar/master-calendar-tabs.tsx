@@ -86,6 +86,7 @@ export default function MasterCalendarTabs({
   initialTitle = 'Master Calendar',
   schoolLogoSrc,
   schoolLogoAlt = 'School logo',
+  schoolCode = '',
   dateRangeLabel = '',
 }: {
   players: PlayerRow[];
@@ -97,6 +98,7 @@ export default function MasterCalendarTabs({
   initialTitle?: string;
   schoolLogoSrc?: string | null;
   schoolLogoAlt?: string;
+  schoolCode?: string;
   dateRangeLabel?: string;
 }) {
   const [tab, setTab] = useState<MasterCalendarTab>(defaultTab);
@@ -207,7 +209,8 @@ export default function MasterCalendarTabs({
     try {
       const [{ default: html2canvas }, { jsPDF }] = await Promise.all([import('html2canvas'), import('jspdf')]);
       const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
-      const pageBackground = isLightTheme ? '#f8fafc' : '#05060a';
+      const isArizonaExport = schoolCode.trim().toUpperCase() === 'ARIZONA';
+      const pageBackground = isLightTheme ? '#f8fafc' : isArizonaExport ? '#07182d' : '#05060a';
 
       const loadImageDataUrl = async (src: string): Promise<string | null> => {
         try {
@@ -345,6 +348,7 @@ export default function MasterCalendarTabs({
 
       const drawHeader = () => {
         if (isLightTheme) pdf.setFillColor(248, 250, 252);
+        else if (isArizonaExport) pdf.setFillColor(7, 24, 45);
         else pdf.setFillColor(5, 6, 10);
         pdf.rect(0, 0, pageWidth, pageHeight, 'F');
         if (schoolLogoData && schoolLogoSize) {

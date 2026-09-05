@@ -38,6 +38,7 @@ export async function GET(request: Request) {
       mobileSchedule: access.mobileSchedule,
       mobileWorkouts: access.mobileWorkouts,
       mobileGameTracker: access.mobileGameTracker,
+      mobileNutrition: access.mobileNutrition,
     });
   } catch (error) {
     return NextResponse.json(
@@ -59,6 +60,7 @@ export async function POST(request: Request) {
       mobileSchedule?: boolean;
       mobileWorkouts?: boolean;
       mobileGameTracker?: boolean;
+      mobileNutrition?: boolean;
     };
     const schoolCode = normalizeSchoolCode(body.schoolCode ?? '');
     if (!schoolCode) return NextResponse.json({ error: 'schoolCode is required.' }, { status: 400 });
@@ -66,16 +68,18 @@ export async function POST(request: Request) {
     const mobileSchedule = body.mobileSchedule !== false;
     const mobileWorkouts = body.mobileWorkouts !== false;
     const mobileGameTracker = body.mobileGameTracker !== false;
+    const mobileNutrition = body.mobileNutrition !== false;
 
     await setSchoolMobileAccess({
       schoolCode,
       mobileSchedule,
       mobileWorkouts,
       mobileGameTracker,
+      mobileNutrition,
       updatedByUserId: session.userId ?? null,
     });
 
-    return NextResponse.json({ ok: true, schoolCode, mobileSchedule, mobileWorkouts, mobileGameTracker });
+    return NextResponse.json({ ok: true, schoolCode, mobileSchedule, mobileWorkouts, mobileGameTracker, mobileNutrition });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to save mobile access.' },

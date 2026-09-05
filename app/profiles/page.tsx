@@ -1,4 +1,3 @@
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { requirePortalSession } from '../../lib/portal-session';
 import { resolveDashboardSchoolCode } from '../../lib/dashboard-access';
@@ -13,6 +12,8 @@ import PortalChrome from '../portal/portal-chrome';
 import PortalNotificationsBell from '../portal/notifications-bell';
 import PortalThemeToggle from '../portal/theme-toggle';
 import ProfilesList from './profiles-list';
+import { resolveStaffPrimaryNavigation } from '../../lib/portal-primary-nav-server';
+import StaffPrimaryNav, { staffPrimaryMobileItems } from '../portal/staff-primary-nav';
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | null = null;
@@ -33,8 +34,9 @@ export default async function ProfilesPage() {
   }
 
   const selectedSchool = resolveDashboardSchoolCode(session);
-  const [schoolOptions] = await Promise.all([
+  const [schoolOptions, primaryNav] = await Promise.all([
     withTimeout(resolveSessionDashboardSchoolOptions(session), 3_000, [selectedSchool]),
+    resolveStaffPrimaryNavigation(session),
   ]);
   const canAccessProgramming = await canUseProgrammingData(session);
   const programmingOrganizationId = await resolveProgrammingOrganizationId(session);
@@ -60,31 +62,11 @@ export default async function ProfilesPage() {
       schoolBrandStyle={schoolBrandCssVars(selectedSchool)}
       left={<DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />}
       navLinks={
-        <>
-          <Link href="/portal/admin" className="portal-nav-link">
-            Home
-          </Link>
-          <Link href="/portal/dashboard" className="portal-nav-link">
-            Dashboard
-          </Link>
-          {canAccessProgramming ? (
-            <Link href="/portal/admin/schedule" className="portal-nav-link">
-              Schedule
-            </Link>
-          ) : null}
-          <Link href="/profiles" className="portal-nav-link active">
-            Profiles
-          </Link>
-        </>
+        <StaffPrimaryNav {...primaryNav} activeHref="/profiles" />
       }
       mobileNavCurrentHref="/profiles"
       mobileNavLoggedInAs={session.name ?? session.email}
-      mobileNavItems={[
-        { href: '/portal/admin', label: 'Home' },
-        { href: '/portal/dashboard', label: 'Dashboard' },
-        ...(canAccessProgramming ? [{ href: '/portal/admin/schedule', label: 'Schedule' }] : []),
-        { href: '/profiles', label: 'Profiles' },
-      ]}
+      mobileNavItems={staffPrimaryMobileItems(primaryNav)}
       right={
         <>
           <PortalUserMenu displayName={session.name ?? session.email} />

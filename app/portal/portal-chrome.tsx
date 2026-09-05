@@ -53,9 +53,11 @@ export default async function PortalChrome({
 }: PortalChromeProps) {
   const viewMode = await resolveViewMode();
   const viewModeClass = viewMode === 'desktop' ? ' portal-shell--viewmode-desktop-forced' : ' portal-shell--viewmode-auto';
+  const schoolTheme = String((schoolBrandStyle as Record<string, unknown> | undefined)?.['--portal-school-theme'] ?? '');
+  const schoolThemeClass = schoolTheme === 'arizona' ? ' portal-shell--arizona' : '';
 
   return (
-    <div className={`portal-shell${extraShellClass ? ` ${extraShellClass}` : ''}${viewModeClass}`} style={schoolBrandStyle}>
+    <div className={`portal-shell${extraShellClass ? ` ${extraShellClass}` : ''}${schoolThemeClass}${viewModeClass}`} style={schoolBrandStyle}>
       <header className={`portal-header${extraHeaderClass ? ` ${extraHeaderClass}` : ''}`}>
         <div className="portal-header-left">{left}</div>
         <div className="portal-header-center">

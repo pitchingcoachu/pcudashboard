@@ -185,12 +185,16 @@ export default function IntendedZonePanel({
   endDate,
   selectedPitchTypes,
   selectedBallTypes,
+  siteLogoSrc,
+  siteLogoAlt,
 }: {
   pitcherName: string | null;
   startDate?: string;
   endDate?: string;
   selectedPitchTypes?: string[];
   selectedBallTypes?: string[];
+  siteLogoSrc?: string | null;
+  siteLogoAlt?: string;
 }) {
   const [page, setPage] = useState<'live' | 'stats' | 'targeting' | 'pitchLog' | 'strikeZoneTest'>('live');
   const [mode, setMode] = useState<IntendedZoneSessionMode>('live');
@@ -771,6 +775,8 @@ export default function IntendedZonePanel({
           sidebarEndDate={endDate ?? ''}
           sidebarPitchTypes={selectedPitchTypes ?? ['All']}
           sidebarBallTypes={selectedBallTypes ?? ['Baseball']}
+          siteLogoSrc={siteLogoSrc}
+          siteLogoAlt={siteLogoAlt}
         />
       </div>
     );

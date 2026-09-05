@@ -18,6 +18,8 @@ import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
 import PortalNotificationsBell from '../notifications-bell';
 import PortalThemeToggle from '../theme-toggle';
 import PortalMessagesNavButton from '../messages-nav-button';
+import { resolveStaffPrimaryNavigation } from '../../../lib/portal-primary-nav-server';
+import StaffPrimaryNav, { staffPrimaryMobileItems } from '../staff-primary-nav';
 
 function normalizeName(value: string): string {
   return String(value ?? '')
@@ -75,6 +77,8 @@ export default async function ForcePlatesPage({
   const canAccessProgramming = await canUseProgrammingData(session);
   const orgId = await resolveProgrammingOrganizationId(session);
   const isPcu = String(selectedSchoolCode ?? '').trim().toUpperCase() === 'PCU';
+  const isStaff = session.role === 'admin' || session.role === 'coach';
+  const primaryNav = isStaff ? await resolveStaffPrimaryNavigation(session) : null;
 
   const playerQueryRaw = Array.isArray(params.player) ? params.player[0] : params.player;
   const requestedPlayer = String(playerQueryRaw ?? '').trim();
@@ -164,12 +168,10 @@ export default async function ForcePlatesPage({
     <PortalChrome
       left={<DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />}
       navLinks={
-        <>
-          {(session.role === 'admin' || session.role === 'coach') && (
-            <Link href="/portal/admin" className="portal-nav-link">
-              Home
-            </Link>
-          )}
+        isStaff && primaryNav ? (
+          <StaffPrimaryNav {...primaryNav} activeHref="/portal/force-plates" />
+        ) : (
+          <>
           {session.role === 'player' && canAccessProgramming ? (
             <>
               <Link href="/portal/player" className="portal-nav-link">
@@ -183,12 +185,12 @@ export default async function ForcePlatesPage({
           <Link href="/portal/dashboard" className="portal-nav-link">
             Dashboard
           </Link>
-        </>
+          </>
+        )
       }
       mobileNavCurrentHref="/portal/force-plates"
       mobileNavLoggedInAs={session.name ?? session.email}
-      mobileNavItems={[
-        ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Home' }] : []),
+      mobileNavItems={primaryNav ? staffPrimaryMobileItems(primaryNav) : [
         ...(session.role === 'player' && canAccessProgramming
           ? [
               { href: '/portal/player', label: 'Profile' },

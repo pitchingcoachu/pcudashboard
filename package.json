@@ -20,6 +20,7 @@
     "@capacitor/cli": "^8.2.0",
     "@capacitor/core": "^8.2.0",
     "@capacitor/ios": "^8.2.0",
+    "@capacitor/push-notifications": "^8.1.2",
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "@mediapipe/tasks-vision": "^0.10.35",
     "@resvg/resvg-js": "^2.6.2",

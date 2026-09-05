@@ -179,6 +179,7 @@ async function main() {
     mobileSchedule: true,
     mobileWorkouts: true,
     mobileGameTracker: true,
+    mobileNutrition: true,
   });
 
   console.log(`Created: ${playersCreated} players, ${coachesCreated} coaches`);

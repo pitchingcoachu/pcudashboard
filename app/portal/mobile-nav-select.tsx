@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
+import { unregisterNativePushDevice } from './native-push-registration';
 
 type MobileNavItem = {
   href: string;
@@ -92,6 +93,7 @@ export default function MobileNavSelect({
     setOpen(false);
     if (next === logoutValue) {
       setLoggingOut(true);
+      await unregisterNativePushDevice();
       await fetch('/api/auth/logout', { method: 'POST' });
       router.push('/login');
       router.refresh();
