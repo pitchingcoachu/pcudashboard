@@ -1,0 +1,41 @@
+name: Arizona PULSE Sync
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+      timezone: "America/Phoenix"
+  workflow_dispatch:
+
+concurrency:
+  group: arizona-pulse-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    if: github.event_name == 'workflow_dispatch' || vars.ARIZONA_PULSE_SYNC_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      ARIZONA_PULSE_USERNAME: ${{ secrets.ARIZONA_PULSE_USERNAME }}
+      ARIZONA_PULSE_PASSWORD: ${{ secrets.ARIZONA_PULSE_PASSWORD }}
+      ARIZONA_PULSE_EXPORT_EMAIL: ${{ secrets.ARIZONA_PULSE_EXPORT_EMAIL }}
+      GMAIL_CLIENT_ID: ${{ secrets.PULSE_GMAIL_CLIENT_ID }}
+      GMAIL_CLIENT_SECRET: ${{ secrets.PULSE_GMAIL_CLIENT_SECRET }}
+      GMAIL_REFRESH_TOKEN: ${{ secrets.PULSE_GMAIL_REFRESH_TOKEN }}
+      ARIZONA_PULSE_SYNC_TOKEN: ${{ secrets.ARIZONA_PULSE_SYNC_TOKEN }}
+      PULSE_IMPORT_URL: https://www.pcudashboard.com/api/automation/arizona-pulse
+
+    steps:
+      - name: Check out pcudashboard
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Request, download, and import Arizona PULSE exports
+        run: node scripts/sync-arizona-pulse.mjs
