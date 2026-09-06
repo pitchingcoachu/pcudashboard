@@ -1,6 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
-import { analyzePulseCsv, importPulseFile, validatePulseFiles } from '../../../../lib/pulse-db';
+import { analyzePulseCsv, completePulseSync, importPulseFile, validatePulseFiles } from '../../../../lib/pulse-db';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -58,6 +58,8 @@ export async function POST(request: Request) {
         file,
       }));
     }
+
+    await completePulseSync(SCHOOL_CODE);
 
     return NextResponse.json({ ok: true, schoolCode: SCHOOL_CODE, previews, results });
   } catch (error) {

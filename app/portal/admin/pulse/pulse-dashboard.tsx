@@ -8,11 +8,13 @@ type Player = { playerKey:string; playerName:string; lastDate:string|null; acRat
 type Workload = { date:string; acRatio:number|null; acuteWorkload:number|null; chronicWorkload:number|null; oneDayWorkload:number|null; totalThrowCount:number|null; highEffortThrowCount:number|null };
 type EventRow = { id:string; datetime:string; tag:string|null; highEffort:boolean; armSlot:number|null; armSpeed:number|null; shoulderRotation:number|null; torque:number|null; ballVelocity:number|null; ballWeight:number|null; ballWeightUnit:string|null; simulated:boolean };
 type DailyEvent = { date:string; throws:number; highEffortThrows:number; armSpeed:number|null; maxArmSpeed:number|null; torque:number|null; maxTorque:number|null; armSlot:number|null; shoulderRotation:number|null };
-type Data = { schoolCode:string; players:Player[]; selectedPlayerKey:string; workload:Workload[]; events:EventRow[]; dailyEvents:DailyEvent[]; uploads:Array<{id:string;fileName:string;kind:string;rowCount:number;insertedRows:number;minDate:string;maxDate:string;createdAt:string}>; summary:{throws7:number;throws28:number;avgTorque7:number|null;avgArmSpeed7:number|null;avgStress7:number|null;avgStress28:number|null} };
+type SyncStatus = { lastRequestedAt:string|null; lastCompletedAt:string|null; status:'idle'|'queued'|'success'|'failed'; cooldownUntil:string|null };
+type Data = { schoolCode:string; players:Player[]; selectedPlayerKey:string; workload:Workload[]; events:EventRow[]; dailyEvents:DailyEvent[]; uploads:Array<{id:string;fileName:string;kind:string;rowCount:number;insertedRows:number;minDate:string;maxDate:string;createdAt:string}>; sync:SyncStatus; summary:{throws7:number;throws28:number;avgTorque7:number|null;avgArmSpeed7:number|null;avgStress7:number|null;avgStress28:number|null} };
 
 const fmt = (value:number|null, digits=2) => value == null ? '—' : value.toFixed(digits).replace(/\.00$/, '');
 const dateLabel = (value:string) => new Date(`${value}T12:00:00`).toLocaleDateString(undefined,{month:'short',day:'numeric'});
 const fullDate = (value:string) => new Date(value).toLocaleString(undefined,{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'});
+const arizonaDateTime = (value:string) => new Date(value).toLocaleString(undefined,{timeZone:'America/Phoenix',month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'});
 const localIsoDate = (offsetDays=0) => {
   const date=new Date();
   date.setDate(date.getDate()+offsetDays);
@@ -91,12 +93,23 @@ export default function PulseDashboard({ schoolCode,schoolLogoSrc,schoolLogoAlt 
   const [start,setStart]=useState(()=>localIsoDate(-27)); const [end,setEnd]=useState(()=>localIsoDate()); const [sort,setSort]=useState('desc');
   const [sidebarOpen,setSidebarOpen]=useState(true);
   const [exporting,setExporting]=useState(false);
+  const [syncing,setSyncing]=useState(false); const [clock,setClock]=useState(()=>Date.now());
   const [files,setFiles]=useState<File[]>([]); const [uploading,setUploading]=useState(false); const [notice,setNotice]=useState(''); const inputRef=useRef<HTMLInputElement>(null);
   const exportRef=useRef<HTMLDivElement>(null);
   const [eventPage,setEventPage]=useState(0); const PAGE=100;
   const load=useCallback(async (key=player)=>{setLoading(true);setError('');try{const qs=new URLSearchParams();if(key)qs.set('player',key);if(start)qs.set('start',start);if(end)qs.set('end',end);qs.set('sort',sort);const response=await fetch(`/api/admin/pulse?${qs}`,{cache:'no-store'});const payload=await response.json();if(!response.ok)throw new Error(payload.error||'Unable to load PULSE.');setData(payload);setPlayer(payload.selectedPlayerKey||'');}catch(e){setError(e instanceof Error?e.message:'Unable to load PULSE.');}finally{setLoading(false)}},[player,start,end,sort]);
   useEffect(()=>{void load();},[]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(()=>{setEventPage(0)},[player,start,end,sort]);
+  useEffect(()=>{
+    if(data?.sync.status!=='queued'||!data.sync.cooldownUntil||new Date(data.sync.cooldownUntil).getTime()<=Date.now())return;
+    const timer=window.setInterval(()=>void load(),15000);
+    return ()=>window.clearInterval(timer);
+  },[data?.sync.cooldownUntil,data?.sync.status,load]);
+  useEffect(()=>{
+    if(!data?.sync.cooldownUntil||new Date(data.sync.cooldownUntil).getTime()<=Date.now())return;
+    const timer=window.setInterval(()=>setClock(Date.now()),1000);
+    return ()=>window.clearInterval(timer);
+  },[data?.sync.cooldownUntil]);
   const filtered=useMemo(()=>data?.players.filter(p=>p.playerName.toLowerCase().includes(query.toLowerCase()))??[],[data,query]);
   const selected=data?.players.find(p=>p.playerKey===data.selectedPlayerKey);
   const choose=(key:string)=>{setPlayer(key);void load(key)};
@@ -169,9 +182,23 @@ export default function PulseDashboard({ schoolCode,schoolLogoSrc,schoolLogoAlt 
     }catch(e){setError(e instanceof Error?e.message:'Unable to export PULSE PDF.')}finally{setExporting(false)}
   }
   async function upload(){if(!files.length)return;setUploading(true);setError('');setNotice('');try{const form=new FormData();files.forEach(file=>form.append('files',file));const response=await fetch('/api/admin/pulse',{method:'POST',body:form});const payload=await response.json();if(!response.ok)throw new Error(payload.error||'Upload failed.');const inserted=payload.results.reduce((sum:number,row:{insertedRows:number})=>sum+row.insertedRows,0);setNotice(`${payload.results.length} file${payload.results.length===1?'':'s'} processed · ${inserted.toLocaleString()} rows added or refreshed.`);setFiles([]);if(inputRef.current)inputRef.current.value='';await load();}catch(e){setError(e instanceof Error?e.message:'Upload failed.')}finally{setUploading(false)}}
+  async function syncNewData(){
+    if(syncing)return;
+    setSyncing(true);setError('');setNotice('');
+    try{
+      const response=await fetch('/api/admin/pulse/sync',{method:'POST'});
+      const payload=await response.json();
+      if(payload.sync)setData(current=>current?{...current,sync:payload.sync}:current);
+      if(!response.ok)throw new Error(payload.error||'Unable to start PULSE sync.');
+      setNotice('PULSE sync started. New data usually appears within a few minutes.');
+    }catch(e){setError(e instanceof Error?e.message:'Unable to start PULSE sync.')}finally{setSyncing(false)}
+  }
+  const cooldownSeconds=data?.sync.cooldownUntil?Math.max(0,Math.ceil((new Date(data.sync.cooldownUntil).getTime()-clock)/1000)):0;
+  const syncQueued=data?.sync.status==='queued';
+  const syncDisabled=syncing||cooldownSeconds>0;
   const eventSlice=data?.events.slice(eventPage*PAGE,(eventPage+1)*PAGE)??[];
   return <main className={styles.shell}>
-    <header className={styles.hero}><div><p className={styles.eyebrow}>ARM CARE INTELLIGENCE · {schoolCode}</p><h1>PULSE</h1><p>Daily throwing workload and arm-action metrics in one coaching view.</p></div><div className={styles.uploadBox}><input ref={inputRef} type="file" accept=".csv,text/csv" multiple onChange={e=>setFiles(Array.from(e.target.files??[]))}/><button type="button" onClick={()=>inputRef.current?.click()}>Upload CSVs</button><button type="button" className={styles.importButton} disabled={!files.length||uploading} onClick={upload}>{uploading?'Importing…':`Import${files.length?` ${files.length}`:''}`}</button><small>{files.length?files.map(f=>f.name).join(' · '):'Workload and events exports can be uploaded together.'}</small></div></header>
+    <header className={styles.hero}><div><p className={styles.eyebrow}>ARM CARE INTELLIGENCE · {schoolCode}</p><h1>PULSE</h1><p>Daily throwing workload and arm-action metrics in one coaching view.</p></div>{schoolCode==='ARIZONA'?<div className={styles.syncBox}><button type="button" className={styles.syncButton} disabled={syncDisabled} onClick={()=>void syncNewData()}>{syncing||(syncQueued&&cooldownSeconds>0)?'Syncing…':cooldownSeconds>0?`Available in ${Math.ceil(cooldownSeconds/60)} min`:'Sync New Data'}</button><small>{data?.sync.lastCompletedAt?`Last successful sync: ${arizonaDateTime(data.sync.lastCompletedAt)}`:'No automated sync has completed yet.'}</small><span>Requests are limited to once every 10 minutes.</span></div>:<div className={styles.uploadBox}><input ref={inputRef} type="file" accept=".csv,text/csv" multiple onChange={e=>setFiles(Array.from(e.target.files??[]))}/><button type="button" onClick={()=>inputRef.current?.click()}>Upload CSVs</button><button type="button" className={styles.importButton} disabled={!files.length||uploading} onClick={upload}>{uploading?'Importing…':`Import${files.length?` ${files.length}`:''}`}</button><small>{files.length?files.map(f=>f.name).join(' · '):'Workload and events exports can be uploaded together.'}</small></div>}</header>
     {notice&&<div className={styles.success}>{notice}</div>}{error&&<div className={styles.error}>{error}</div>}
     <div className={styles.tabs}><button className={tab==='workload'?styles.activeTab:''} onClick={()=>setTab('workload')}>Workload</button><button className={tab==='events'?styles.activeTab:''} onClick={()=>setTab('events')}>Arm Metrics</button></div>
     <section className={styles.filters}>
@@ -181,7 +208,7 @@ export default function PulseDashboard({ schoolCode,schoolLogoSrc,schoolLogoAlt 
       <label className={styles.sortField}><span>Sort</span><select className={styles.sortSelect} style={{height:46,minHeight:46,padding:'12px',boxSizing:'border-box'}} value={sort} onChange={e=>setSort(e.target.value)}><option value="desc">Newest first</option><option value="asc">Oldest first</option></select></label>
       <button onClick={()=>void load()}>Apply dates</button>
     </section>
-    {loading&&!data?<div className={styles.empty}>Loading PULSE…</div>:!data?.players.length?<div className={styles.empty}><strong>No PULSE data yet.</strong><span>Upload one or more workload/events CSV exports above.</span></div>:
+    {loading&&!data?<div className={styles.empty}>Loading PULSE…</div>:!data?.players.length?<div className={styles.empty}><strong>No PULSE data yet.</strong><span>{schoolCode==='ARIZONA'?'Use Sync New Data above to retrieve the latest PULSE exports.':'Upload one or more workload/events CSV exports above.'}</span></div>:
     <div className={`${styles.workspace}${sidebarOpen?'':` ${styles.sidebarHidden}`}`}>
       {sidebarOpen?<aside className={styles.roster}>
         <div className={styles.rosterHead}><span>Athlete</span><span>A:C Ratio</span><span>Acute WL</span><span>Chronic WL</span><span>Throw Count</span><span>1-Day WL</span></div>

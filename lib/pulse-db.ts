@@ -26,6 +26,13 @@ export type PulseOverviewPlayer = {
   totalThrowCount: number | null; highEffortThrowCount: number | null; eventCount28d: number;
 };
 
+export type PulseSyncStatus = {
+  lastRequestedAt: string | null;
+  lastCompletedAt: string | null;
+  status: 'idle' | 'queued' | 'success' | 'failed';
+  cooldownUntil: string | null;
+};
+
 let schemaReady: Promise<void> | null = null;
 
 function cleanText(value: unknown): string {
@@ -166,12 +173,77 @@ async function ensureSchema(): Promise<void> {
         source_upload_id BIGINT REFERENCES pulse_uploads(id) ON DELETE SET NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (school_code, event_key)
       );
+      CREATE TABLE IF NOT EXISTS pulse_sync_status (
+        school_code TEXT PRIMARY KEY, last_requested_at TIMESTAMPTZ, last_completed_at TIMESTAMPTZ,
+        last_status TEXT NOT NULL DEFAULT 'idle', last_requested_by_user_id INTEGER,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
       CREATE INDEX IF NOT EXISTS pulse_workload_school_player_date_idx ON pulse_workload_daily (school_code, player_key, workload_date DESC);
       CREATE INDEX IF NOT EXISTS pulse_events_school_player_time_idx ON pulse_events (school_code, player_key, event_time DESC);
       CREATE INDEX IF NOT EXISTS pulse_uploads_school_created_idx ON pulse_uploads (school_code, created_at DESC);
     `);
   })().catch((error) => { schemaReady = null; throw error; });
   return schemaReady;
+}
+
+const PULSE_SYNC_COOLDOWN_MINUTES = 10;
+
+export async function getPulseSyncStatus(schoolCodeValue: string): Promise<PulseSyncStatus> {
+  const school = schoolCode(schoolCodeValue);
+  await ensureSchema();
+  const result = await getDbPool().query(`
+    SELECT s.last_requested_at::text, COALESCE(s.last_completed_at, u.last_upload_at)::text AS last_completed_at,
+      COALESCE(s.last_status, CASE WHEN u.last_upload_at IS NULL THEN 'idle' ELSE 'success' END) AS last_status,
+      CASE WHEN s.last_requested_at > NOW() - INTERVAL '${PULSE_SYNC_COOLDOWN_MINUTES} minutes'
+        THEN (s.last_requested_at + INTERVAL '${PULSE_SYNC_COOLDOWN_MINUTES} minutes')::text ELSE NULL END AS cooldown_until
+    FROM (SELECT $1::text AS school_code) base
+    LEFT JOIN pulse_sync_status s USING (school_code)
+    LEFT JOIN (
+      SELECT school_code, MAX(created_at) AS last_upload_at FROM pulse_uploads WHERE school_code=$1 GROUP BY school_code
+    ) u USING (school_code)
+  `, [school]);
+  const row = result.rows[0] ?? {};
+  const status = ['queued', 'success', 'failed'].includes(row.last_status) ? row.last_status : 'idle';
+  return {
+    lastRequestedAt: row.last_requested_at ?? null,
+    lastCompletedAt: row.last_completed_at ?? null,
+    status,
+    cooldownUntil: row.cooldown_until ?? null,
+  };
+}
+
+export async function reservePulseSync(schoolCodeValue: string, userId: number): Promise<PulseSyncStatus | null> {
+  const school = schoolCode(schoolCodeValue);
+  await ensureSchema();
+  const result = await getDbPool().query(`
+    INSERT INTO pulse_sync_status (school_code, last_requested_at, last_status, last_requested_by_user_id, updated_at)
+    VALUES ($1, NOW(), 'queued', $2, NOW())
+    ON CONFLICT (school_code) DO UPDATE SET
+      last_requested_at=NOW(), last_status='queued', last_requested_by_user_id=EXCLUDED.last_requested_by_user_id, updated_at=NOW()
+    WHERE pulse_sync_status.last_requested_at IS NULL
+       OR pulse_sync_status.last_requested_at <= NOW() - INTERVAL '${PULSE_SYNC_COOLDOWN_MINUTES} minutes'
+    RETURNING last_requested_at::text
+  `, [school, userId || null]);
+  if (!result.rows[0]) return null;
+  return getPulseSyncStatus(school);
+}
+
+export async function releasePulseSyncReservation(schoolCodeValue: string): Promise<void> {
+  const school = schoolCode(schoolCodeValue);
+  await ensureSchema();
+  await getDbPool().query(`
+    UPDATE pulse_sync_status SET last_requested_at=NULL, last_status='failed', updated_at=NOW() WHERE school_code=$1
+  `, [school]);
+}
+
+export async function completePulseSync(schoolCodeValue: string): Promise<void> {
+  const school = schoolCode(schoolCodeValue);
+  await ensureSchema();
+  await getDbPool().query(`
+    INSERT INTO pulse_sync_status (school_code, last_completed_at, last_status, updated_at)
+    VALUES ($1, NOW(), 'success', NOW())
+    ON CONFLICT (school_code) DO UPDATE SET last_completed_at=NOW(), last_status='success', updated_at=NOW()
+  `, [school]);
 }
 
 function cleanFileName(value: string): string {
@@ -422,7 +494,8 @@ export async function getPulseDashboard(input: { schoolCode: string; playerKey?:
       id: row.id, fileName: row.file_name, kind: row.source_type, rowCount: Number(row.row_count), insertedRows: Number(row.inserted_rows),
       minDate: row.min_date, maxDate: row.max_date, createdAt: row.created_at,
     }));
-  return { schoolCode: school, players, selectedPlayerKey: selectedKey, workload, events, dailyEvents, uploads,
+  const sync = await getPulseSyncStatus(school);
+  return { schoolCode: school, players, selectedPlayerKey: selectedKey, workload, events, dailyEvents, uploads, sync,
     summary: { throws7: Number(summary?.throws_7 ?? 0), throws28: Number(summary?.throws_28 ?? 0),
       avgTorque7: num(summary?.torque_7), avgArmSpeed7: num(summary?.arm_speed_7), avgStress7: num(stress?.stress_7), avgStress28: num(stress?.stress_28) } };
 }
