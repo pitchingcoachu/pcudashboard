@@ -8,11 +8,12 @@ import {
   getIntendedZoneSession,
   listIntendedZoneSessionsForPitcher,
   matchIntendedZoneSessionByPitcherAndTime,
+  refreshIntendedZonePitchMetadata,
   reopenIntendedZoneSession,
   resetIntendedZoneSessionMatches,
   startIntendedZoneSession,
 } from '../../../../../../lib/training-db';
-import { discoverPracticeSessions } from '../../../../../../lib/trackman-data-api';
+import { discoverPracticeSessions, getPracticePlays } from '../../../../../../lib/trackman-data-api';
 import { listLiveTrackmanSessions } from '../../../../../../lib/trackman-live-webhook';
 
 // GET ?pitcherName= -> this pitcher's past intended-zone sessions.
@@ -126,6 +127,26 @@ export async function PATCH(request: Request) {
     const reopenResult = await reopenIntendedZoneSession({ organizationId, sessionId });
     if (!reopenResult.ok) return NextResponse.json({ error: reopenResult.error }, { status: 400 });
     return NextResponse.json({ ok: true });
+  }
+
+  const currentSession = await getIntendedZoneSession({ organizationId, sessionId });
+  if (currentSession?.mode === 'live' && currentSession.trackmanSessionId) {
+    try {
+      const plays = await getPracticePlays(currentSession.trackmanSessionId);
+      await refreshIntendedZonePitchMetadata({
+        organizationId,
+        sessionId,
+        plays: plays.map((play) => ({
+          playId: play.playID,
+          pitchType: play.pitchTag?.taggedPitchType ?? null,
+          taggedPitcherName: play.pitcher?.pitcher ?? null,
+        })),
+      });
+    } catch (error) {
+      // Ending a session must remain reliable even if TrackMan is briefly
+      // unavailable. The FTP reconciliation will provide the final backup.
+      console.error('[intended-zone] final Plays metadata refresh failed:', error);
+    }
   }
 
   const result = await endIntendedZoneSession({ organizationId, sessionId });

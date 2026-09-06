@@ -1533,6 +1533,46 @@ export async function matchIntendedZonePitch(input: {
   };
 }
 
+/** Refreshes descriptive TrackMan Plays API metadata for pitches that are
+ * already matched to intended targets. The Plays feed is eventually
+ * consistent and often publishes iPad tags after the ball-tracking event, so
+ * this updater is intentionally independent from location/flight matching. */
+export async function refreshIntendedZonePitchMetadata(input: {
+  organizationId: number;
+  sessionId: number;
+  plays: Array<{ playId: string; pitchType: string | null; taggedPitcherName: string | null }>;
+}): Promise<{ updated: number }> {
+  if (!isDatabaseConfigured() || !input.plays.length) return { updated: 0 };
+  await ensureIntendedZoneSchema();
+  const metadata = input.plays
+    .map((play) => ({
+      play_id: String(play.playId ?? '').trim(),
+      pitch_type: String(play.pitchType ?? '').trim() || null,
+      tagged_pitcher_name: String(play.taggedPitcherName ?? '').trim() || null,
+    }))
+    .filter((play) => play.play_id && (play.pitch_type || play.tagged_pitcher_name));
+  if (!metadata.length) return { updated: 0 };
+  const result = await getDbPool().query(
+    `WITH metadata AS (
+       SELECT * FROM jsonb_to_recordset($3::jsonb)
+         AS item(play_id text, pitch_type text, tagged_pitcher_name text)
+     )
+     UPDATE intended_zone_pitches izp SET
+       pitch_type = COALESCE(NULLIF(TRIM(metadata.pitch_type), ''), izp.pitch_type),
+       tagged_pitcher_name = COALESCE(NULLIF(TRIM(metadata.tagged_pitcher_name), ''), izp.tagged_pitcher_name)
+     FROM metadata
+     WHERE izp.organization_id = $1
+       AND izp.session_id = $2
+       AND izp.trackman_play_id = metadata.play_id
+       AND (
+         (NULLIF(TRIM(metadata.pitch_type), '') IS NOT NULL AND izp.pitch_type IS DISTINCT FROM NULLIF(TRIM(metadata.pitch_type), ''))
+         OR (NULLIF(TRIM(metadata.tagged_pitcher_name), '') IS NOT NULL AND izp.tagged_pitcher_name IS DISTINCT FROM NULLIF(TRIM(metadata.tagged_pitcher_name), ''))
+       )`,
+    [input.organizationId, input.sessionId, JSON.stringify(metadata)]
+  );
+  return { updated: result.rowCount ?? 0 };
+}
+
 /** Deletes a single pitch row -- used both for the manual-entry mode's
  * "undo" (right after a mis-tap) and for an explicit delete of one pitch
  * from the log later. Deleting a still-pending (un-thrown) target just

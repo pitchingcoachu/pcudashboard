@@ -177,6 +177,7 @@ type TrackmanDiscoveredSession = {
 };
 
 const POLL_INTERVAL_MS = 2000;
+const PLAYS_API_SYNC_EVERY_POLLS = 3;
 const DATA_API_SYNC_EVERY_POLLS = 8;
 
 export default function IntendedZonePanel({
@@ -276,6 +277,7 @@ export default function IntendedZonePanel({
     if (pollInFlightRef.current) return;
     pollInFlightRef.current = true;
     pollCountRef.current += 1;
+    const syncMetadata = pollCountRef.current % PLAYS_API_SYNC_EVERY_POLLS === 0;
     const syncFallback = pollCountRef.current % DATA_API_SYNC_EVERY_POLLS === 0;
     try {
       const params = new URLSearchParams({ sessionId: String(sessionId) });
@@ -312,9 +314,10 @@ export default function IntendedZonePanel({
       // TrackMan's pull API is useful for classification enrichment and as a
       // delivery fallback, but it can take several seconds. Run it separately
       // so a slow upstream response never freezes the two-second webhook loop.
-      if (syncFallback && !fallbackSyncInFlightRef.current) {
+      if ((syncMetadata || syncFallback) && !fallbackSyncInFlightRef.current) {
         fallbackSyncInFlightRef.current = true;
-        const fallbackParams = new URLSearchParams({ sessionId: String(sessionId), fallback: '1' });
+        const fallbackParams = new URLSearchParams({ sessionId: String(sessionId), metadata: '1' });
+        if (syncFallback) fallbackParams.set('fallback', '1');
         void fetch(`/api/dashboard/pitching/intended-zone/pitches?${fallbackParams.toString()}`, { cache: 'no-store' })
           .catch(() => undefined)
           .finally(() => {

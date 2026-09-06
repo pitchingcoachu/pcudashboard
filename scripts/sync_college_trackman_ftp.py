@@ -388,6 +388,71 @@ def ensure_school(conn: psycopg.Connection, school_code: str) -> None:
     conn.execute("INSERT INTO public.schools (school_code) VALUES (%s) ON CONFLICT DO NOTHING", (school_code,))
 
 
+def canonical_pitch_type_sql(column: str) -> sql.Composed:
+    identifier = sql.Identifier(column)
+    return sql.SQL(
+        """CASE TRIM({column})
+             WHEN 'Four-Seam' THEN 'Fastball'
+             WHEN 'Two-Seam' THEN 'Sinker'
+             WHEN 'Changeup' THEN 'ChangeUp'
+             WHEN 'Knuckle-Curve' THEN 'Curveball'
+             ELSE NULLIF(TRIM({column}), '')
+           END"""
+    ).format(column=identifier)
+
+
+def reconcile_intended_zone_pitch_types(
+    conn: psycopg.Connection,
+    school_code: str,
+    start: date,
+    end: date,
+) -> tuple[int, int]:
+    """Link live intended-target rows to FTP pitches and apply final iPad tags.
+
+    TrackMan uses the same playId in its live/Data API and FTP exports.  The
+    scoped candidate CTE keeps partition pruning active and chooses the newest
+    non-empty tagged record if both practice and V3 exports contain a play.
+    """
+    tables = conn.execute(
+        "SELECT to_regclass('public.intended_zone_pitches'), to_regclass('public.intended_zone_sessions')"
+    ).fetchone()
+    if not tables or not all(tables):
+        return 0, 0
+
+    pitch_type = canonical_pitch_type_sql("taggedpitchtype")
+    result = conn.execute(
+        sql.SQL(
+            """WITH candidates AS (
+                 SELECT DISTINCT ON (TRIM(pe.playid))
+                   pe.id, TRIM(pe.playid) AS play_id, {pitch_type} AS pitch_type
+                 FROM public.pitch_events pe
+                 WHERE pe.school_code = %s
+                   AND pe.session_date BETWEEN %s AND %s
+                   AND NULLIF(TRIM(pe.playid), '') IS NOT NULL
+                 ORDER BY TRIM(pe.playid),
+                   (NULLIF(TRIM(pe.taggedpitchtype), '') IS NOT NULL) DESC,
+                   pe.created_at DESC, pe.id DESC
+               )
+               , matches AS (
+                 SELECT izp.id AS target_id, candidates.id AS pitch_event_id, candidates.pitch_type,
+                   izp.pitch_events_id IS DISTINCT FROM candidates.id AS needs_link,
+                   candidates.pitch_type IS NOT NULL AND izp.pitch_type IS DISTINCT FROM candidates.pitch_type AS needs_tag
+                 FROM public.intended_zone_pitches izp
+                 JOIN candidates ON izp.trackman_play_id = candidates.play_id
+               )
+               UPDATE public.intended_zone_pitches izp
+               SET pitch_events_id = matches.pitch_event_id,
+                   pitch_type = COALESCE(matches.pitch_type, izp.pitch_type)
+               FROM matches
+               WHERE izp.id = matches.target_id
+                 AND (matches.needs_link OR matches.needs_tag)
+               RETURNING matches.needs_link, matches.needs_tag"""
+        ).format(pitch_type=pitch_type),
+        (school_code, start, end),
+    ).fetchall()
+    return sum(bool(row[0]) for row in result), sum(bool(row[1]) for row in result)
+
+
 def source_checksum(remote: RemoteCsv, markers: set[str], roster_keys: set[str]) -> str:
     """Fingerprint both the CSV and the inputs that decide which rows belong to the school."""
     filter_inputs = [FILTER_POLICY_VERSION, remote.source, *sorted(markers)]
@@ -571,6 +636,9 @@ def main() -> int:
             except Exception as exc:
                 failed_sources += 1
                 print(f"[{source}] source unavailable: {exc}")
+        linked, tagged = reconcile_intended_zone_pitch_types(conn, school_code, start, end)
+        conn.commit()
+        print(f"[intended-zone] linked={linked}, pitch_types_refreshed={tagged}")
     print(f"Complete: files_seen={files_seen}, unchanged={files_skipped}, rows_inserted={rows_inserted}")
     return 1 if failed_sources == len(sources) else 0
 

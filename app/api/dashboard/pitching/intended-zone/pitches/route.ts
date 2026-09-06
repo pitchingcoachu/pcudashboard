@@ -11,6 +11,7 @@ import {
   placeOrMoveIntendedZoneTarget,
   queueIntendedZoneTarget,
   recordManualIntendedZonePitch,
+  refreshIntendedZonePitchMetadata,
   setPendingIntendedZoneTargetBallCount,
 } from '../../../../../../lib/training-db';
 import { getPracticeBalls, getPracticePlays, type TrackmanPitchBall } from '../../../../../../lib/trackman-data-api';
@@ -41,6 +42,7 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const sessionId = Number(url.searchParams.get('sessionId') ?? '0');
   const syncFallback = url.searchParams.get('fallback') === '1';
+  const syncMetadata = syncFallback || url.searchParams.get('metadata') === '1';
   if (!Number.isFinite(sessionId) || sessionId <= 0) return NextResponse.json({ error: 'sessionId is required.' }, { status: 400 });
 
   const izSession = await getIntendedZoneSession({ organizationId, sessionId });
@@ -131,53 +133,32 @@ export async function GET(request: Request) {
 
     // Keep the pull API as a throttled fallback/metadata path rather than
     // blocking every four-second webhook refresh on two remote requests.
-    if (syncFallback) {
+    if (syncMetadata) {
       try {
         const [balls, plays] = await Promise.all([
-          getPracticeBalls(izSession.trackmanSessionId),
-          getPracticePlays(izSession.trackmanSessionId).catch(() => []),
+          syncFallback ? getPracticeBalls(izSession.trackmanSessionId) : Promise.resolve([]),
+          getPracticePlays(izSession.trackmanSessionId),
         ]);
         const playTagById = new Map(plays.map((p) => [p.playID, p]));
+
+        // iPad classifications live in the eventually-consistent Plays feed,
+        // not the ball webhook. Refresh them directly by playId so a missing
+        // or slow Balls response cannot prevent a label from being applied.
+        await refreshIntendedZonePitchMetadata({
+          organizationId,
+          sessionId,
+          plays: plays.map((play) => ({
+            playId: play.playID,
+            pitchType: play.pitchTag?.taggedPitchType ?? null,
+            taggedPitcherName: play.pitcher?.pitcher ?? null,
+          })),
+        });
 
         const trackedPitches = balls.filter(isTrackedPitch);
         const existing = await listIntendedZonePitches({ organizationId, sessionId });
         const existingByPlayId = new Map<string, (typeof existing)[number]>();
         for (const pitch of existing) {
           if (pitch.trackmanPlayId) existingByPlayId.set(pitch.trackmanPlayId, pitch);
-        }
-
-        // First enrich pitches already matched by the webhook. Only call the
-        // updater when Plays API metadata adds something.
-        for (const [trackmanBallIndex, ball] of trackedPitches.entries()) {
-          const play = playTagById.get(ball.playId);
-          const matchedPitch = existingByPlayId.get(ball.playId);
-          if (!matchedPitch || !play) continue;
-          const taggedPitchType = play.pitchTag?.taggedPitchType ?? null;
-          const taggedPitcherName = play.pitcher?.pitcher ?? null;
-          const pitcherThrows = play.pitcher?.pitcherThrows ?? null;
-          if (
-            (!taggedPitchType || taggedPitchType === matchedPitch.pitchType) &&
-            (!taggedPitcherName || taggedPitcherName === matchedPitch.taggedPitcherName)
-          ) {
-            continue;
-          }
-          const location = ball.pitch.location;
-          await matchIntendedZonePitch({
-            organizationId,
-            sessionId,
-            trackmanPlayId: ball.playId,
-            plateLocSide: typeof location?.plateLocSide === 'number' ? location.plateLocSide : null,
-            plateLocHeight: typeof location?.plateLocHeight === 'number' ? location.plateLocHeight : null,
-            pitchType: taggedPitchType,
-            relSpeed: typeof ball.pitch.release?.relSpeed === 'number' ? ball.pitch.release.relSpeed : null,
-            inducedVertBreak: typeof ball.pitch.trajectory?.inducedVertBreak === 'number' ? ball.pitch.trajectory.inducedVertBreak : null,
-            horzBreak: typeof ball.pitch.trajectory?.horzBreak === 'number' ? ball.pitch.trajectory.horzBreak : null,
-            pitcherThrows,
-            taggedPitcherName,
-            thrownAt: null,
-            targetCreatedBefore: webhookReceivedAtByPlayId.get(ball.playId) ?? null,
-            trackmanBallIndex,
-          });
         }
 
         // Then consider at most one new ball for the one pending target. A null
