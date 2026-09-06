@@ -101,6 +101,15 @@ export async function transcodePlayerVideo(inputBuffer: Buffer): Promise<Buffer>
     await runFfmpeg([
       '-y',
       '-i', inputPath,
+      // Newer iPhones can add an APAC spatial-audio track after the regular
+      // AAC track. ffmpeg's automatic stream selection prefers the APAC track
+      // because it has more channels, but the bundled decoder cannot read it.
+      // Always use the primary video and first (standard) audio track instead.
+      // The trailing `?` keeps silent videos valid.
+      '-map', '0:v:0',
+      '-map', '0:a:0?',
+      '-sn',
+      '-dn',
       '-c:v', 'libx264',
       '-preset', 'veryfast',
       '-crf', '20',
