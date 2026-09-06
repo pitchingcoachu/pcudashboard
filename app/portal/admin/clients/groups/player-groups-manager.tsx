@@ -13,6 +13,7 @@ export default function PlayerGroupsManager({ initialGroups, players }: Props) {
   const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<PlayerGroupWithMembersRow | null>(null);
   const [memberIds, setMemberIds] = useState<Set<number>>(new Set());
+  const [membershipDates, setMembershipDates] = useState<Record<number, { validFrom: string; validTo: string }>>({});
   const [renameValue, setRenameValue] = useState('');
   const [newGroupName, setNewGroupName] = useState('');
   const [copyFromGroupId, setCopyFromGroupId] = useState('');
@@ -47,6 +48,10 @@ export default function PlayerGroupsManager({ initialGroups, players }: Props) {
       setSelectedGroup(payload.group);
       setRenameValue(payload.group.name);
       setMemberIds(new Set(payload.group.members.map((member) => member.playerId)));
+      setMembershipDates(Object.fromEntries(payload.group.members.map((member) => [member.playerId, {
+        validFrom: member.validFrom ?? '',
+        validTo: member.validTo ?? '',
+      }])));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load group.');
     } finally {
@@ -67,6 +72,17 @@ export default function PlayerGroupsManager({ initialGroups, players }: Props) {
       else next.add(playerId);
       return next;
     });
+    setMembershipDates((previous) => previous[playerId] ? previous : {
+      ...previous,
+      [playerId]: { validFrom: '', validTo: '' },
+    });
+  }
+
+  function updateMembershipDate(playerId: number, field: 'validFrom' | 'validTo', value: string) {
+    setMembershipDates((previous) => ({
+      ...previous,
+      [playerId]: { ...(previous[playerId] ?? { validFrom: '', validTo: '' }), [field]: value },
+    }));
   }
 
   async function handleCreateGroup(event: React.FormEvent) {
@@ -99,6 +115,10 @@ export default function PlayerGroupsManager({ initialGroups, players }: Props) {
         const sourcePayload = (await sourceResponse.json().catch(() => ({}))) as { group?: PlayerGroupWithMembersRow };
         if (sourceResponse.ok && sourcePayload.group) {
           setMemberIds(new Set(sourcePayload.group.members.map((member) => member.playerId)));
+          setMembershipDates(Object.fromEntries(sourcePayload.group.members.map((member) => [member.playerId, {
+            validFrom: member.validFrom ?? '',
+            validTo: member.validTo ?? '',
+          }])));
         }
       }
     } catch (err) {
@@ -117,7 +137,16 @@ export default function PlayerGroupsManager({ initialGroups, players }: Props) {
       const response = await fetch('/api/admin/player-groups', {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ groupId: selectedGroupId, name: renameValue, playerIds: Array.from(memberIds) }),
+        body: JSON.stringify({
+          groupId: selectedGroupId,
+          name: renameValue,
+          playerIds: Array.from(memberIds),
+          memberships: Array.from(memberIds).map((playerId) => ({
+            playerId,
+            validFrom: membershipDates[playerId]?.validFrom || null,
+            validTo: membershipDates[playerId]?.validTo || null,
+          })),
+        }),
       });
       const payload = (await response.json().catch(() => ({}))) as { group?: PlayerGroupWithMembersRow; error?: string };
       if (!response.ok || !payload.group) throw new Error(payload.error ?? 'Failed to save group.');
@@ -228,12 +257,40 @@ export default function PlayerGroupsManager({ initialGroups, players }: Props) {
                 <span className="portal-muted-text">{memberIds.size} selected</span>
               </div>
 
+              <p className="portal-muted-text portal-player-group-date-help">
+                Membership dates are inclusive. Leave both blank for an all-time membership.
+              </p>
+
               <div className="portal-questionnaire-player-list">
                 {filteredPlayers.map((player) => (
-                  <label key={player.playerId} className="portal-questionnaire-player-option">
-                    <input type="checkbox" checked={memberIds.has(player.playerId)} onChange={() => toggleMember(player.playerId)} />
-                    <span>{player.fullName}</span>
-                  </label>
+                  <div key={player.playerId} className="portal-questionnaire-player-option portal-player-group-member-row">
+                    <label>
+                      <input type="checkbox" checked={memberIds.has(player.playerId)} onChange={() => toggleMember(player.playerId)} />
+                      <span>{player.fullName}</span>
+                    </label>
+                    {memberIds.has(player.playerId) ? (
+                      <div className="portal-player-group-dates">
+                        <label>
+                          From
+                          <input
+                            type="date"
+                            value={membershipDates[player.playerId]?.validFrom ?? ''}
+                            max={membershipDates[player.playerId]?.validTo || undefined}
+                            onChange={(event) => updateMembershipDate(player.playerId, 'validFrom', event.target.value)}
+                          />
+                        </label>
+                        <label>
+                          Through
+                          <input
+                            type="date"
+                            value={membershipDates[player.playerId]?.validTo ?? ''}
+                            min={membershipDates[player.playerId]?.validFrom || undefined}
+                            onChange={(event) => updateMembershipDate(player.playerId, 'validTo', event.target.value)}
+                          />
+                        </label>
+                      </div>
+                    ) : null}
+                  </div>
                 ))}
                 {filteredPlayers.length === 0 ? <p className="portal-muted-text">No players match.</p> : null}
               </div>

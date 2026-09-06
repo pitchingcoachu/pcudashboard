@@ -9,6 +9,30 @@ import IntendedZonePitchLog from './intended-zone-pitch-log';
 import LiveFlightReplay from './live-flight-replay';
 import styles from './intended-zone-panel.module.css';
 
+// Safari throws "The string did not match the expected pattern" from
+// toLocaleDateString/toLocaleString on an Invalid Date (Chrome just returns
+// "Invalid Date" silently) -- these validate first so a stray malformed
+// timestamp can't crash the whole panel render.
+function formatDateSafe(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  try {
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  } catch {
+    return '—';
+  }
+}
+
+function formatDateTimeSafe(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  try {
+    return date.toLocaleString();
+  } catch {
+    return '—';
+  }
+}
+
 // Mirrors pitching-suite.tsx's single-pitch "action zone" SVG geometry
 // exactly (same constants, same plate/box drawing order) so this looks
 // pixel-identical to the zone graphic used everywhere else in the
@@ -402,7 +426,7 @@ export default function IntendedZonePanel({
     setIsExportingSessionPdf(true);
     setError(null);
     try {
-      const dateLabel = new Date(activeSession.startedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      const dateLabel = formatDateSafe(activeSession.startedAt);
       const safeName = (pitcherName || 'session').toLowerCase().replace(/[^a-z0-9]+/g, '-');
       await downloadContentPdf({
         node: wrapNode,
@@ -1000,7 +1024,7 @@ export default function IntendedZonePanel({
                 <option value="">No session selected</option>
                 {discoveredSessions.map((s) => (
                   <option key={s.sessionId} value={s.sessionId}>
-                    {new Date(s.gameDateLocal).toLocaleString()} ({s.sessionType}){s.location ? ` — ${s.location}` : ''}
+                    {formatDateTimeSafe(s.gameDateLocal)} ({s.sessionType}){s.location ? ` — ${s.location}` : ''}
                   </option>
                 ))}
               </select>
@@ -1044,7 +1068,7 @@ export default function IntendedZonePanel({
                       style={resumingSessionId === s.id ? undefined : { cursor: 'pointer', textDecoration: 'underline' }}
                       onClick={resumingSessionId === s.id ? undefined : () => handleResumeSession(s)}
                     >
-                      {new Date(s.startedAt).toLocaleDateString()} — {modeLabel(s.mode)}
+                      {formatDateSafe(s.startedAt)} — {modeLabel(s.mode)}
                     </span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                       <span className={styles.historyStatus}>

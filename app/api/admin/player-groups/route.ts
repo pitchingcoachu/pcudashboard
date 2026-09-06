@@ -11,6 +11,36 @@ import {
   setPlayerGroupMembers,
 } from '../../../../lib/training-db';
 
+type SubmittedMembership = { playerId?: number; validFrom?: string | null; validTo?: string | null };
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+function isValidOptionalDate(value: string | null): boolean {
+  if (!value) return true;
+  if (!ISO_DATE.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function parseMemberships(value: unknown): Array<{ playerId: number; validFrom: string | null; validTo: string | null }> | null {
+  if (!Array.isArray(value)) return null;
+  const parsed = value
+    .map((entry) => {
+      const row = (entry ?? {}) as SubmittedMembership;
+      const playerId = Number(row.playerId ?? 0);
+      const validFrom = String(row.validFrom ?? '').trim() || null;
+      const validTo = String(row.validTo ?? '').trim() || null;
+      return { playerId, validFrom, validTo };
+    })
+    .filter((row) => Number.isFinite(row.playerId) && row.playerId > 0);
+  if (parsed.some((row) => (
+    !isValidOptionalDate(row.validFrom)
+    || !isValidOptionalDate(row.validTo)
+    || (row.validFrom && row.validTo && row.validFrom > row.validTo)
+  ))) return null;
+  return parsed;
+}
+
 // Player groups are coach/admin-only, end to end -- there is deliberately no
 // /api/player/player-groups route, and every handler below 403s the player
 // role before touching the database.
@@ -77,7 +107,7 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: 'Session context missing. Please log out and log in again.' }, { status: 400 });
   }
 
-  const body = (await request.json().catch(() => ({}))) as { groupId?: number; name?: string; playerIds?: number[] };
+  const body = (await request.json().catch(() => ({}))) as { groupId?: number; name?: string; playerIds?: number[]; memberships?: SubmittedMembership[] };
   const groupId = Number(body.groupId ?? 0);
   if (!Number.isFinite(groupId) || groupId <= 0) {
     return NextResponse.json({ error: 'groupId is required.' }, { status: 400 });
@@ -90,7 +120,11 @@ export async function PATCH(request: Request) {
 
   if (Array.isArray(body.playerIds)) {
     const playerIds = body.playerIds.map(Number).filter((id) => Number.isFinite(id) && id > 0);
-    const membersResult = await setPlayerGroupMembers({ organizationId, groupId, playerIds });
+    const memberships = parseMemberships(body.memberships);
+    if (Array.isArray(body.memberships) && memberships === null) {
+      return NextResponse.json({ error: 'A membership start date must be on or before its end date.' }, { status: 400 });
+    }
+    const membersResult = await setPlayerGroupMembers({ organizationId, groupId, playerIds, memberships: memberships ?? undefined });
     if (!membersResult.ok) return NextResponse.json({ error: membersResult.error }, { status: 400 });
   }
 

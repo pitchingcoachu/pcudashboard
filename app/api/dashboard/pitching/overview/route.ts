@@ -7,6 +7,8 @@ import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-
 import { ensureAuthDbReady, getDbPool, isDatabaseConfigured } from '../../../../../lib/auth-db';
 import { getPlayerProLinkByPlayerName } from '../../../../../lib/training-db';
 import { isCrossSchoolPlayerSelection } from '../../../../../lib/cross-school-player-data';
+import { fetchDashboardGroupSplit } from '../../../../../lib/dashboard-group-split';
+import { resolveSchoolScopedOrganizationId } from '../../../../../lib/programming-scope';
 
 export const maxDuration = 300;
 const PITCHING_OVERVIEW_CACHE_VERSION = 'adv-metrics-v9';
@@ -1308,6 +1310,28 @@ export async function GET(request: Request) {
     const maxLimit = isTruthy(chartOnly) ? 6000 : (broadScope ? 600 : 2000);
     const cappedLimit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, maxLimit) : maxLimit;
     url.searchParams.set('chart_points_limit', String(cappedLimit));
+  }
+  if (splitBy === 'Groups' && session.role !== 'player') {
+    try {
+      const result = await fetchDashboardGroupSplit({
+        upstreamUrl: url,
+        organizationId: resolveSchoolScopedOrganizationId(session),
+        selectedGroupIds: inputUrl.searchParams.get('group_ids'),
+        startDate: startDate || null,
+        endDate: endDate || null,
+        playerParam: 'pitcher',
+        timeoutMs: resolveOverviewTimeoutMs(schoolCode, false),
+      });
+      return NextResponse.json(scrubInvalidPitchTypePayload(applyOverviewBackfills(result.payload)), {
+        status: result.status,
+        headers: RESPONSE_CACHE_HEADERS,
+      });
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : 'Failed to build the group split.' },
+        { status: 502 }
+      );
+    }
   }
   const isProLeaderboardSplit = isPro && (splitBy === 'Pitcher' || isTeamSplit);
   const proLeaderboardSafeModeRequested = proLeaderboardDefaultModeRequested || customModeRequested;

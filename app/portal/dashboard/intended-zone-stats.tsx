@@ -105,6 +105,20 @@ function pctLabel(value: number | null): string {
   return `${value.toFixed(0)}%`;
 }
 
+/** Never throws -- Safari's toLocaleDateString throws "The string did not
+ * match the expected pattern" on an Invalid Date (Chrome silently returns
+ * "Invalid Date"), so this validates before formatting instead of relying
+ * on the caller to only ever pass a clean YYYY-MM-DD string. */
+function formatShortDateSafe(isoDate: string): string {
+  const date = new Date(`${isoDate}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return '';
+  try {
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  } catch {
+    return '';
+  }
+}
+
 // Only render one column per target size that actually shows up in the
 // current rows -- there's no fixed preset list, since web lets a coach drag
 // a free-form slider while mobile has 3 presets, so the real data decides.
@@ -582,12 +596,20 @@ export default function IntendedZoneStats({
       ? { cursor: 'pointer', background: 'rgb(var(--portal-accent-rgb, 200, 16, 46))', color: '#f8fafc' }
       : { cursor: 'pointer' };
 
-  const dateRangeLabel =
-    sidebarStartDate && sidebarEndDate
-      ? sidebarStartDate === sidebarEndDate
-        ? new Date(`${sidebarStartDate}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-        : `${new Date(`${sidebarStartDate}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} – ${new Date(`${sidebarEndDate}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
-      : '';
+  const dateRangeLabel = useMemo(() => {
+    // Safari throws "The string did not match the expected pattern" from
+    // toLocaleDateString on an Invalid Date (Chrome just returns "Invalid
+    // Date" silently) -- sidebarStartDate/sidebarEndDate are shared Pitching
+    // Suite filter state that can transiently be '' or a partial value
+    // during tab switches, so this must never call toLocaleDateString
+    // without first checking the Date actually parsed.
+    if (!sidebarStartDate || !sidebarEndDate) return '';
+    const start = formatShortDateSafe(sidebarStartDate);
+    if (!start) return '';
+    if (sidebarStartDate === sidebarEndDate) return start;
+    const end = formatShortDateSafe(sidebarEndDate);
+    return end ? `${start} – ${end}` : start;
+  }, [sidebarStartDate, sidebarEndDate]);
 
   const handleExportPitcherPdf = useCallback(async () => {
     const wrapNode = pitcherExportRef.current;

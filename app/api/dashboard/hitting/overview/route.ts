@@ -5,6 +5,8 @@ import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../..
 import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, shouldScopeDashboardPlayer } from '../../../../../lib/dashboard-player-scope';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 import { isCrossSchoolPlayerSelection } from '../../../../../lib/cross-school-player-data';
+import { fetchDashboardGroupSplit } from '../../../../../lib/dashboard-group-split';
+import { resolveSchoolScopedOrganizationId } from '../../../../../lib/programming-scope';
 
 export const maxDuration = 300;
 
@@ -323,6 +325,25 @@ export async function GET(request: Request) {
     }
     const value = inputUrl.searchParams.get(key)?.trim() ?? '';
     if (value) url.searchParams.set(key, value);
+  }
+  if (splitBy === 'Groups' && session.role !== 'player') {
+    try {
+      const result = await fetchDashboardGroupSplit({
+        upstreamUrl: url,
+        organizationId: resolveSchoolScopedOrganizationId(session),
+        selectedGroupIds: inputUrl.searchParams.get('group_ids'),
+        startDate: startDate || null,
+        endDate: endDate || null,
+        playerParam: 'hitter',
+        timeoutMs: resolveOverviewTimeoutMs(schoolCode),
+      });
+      return NextResponse.json(result.payload, { status: result.status, headers: RESPONSE_CACHE_HEADERS });
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : 'Failed to build the group split.' },
+        { status: 502 }
+      );
+    }
   }
   const requestedHitter = requestedPercentileBaseline ? '' : hitterParam;
   const broadScope =

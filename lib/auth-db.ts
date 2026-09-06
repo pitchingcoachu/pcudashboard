@@ -502,6 +502,27 @@ export async function ensureAuthDbReady(): Promise<void> {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_group_members_player ON player_group_members (player_id);`);
+  await pool.query(`ALTER TABLE player_group_members ADD COLUMN IF NOT EXISTS valid_from DATE;`);
+  await pool.query(`ALTER TABLE player_group_members ADD COLUMN IF NOT EXISTS valid_to DATE;`);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_player_group_members_group_dates
+    ON player_group_members (group_id, valid_from, valid_to, player_id);
+  `);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'player_group_members_valid_dates_check'
+          AND conrelid = 'player_group_members'::regclass
+      ) THEN
+        ALTER TABLE player_group_members
+          ADD CONSTRAINT player_group_members_valid_dates_check
+          CHECK (valid_from IS NULL OR valid_to IS NULL OR valid_from <= valid_to);
+      END IF;
+    END $$;
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS player_plan_goals (

@@ -16,6 +16,7 @@ import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../lib/league-team-name-map';
 import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
 import { dashboardActivityPath, dispatchPortalActivity } from './activity-events';
 import { calculateExpectedMovement, magnusAngleDegrees, measuredTiltDegrees } from '../../../lib/expected-movement';
+import DashboardGroupFilter from './dashboard-group-filter';
 
 const BallFlightPanel = dynamic(() => import('./ball-flight-panel'), {
   loading: () => <p className="portal-muted-text">Loading Flight Lab…</p>,
@@ -5250,6 +5251,14 @@ export default function PitchingSuite({
   const [endDate, setEndDate] = useState('');
 
   const [selectedPitchers, setSelectedPitchers] = useState<string[]>(['All']);
+  const [selectedGroupIds, setSelectedGroupIds] = useState<number[]>([]);
+  const [groupPlayerNames, setGroupPlayerNames] = useState<string[]>([]);
+  const effectiveSelectedPitchers = useMemo(
+    () => selectedGroupIds.length > 0
+      ? (groupPlayerNames.length > 0 ? groupPlayerNames : ['__NO_GROUP_MEMBERS__'])
+      : selectedPitchers,
+    [groupPlayerNames, selectedGroupIds.length, selectedPitchers]
+  );
   const [selectedHitters, setSelectedHitters] = useState<string[]>(['All']);
   const [selectedPitchTypes, setSelectedPitchTypes] = useState<string[]>(['All']);
   const [selectedBallTypes, setSelectedBallTypes] = useState<string[]>(['Baseball']);
@@ -5607,7 +5616,7 @@ export default function PitchingSuite({
     if (!isPro && sessionType) params.set('session_type', sessionType);
     if (qpLocations && qpLocations !== 'All') params.set('qp_locations', qpLocations);
 
-    const pitchersParam = toParamValue(selectedPitchers);
+    const pitchersParam = toParamValue(effectiveSelectedPitchers);
     const hittersParam = toParamValue(selectedHitters);
     const pitchTypesParam = toParamValue(selectedPitchTypes);
     const ballTypesParam = toBallTypesParamValue(selectedBallTypes);
@@ -5653,7 +5662,7 @@ export default function PitchingSuite({
     venue,
     sessionType,
     qpLocations,
-    selectedPitchers,
+    effectiveSelectedPitchers,
     selectedHitters,
     selectedPitchTypes,
     selectedBallTypes,
@@ -5764,7 +5773,7 @@ export default function PitchingSuite({
   // code (not deleted) in case these tabs come back in the future.
   const canShowQpLocationsTab = false;
   const canShowVeloManualEntry = false && !isLeague && !isPro;
-  const allPitchersSelected = selectedPitchers.length === 0 || selectedPitchers.every((value) => value === 'All');
+  const allPitchersSelected = effectiveSelectedPitchers.length === 0 || effectiveSelectedPitchers.every((value) => value === 'All');
   const allHittersSelected = selectedHitters.length === 0 || selectedHitters.every((value) => value === 'All');
   const isLeagueAllSelection = isLeague && teamType === 'All' && allPitchersSelected && allHittersSelected;
   const hideLeagueSummaryCharts =
@@ -6122,9 +6131,9 @@ export default function PitchingSuite({
 
   const canLoadOverview = useMemo(() => !!filters && !!startDate && !!endDate, [filters, startDate, endDate]);
   const selectedSinglePitcher = useMemo(() => {
-    const selected = selectedPitchers.filter((value) => value !== 'All');
+    const selected = effectiveSelectedPitchers.filter((value) => value !== 'All' && value !== '__NO_GROUP_MEMBERS__');
     return selected.length === 1 ? selected[0] : '';
-  }, [selectedPitchers]);
+  }, [effectiveSelectedPitchers]);
   const selectedSinglePitcherHandCode = useMemo<'R' | 'L' | ''>(() => {
     const handFromFilter = normalizeHandednessCode(hand);
     if (!selectedSinglePitcher) return '';
@@ -6238,12 +6247,12 @@ export default function PitchingSuite({
     setAppliedFilterVersion((current) => current + 1);
   }, [selectedPitcherLastGameDate]);
   const overviewHeaderLabel = useMemo(() => {
-    const selected = selectedPitchers.filter((value) => value !== 'All');
+    const selected = effectiveSelectedPitchers.filter((value) => value !== 'All' && value !== '__NO_GROUP_MEMBERS__');
     const playerLabel = selected.length === 1 ? formatNameFirstLast(selected[0]) : 'All';
     const effectiveSchoolCode = String(filters?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();
     const dateLabel = formatDashboardDateLabel(startDate, endDate, isPro, effectiveSchoolCode, selectedPitcherLastGameDate);
     return `${playerLabel} | ${dateLabel}`;
-  }, [selectedPitchers, startDate, endDate, isPro, selectedSchoolCode, filters?.school_code, selectedPitcherLastGameDate]);
+  }, [effectiveSelectedPitchers, startDate, endDate, isPro, selectedSchoolCode, filters?.school_code, selectedPitcherLastGameDate]);
 
   const saveManualEntries = useCallback(async () => {
     let throwType = manualThrowType;
@@ -6359,12 +6368,15 @@ export default function PitchingSuite({
     if (qpLocations && qpLocations !== 'All') params.set('qp_locations', qpLocations);
     if (tableMode) params.set('table_mode', tableMode);
     if (effectiveSplitBy) params.set('split_by', effectiveSplitBy);
+    if (effectiveSplitBy === 'Groups' && selectedGroupIds.length > 0) {
+      params.set('group_ids', selectedGroupIds.join(','));
+    }
     if (tableMode === 'Custom' && customTableColumns.length > 0) {
       params.set('custom_columns', customTableColumns.join(','));
     }
     if (visualOption && visualOption !== 'All') params.set('visual_option', visualOption);
 
-    const pitchersParam = toParamValue(selectedPitchers);
+    const pitchersParam = toParamValue(effectiveSelectedPitchers);
     const hittersParam = toParamValue(selectedHitters);
     const pitchTypesParam = toParamValue(selectedPitchTypes);
     const ballTypesParam = toBallTypesParamValue(selectedBallTypes);
@@ -6894,6 +6906,7 @@ export default function PitchingSuite({
     qpLocations,
     tableMode,
     effectiveSplitBy,
+    selectedGroupIds,
     hideLeagueSummaryCharts,
     shouldForceLeagueFastTable,
     leagueWindowDays,
@@ -6907,7 +6920,7 @@ export default function PitchingSuite({
     selectedCountFilters,
     selectedHitters,
     selectedInZone,
-    selectedPitchers,
+    effectiveSelectedPitchers,
     selectedPitchResults,
     selectedPitchTypes,
     selectedBallTypes,
@@ -7432,7 +7445,7 @@ export default function PitchingSuite({
       const apiTeamType = isLeague
         ? resolveLeagueTeamTypeForApi(teamType, [filters?.pitchers_by_team_code, filters?.opp_hitters_by_team_code])
         : teamType;
-      const pitchersParam = toParamValue(selectedPitchers);
+      const pitchersParam = toParamValue(effectiveSelectedPitchers);
       const hittersParam = toParamValue(selectedHitters);
       const pitchTypesParam = toParamValue(selectedPitchTypes);
       const ballTypesParam = toBallTypesParamValue(selectedBallTypes);
@@ -7760,7 +7773,7 @@ export default function PitchingSuite({
     teamType,
     filters?.pitchers_by_team_code,
     filters?.opp_hitters_by_team_code,
-    selectedPitchers,
+    effectiveSelectedPitchers,
     selectedHitters,
     selectedPitchTypes,
     selectedBallTypes,
@@ -7818,7 +7831,7 @@ export default function PitchingSuite({
       const apiTeamType = isLeague
         ? resolveLeagueTeamTypeForApi(teamType, [filters?.pitchers_by_team_code, filters?.opp_hitters_by_team_code])
         : teamType;
-      const pitchersParam = toParamValue(selectedPitchers);
+      const pitchersParam = toParamValue(effectiveSelectedPitchers);
       const hittersParam = toParamValue(selectedHitters);
       const pitchTypesParam = toParamValue(selectedPitchTypes);
       const ballTypesParam = toBallTypesParamValue(selectedBallTypes);
@@ -8090,7 +8103,7 @@ export default function PitchingSuite({
     teamType,
     filters?.pitchers_by_team_code,
     filters?.opp_hitters_by_team_code,
-    selectedPitchers,
+    effectiveSelectedPitchers,
     selectedHitters,
     selectedPitchTypes,
     selectedBallTypes,
@@ -13477,6 +13490,7 @@ export default function PitchingSuite({
         ? [
             { value: 'All', label: 'All' },
             { value: 'Pitch Types', label: 'Pitch Types' },
+            { value: 'Groups', label: 'Groups' },
             { value: 'Pitcher', label: 'Pitcher' },
             { value: 'Pitcher Hand', label: 'Pitcher Hand' },
             { value: 'Batter Hand', label: 'Batter Hand' },
@@ -13499,6 +13513,7 @@ export default function PitchingSuite({
         : [
             { value: 'All', label: 'All' },
             { value: 'Pitch Types', label: 'Pitch Types' },
+            { value: 'Groups', label: 'Groups' },
             { value: 'Batter Hand', label: 'Batter Hand' },
             { value: 'Year', label: 'Year' },
             { value: 'Month', label: 'Month' },
@@ -14850,6 +14865,13 @@ export default function PitchingSuite({
                   End Date
                   <NativeDateInput value={endDate} onChange={setEndDate} ariaLabel="End Date" />
                 </label>
+                <DashboardGroupFilter
+                  startDate={startDate}
+                  endDate={endDate}
+                  selectedIds={selectedGroupIds}
+                  onChange={setSelectedGroupIds}
+                  onMemberNamesChange={setGroupPlayerNames}
+                />
 
                 <label>
                   Team
@@ -14997,9 +15019,6 @@ export default function PitchingSuite({
                     onChange={setSelectedAfterCountFilters}
                   />
                 </label>
-              </div>
-
-              <div className="portal-form-grid" style={{ marginTop: '0.8rem' }}>
                 <label>
                   With Video
                   <SearchableSingleSelect

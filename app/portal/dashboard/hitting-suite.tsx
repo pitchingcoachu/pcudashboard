@@ -12,6 +12,7 @@ import NativeDateInput from '../components/native-date-input';
 import { resolveSchoolBrand } from '../../../lib/school-brand';
 import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../lib/league-team-name-map';
 import { dashboardActivityPath, dispatchPortalActivity } from './activity-events';
+import DashboardGroupFilter from './dashboard-group-filter';
 
 type OptionItem = { value: string; label: string };
 type HeatCell = { x: number; y: number; w: number; h: number; value: number; density: number };
@@ -2306,6 +2307,11 @@ export default function HittingSuite({
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [hitter, setHitter] = useState('All');
+  const [selectedGroupIds, setSelectedGroupIds] = useState<number[]>([]);
+  const [groupPlayerNames, setGroupPlayerNames] = useState<string[]>([]);
+  const effectiveHitter = selectedGroupIds.length > 0
+    ? (groupPlayerNames.length > 0 ? groupPlayerNames.join(';') : '__NO_GROUP_MEMBERS__')
+    : hitter;
   const [teamType, setTeamType] = useState('All');
   const [level, setLevel] = useState(String(selectedSchoolCode ?? '').trim().toUpperCase() === 'LEAGUE' ? 'D1' : 'MLB');
   const [oppPitcher, setOppPitcher] = useState('All');
@@ -2780,7 +2786,7 @@ export default function HittingSuite({
     params.set('metrics_v', '11');
     if (startDate) params.set('start_date', startDate);
     if (endDate) params.set('end_date', endDate);
-    if (hitter && hitter !== 'All') params.set('hitter', hitter);
+    if (effectiveHitter && effectiveHitter !== 'All') params.set('hitter', effectiveHitter);
     const apiTeamType = isLeague
       ? resolveLeagueTeamTypeForApi(teamType, [filters?.hitters_by_team_code, filters?.opp_pitchers_by_team_code])
       : teamType;
@@ -2795,6 +2801,9 @@ export default function HittingSuite({
     if (!isPro && sessionType && sessionType !== 'All') params.set('session_type', sessionType);
     params.set('table_mode', tableMode);
     params.set('split_by', effectiveSplitBy);
+    if (effectiveSplitBy === 'Groups' && selectedGroupIds.length > 0) {
+      params.set('group_ids', selectedGroupIds.join(','));
+    }
     if (tableMode === 'Custom' && customTableColumns.length) {
       params.set('custom_columns', customTableColumns.join(','));
     }
@@ -3122,7 +3131,7 @@ export default function HittingSuite({
       window.clearTimeout(timeoutId);
       controller.abort();
     };
-  }, [appliedFilterVersion, canLoadOverview, startDate, endDate, hitter, teamType, level, oppPitcher, hand, batterSide, venue, sessionType, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax, dashboardPage, isPro, isPlayerRole, isLeague, enableTableColors, enableGameLogColors, leaderboardPercentileScope, summaryPercentileScope, showCellPercentiles, summaryStatView, filters?.school_code, selectedSchoolCode]);
+  }, [appliedFilterVersion, canLoadOverview, startDate, endDate, effectiveHitter, selectedGroupIds, teamType, level, oppPitcher, hand, batterSide, venue, sessionType, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax, dashboardPage, isPro, isPlayerRole, isLeague, enableTableColors, enableGameLogColors, leaderboardPercentileScope, summaryPercentileScope, showCellPercentiles, summaryStatView, filters?.school_code, selectedSchoolCode]);
 
   useEffect(() => {
     if (!percentileBaselineRequestKey) {
@@ -3373,7 +3382,7 @@ export default function HittingSuite({
       const params = new URLSearchParams();
       if (startDate) params.set('start_date', startDate);
       if (endDate) params.set('end_date', endDate);
-      if (hitter && hitter !== 'All') params.set('hitter', hitter);
+      if (effectiveHitter && effectiveHitter !== 'All') params.set('hitter', effectiveHitter);
       if (teamType && teamType !== 'All') params.set('team_type', apiTeamType);
       if ((isPro || isLeague) && level && level !== 'All') params.set('level', level);
       if (oppPitcher && oppPitcher !== 'All') params.set('opp_pitcher', oppPitcher);
@@ -3520,7 +3529,7 @@ export default function HittingSuite({
     canRunGameLog,
     startDate,
     endDate,
-    hitter,
+    effectiveHitter,
     teamType,
     isLeague,
     filters?.hitters_by_team_code,
@@ -5101,6 +5110,13 @@ export default function HittingSuite({
                     End Date
                     <NativeDateInput value={endDate} onChange={setEndDate} ariaLabel="End Date" />
                   </label>
+                  <DashboardGroupFilter
+                    startDate={startDate}
+                    endDate={endDate}
+                    selectedIds={selectedGroupIds}
+                    onChange={setSelectedGroupIds}
+                    onMemberNamesChange={setGroupPlayerNames}
+                  />
                   <label>
                     Hitters
                     <SearchableSingleSelect
@@ -5193,8 +5209,6 @@ export default function HittingSuite({
                     BIP Result
                     <SearchableMultiSelect options={[{ value: 'All', label: 'All' }, ...toOptions(filters.bip_results)]} values={bipResult} onChange={setBipResult} />
                   </label>
-                </div>
-                <div className="portal-form-grid" style={{ marginTop: '0.8rem' }}>
                   <label>
                     Velo Min
                     <input type="number" value={veloMin} onChange={(event) => setVeloMin(event.target.value)} />
@@ -5663,7 +5677,7 @@ export default function HittingSuite({
                 <label>
                   Split By
                   <SearchableSingleSelect
-                    options={(filters?.split_by_options?.length ? filters.split_by_options : [SPLIT_BY_DEFAULT]).map((item) => ({
+                    options={Array.from(new Set([...(filters?.split_by_options?.length ? filters.split_by_options : [SPLIT_BY_DEFAULT]), 'Groups'])).map((item) => ({
                       value: item,
                       label: item,
                     }))}

@@ -8,6 +8,7 @@ import { getProTeamLogoUrl } from './pro-team-logos';
 import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
 import NativeDateInput from '../components/native-date-input';
 import { resolveSchoolBrand } from '../../../lib/school-brand';
+import DashboardGroupFilter from './dashboard-group-filter';
 
 type OptionItem = { value: string; label: string };
 const PRO_LEVEL_FILTER_OPTIONS = ['All', 'MLB', 'AAA'];
@@ -453,6 +454,11 @@ export default function CatchingSuite() {
   const [level, setLevel] = useState('D1');
   const [teamType, setTeamType] = useState('All');
   const [catcher, setCatcher] = useState('All');
+  const [selectedGroupIds, setSelectedGroupIds] = useState<number[]>([]);
+  const [groupPlayerNames, setGroupPlayerNames] = useState<string[]>([]);
+  const effectiveCatcher = selectedGroupIds.length > 0
+    ? (groupPlayerNames.length > 0 ? groupPlayerNames.join(';') : '__NO_GROUP_MEMBERS__')
+    : catcher;
   const [hand, setHand] = useState('All');
   const [batterSide, setBatterSide] = useState('All');
   const [venue, setVenue] = useState('All');
@@ -624,7 +630,7 @@ export default function CatchingSuite() {
     if (!isPro && sessionType && sessionType !== 'All') params.set('session_type', sessionType);
     if ((isPro || isLeague) && level && level !== 'All') params.set('level', level);
     if (teamType && teamType !== 'All') params.set('team_type', teamType);
-    if (catcher && catcher !== 'All') params.set('catcher', catcher);
+    if (effectiveCatcher && effectiveCatcher !== 'All') params.set('catcher', effectiveCatcher);
     if (hand && hand !== 'All') params.set('hand', hand);
     if (batterSide && batterSide !== 'All') params.set('batter_side', batterSide);
     if (venue && venue !== 'All') params.set('venue', venue);
@@ -645,6 +651,9 @@ export default function CatchingSuite() {
     if (pcMax) params.set('pc_max', pcMax);
     params.set('table_mode', tableMode);
     if (effectiveSplitBy) params.set('split_by', effectiveSplitBy);
+    if (effectiveSplitBy === 'Groups' && selectedGroupIds.length > 0) {
+      params.set('group_ids', selectedGroupIds.join(','));
+    }
     if (tableMode === 'Custom' && customCols.length) params.set('custom_columns', customCols.join(','));
     const shouldForceProFastLoad = isPro;
     const shouldIncludeCharts = !shouldForceProFastLoad && !shouldForceLeagueFastTable;
@@ -749,7 +758,7 @@ export default function CatchingSuite() {
     return () => {
       active = false;
     };
-  }, [dateStart, dateEnd, sessionType, level, teamType, catcher, hand, batterSide, venue, inZone, pitchTypes, zoneLocations, pitchResults, selectedCountFilters, selectedAfterCountFilters, veloMin, veloMax, pcMin, pcMax, tableMode, effectiveSplitBy, customCols, page, isPro, isLeague]);
+  }, [dateStart, dateEnd, sessionType, level, teamType, effectiveCatcher, selectedGroupIds, hand, batterSide, venue, inZone, pitchTypes, zoneLocations, pitchResults, selectedCountFilters, selectedAfterCountFilters, veloMin, veloMax, pcMin, pcMax, tableMode, effectiveSplitBy, customCols, page, isPro, isLeague]);
 
   useEffect(() => {
     let active = true;
@@ -1031,6 +1040,7 @@ export default function CatchingSuite() {
     () =>
       toOptions([
         'Pitch Types',
+        'Groups',
         'Pitcher Hand',
         'Batter Hand',
         'Year',
@@ -1204,6 +1214,13 @@ export default function CatchingSuite() {
                   End Date
                   <NativeDateInput value={dateEnd} onChange={setDateEnd} ariaLabel="End Date" />
                 </label>
+                <DashboardGroupFilter
+                  startDate={dateStart}
+                  endDate={dateEnd}
+                  selectedIds={selectedGroupIds}
+                  onChange={setSelectedGroupIds}
+                  onMemberNamesChange={setGroupPlayerNames}
+                />
                 {isPro || isLeague ? (
                   <label>
                     Level
@@ -1270,8 +1287,6 @@ export default function CatchingSuite() {
                   After Count
                   <SearchableMultiSelect options={afterCountOptions} values={selectedAfterCountFilters} onChange={setSelectedAfterCountFilters} />
                 </label>
-              </div>
-              <div className="portal-form-grid" style={{ marginTop: '0.8rem' }}>
                 <label>
                   Velo Min
                   <input type="number" value={veloMin} onChange={(event) => setVeloMin(event.target.value)} />

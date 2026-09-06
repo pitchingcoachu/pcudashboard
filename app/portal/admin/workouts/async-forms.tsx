@@ -85,10 +85,12 @@ export function AsyncWorkoutCreateForm({
       </label>
       <label className="portal-form-span-2">
         Calendar Click Target
-        <select name="calendarLinkTarget" defaultValue={initialCalendarLinkTarget === 'none' ? 'details' : initialCalendarLinkTarget}>
+        <select name="calendarLinkTarget" defaultValue={initialCalendarLinkTarget}>
+          <option value="none">None (auto-detect from name)</option>
           <option value="details">Open workout details</option>
           <option value="throwing">Throwing Calendar</option>
           <option value="bullpens">Bullpens</option>
+          <option value="velocity">Velocity Plan</option>
           <option value="drills">Drills</option>
         </select>
       </label>

@@ -4,6 +4,8 @@ import { getSessionFromRequest } from '../../../../../lib/auth';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
 import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, shouldScopeDashboardPlayer } from '../../../../../lib/dashboard-player-scope';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
+import { fetchDashboardGroupSplit } from '../../../../../lib/dashboard-group-split';
+import { resolveSchoolScopedOrganizationId } from '../../../../../lib/programming-scope';
 
 export const maxDuration = 300;
 
@@ -98,6 +100,26 @@ export async function GET(request: Request) {
     const cappedLimit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 300) : 300;
     url.searchParams.set('include_chart_points', '1');
     url.searchParams.set('chart_points_limit', String(cappedLimit));
+  }
+
+  if (inputUrl.searchParams.get('split_by')?.trim() === 'Groups' && session.role !== 'player') {
+    try {
+      const result = await fetchDashboardGroupSplit({
+        upstreamUrl: url,
+        organizationId: resolveSchoolScopedOrganizationId(session),
+        selectedGroupIds: inputUrl.searchParams.get('group_ids'),
+        startDate: inputUrl.searchParams.get('start_date'),
+        endDate: inputUrl.searchParams.get('end_date'),
+        playerParam: 'catcher',
+        timeoutMs: resolveOverviewTimeoutMs(schoolCode),
+      });
+      return NextResponse.json(result.payload, { status: result.status, headers: RESPONSE_CACHE_HEADERS });
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : 'Failed to build the group split.' },
+        { status: 502 }
+      );
+    }
   }
   const cachePolicy = resolveOverviewCachePolicy(schoolCode);
 

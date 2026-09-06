@@ -54,13 +54,15 @@ const TRIAL_FAKE_LAST_NAMES = [
   'Brooks',
 ];
 
-const TRAINING_DB_VERSION = '2026-07-04-player-media';
+const TRAINING_DB_VERSION = '2026-09-05-dated-player-groups';
 
 declare global {
   var __pcuTrainingDbReady: boolean | string | undefined;
   var __pcuTrainingDbReadyPromise: Promise<void> | undefined;
   var __pcuAuthUsersSequenceStructureReady: boolean | undefined;
   var __pcuTrainingTrackingTypeReady: boolean | undefined;
+  var __pcuIntendedZoneSchemaReady: string | undefined;
+  var __pcuIntendedZoneSchemaReadyPromise: Promise<void> | undefined;
 }
 
 export type ClientRow = {
@@ -592,6 +594,24 @@ export async function ensureTrainingDbReady(): Promise<void> {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_players_assigned_coach ON players (assigned_coach_user_id);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_players_org_full_name ON players (organization_id, full_name);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_players_org_assigned_full_name ON players (organization_id, assigned_coach_user_id, full_name);`);
+    await pool.query(`ALTER TABLE player_group_members ADD COLUMN IF NOT EXISTS valid_from DATE;`);
+    await pool.query(`ALTER TABLE player_group_members ADD COLUMN IF NOT EXISTS valid_to DATE;`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_group_members_group_dates ON player_group_members (group_id, valid_from, valid_to, player_id);`);
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'player_group_members_valid_dates_check'
+            AND conrelid = 'player_group_members'::regclass
+        ) THEN
+          ALTER TABLE player_group_members
+            ADD CONSTRAINT player_group_members_valid_dates_check
+            CHECK (valid_from IS NULL OR valid_to IS NULL OR valid_from <= valid_to);
+        END IF;
+      END $$;
+    `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_auth_users_org_role_name ON auth_users (organization_id, role, name);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_exercise_library_org_name ON exercise_library (organization_id, name);`);
     await pool.query(`ALTER TABLE workout_library ADD COLUMN IF NOT EXISTS calendar_link_target TEXT NOT NULL DEFAULT 'none';`);
@@ -1011,77 +1031,93 @@ export async function ensureTrainingDbReady(): Promise<void> {
 // rest of Pitching Suite identifies pitchers -- by their TrackMan name
 // string ("Last, First") -- since that's this tab's existing identity
 // system and works even for a pitcher without a full player profile.
-let intendedZoneSchemaReady: Promise<void> | null = null;
+// Version bump here whenever the DDL block below changes -- forces every
+// warm instance to re-run it once, same convention as TRAINING_DB_VERSION.
+const INTENDED_ZONE_SCHEMA_VERSION = '2026-09-06-single-roundtrip';
 
 export async function ensureIntendedZoneSchema(): Promise<void> {
   if (!isDatabaseConfigured()) return;
-  if (!intendedZoneSchemaReady) {
-    intendedZoneSchemaReady = (async () => {
-      const pool = getDbPool();
-      await pool.query(`
-        CREATE TABLE IF NOT EXISTS intended_zone_sessions (
-          id BIGSERIAL PRIMARY KEY,
-          organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-          pitcher_name TEXT,
-          trackman_session_id TEXT,
-          target_radius_ft DOUBLE PRECISION NOT NULL DEFAULT 0.3,
-          started_by_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL,
-          started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          ended_at TIMESTAMPTZ
-        );
-      `);
-      await pool.query(
-        `CREATE INDEX IF NOT EXISTS idx_intended_zone_sessions_org_pitcher ON intended_zone_sessions (organization_id, pitcher_name, started_at DESC);`
-      );
-      // 'live' = polls TrackMan's Data API in real time (requires a B1 unit +
-      // API credentials); 'ftp_deferred' = targets are queued with no live
-      // match, then matched later by matchIntendedZoneSessionByPitcherAndTime
-      // once the FTP/CSV sync ingests that day's pitch_events -- for schools
-      // without live Data API access; 'manual' = no TrackMan at all -- the
-      // coach taps both the intended target and the actual landing spot for
-      // each pitch (recordManualIntendedZonePitch).
-      await pool.query(`ALTER TABLE intended_zone_sessions ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'live';`);
-
-      await pool.query(`
-        CREATE TABLE IF NOT EXISTS intended_zone_pitches (
-          id BIGSERIAL PRIMARY KEY,
-          session_id BIGINT NOT NULL REFERENCES intended_zone_sessions(id) ON DELETE CASCADE,
-          organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-          pitch_index INTEGER NOT NULL,
-          trackman_play_id TEXT,
-          trackman_pitch_uid TEXT,
-          intended_side_ft DOUBLE PRECISION NOT NULL,
-          intended_height_ft DOUBLE PRECISION NOT NULL,
-          target_radius_ft DOUBLE PRECISION NOT NULL,
-          plate_loc_side DOUBLE PRECISION,
-          plate_loc_height DOUBLE PRECISION,
-          miss_distance_ft DOUBLE PRECISION,
-          miss_direction TEXT,
-          pitch_type TEXT,
-          rel_speed DOUBLE PRECISION,
-          induced_vert_break DOUBLE PRECISION,
-          horz_break DOUBLE PRECISION,
-          pitch_events_id BIGINT,
-          thrown_at TIMESTAMPTZ,
-          tagged_pitcher_name TEXT,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          UNIQUE (session_id, pitch_index)
-        );
-      `);
-      await pool.query(`ALTER TABLE intended_zone_pitches ADD COLUMN IF NOT EXISTS tagged_pitcher_name TEXT;`);
-      await pool.query(`ALTER TABLE intended_zone_pitches ADD COLUMN IF NOT EXISTS trackman_ball_count_at_target INTEGER;`);
-      await pool.query(
-        `CREATE INDEX IF NOT EXISTS idx_intended_zone_pitches_session ON intended_zone_pitches (session_id, pitch_index);`
-      );
-      await pool.query(
-        `CREATE INDEX IF NOT EXISTS idx_intended_zone_pitches_play_id ON intended_zone_pitches (trackman_play_id) WHERE trackman_play_id IS NOT NULL;`
-      );
-    })().catch((error) => {
-      intendedZoneSchemaReady = null;
-      throw error;
-    });
+  // Cached on `global` (not a module-level variable) so a warm serverless
+  // instance that already ran this once skips it on every subsequent
+  // invocation, not just within the same module load. A cold instance still
+  // pays this cost once, but that's now a single round-trip (see below)
+  // instead of 8 sequential ones -- each stats/leaderboard request on a cold
+  // instance was previously blocked behind 8 serial awaits to Neon before
+  // the real query even ran, which is what made the page feel "hit or miss."
+  if (global.__pcuIntendedZoneSchemaReady === INTENDED_ZONE_SCHEMA_VERSION) return;
+  if (global.__pcuIntendedZoneSchemaReadyPromise) {
+    await global.__pcuIntendedZoneSchemaReadyPromise;
+    return;
   }
-  await intendedZoneSchemaReady;
+
+  global.__pcuIntendedZoneSchemaReadyPromise = (async () => {
+    const pool = getDbPool();
+    // One multi-statement query instead of 8 separate pool.query() calls --
+    // each pool.query() is its own network round-trip, and on a cold
+    // instance those were run strictly sequentially before any real data
+    // could be fetched.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS intended_zone_sessions (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        pitcher_name TEXT,
+        trackman_session_id TEXT,
+        target_radius_ft DOUBLE PRECISION NOT NULL DEFAULT 0.3,
+        started_by_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL,
+        started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        ended_at TIMESTAMPTZ
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_intended_zone_sessions_org_pitcher ON intended_zone_sessions (organization_id, pitcher_name, started_at DESC);
+
+      -- 'live' = polls TrackMan's Data API in real time (requires a B1 unit +
+      -- API credentials); 'ftp_deferred' = targets are queued with no live
+      -- match, then matched later by matchIntendedZoneSessionByPitcherAndTime
+      -- once the FTP/CSV sync ingests that day's pitch_events -- for schools
+      -- without live Data API access; 'manual' = no TrackMan at all -- the
+      -- coach taps both the intended target and the actual landing spot for
+      -- each pitch (recordManualIntendedZonePitch).
+      ALTER TABLE intended_zone_sessions ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'live';
+
+      CREATE TABLE IF NOT EXISTS intended_zone_pitches (
+        id BIGSERIAL PRIMARY KEY,
+        session_id BIGINT NOT NULL REFERENCES intended_zone_sessions(id) ON DELETE CASCADE,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        pitch_index INTEGER NOT NULL,
+        trackman_play_id TEXT,
+        trackman_pitch_uid TEXT,
+        intended_side_ft DOUBLE PRECISION NOT NULL,
+        intended_height_ft DOUBLE PRECISION NOT NULL,
+        target_radius_ft DOUBLE PRECISION NOT NULL,
+        plate_loc_side DOUBLE PRECISION,
+        plate_loc_height DOUBLE PRECISION,
+        miss_distance_ft DOUBLE PRECISION,
+        miss_direction TEXT,
+        pitch_type TEXT,
+        rel_speed DOUBLE PRECISION,
+        induced_vert_break DOUBLE PRECISION,
+        horz_break DOUBLE PRECISION,
+        pitch_events_id BIGINT,
+        thrown_at TIMESTAMPTZ,
+        tagged_pitcher_name TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (session_id, pitch_index)
+      );
+
+      ALTER TABLE intended_zone_pitches ADD COLUMN IF NOT EXISTS tagged_pitcher_name TEXT;
+      ALTER TABLE intended_zone_pitches ADD COLUMN IF NOT EXISTS trackman_ball_count_at_target INTEGER;
+
+      CREATE INDEX IF NOT EXISTS idx_intended_zone_pitches_session ON intended_zone_pitches (session_id, pitch_index);
+      CREATE INDEX IF NOT EXISTS idx_intended_zone_pitches_play_id ON intended_zone_pitches (trackman_play_id) WHERE trackman_play_id IS NOT NULL;
+    `);
+    global.__pcuIntendedZoneSchemaReady = INTENDED_ZONE_SCHEMA_VERSION;
+    global.__pcuIntendedZoneSchemaReadyPromise = undefined;
+  })().catch((error) => {
+    global.__pcuIntendedZoneSchemaReadyPromise = undefined;
+    throw error;
+  });
+
+  await global.__pcuIntendedZoneSchemaReadyPromise;
 }
 
 export type IntendedZoneSessionMode = 'live' | 'ftp_deferred' | 'manual';
@@ -3522,7 +3558,16 @@ export type PlayerGroupRow = {
 export type PlayerGroupWithMembersRow = {
   id: number;
   name: string;
-  members: PlayerSummaryRow[];
+  members: Array<PlayerSummaryRow & {
+    validFrom: string | null;
+    validTo: string | null;
+  }>;
+};
+
+export type DashboardPlayerGroupRow = {
+  id: number;
+  name: string;
+  memberNames: string[];
 };
 
 // Groups are intentionally never exposed to the player role -- coaches/admins
@@ -3572,9 +3617,12 @@ export async function getPlayerGroupWithMembers(input: {
     throws_hand: string | null;
     bats_hand: string | null;
     position: string | null;
+    valid_from: string | null;
+    valid_to: string | null;
   }>(
     `
-      SELECT p.id AS player_id, p.full_name, p.assigned_coach_user_id, p.throws_hand, p.bats_hand, p.position
+      SELECT p.id AS player_id, p.full_name, p.assigned_coach_user_id, p.throws_hand, p.bats_hand, p.position,
+             m.valid_from::text, m.valid_to::text
       FROM player_group_members m
       JOIN players p ON p.id = m.player_id
       WHERE m.group_id = $1
@@ -3592,8 +3640,48 @@ export async function getPlayerGroupWithMembers(input: {
       throwsHand: row.throws_hand,
       batsHand: row.bats_hand,
       position: row.position,
+      validFrom: row.valid_from,
+      validTo: row.valid_to,
     })),
   };
+}
+
+/** Group choices and member names for a dashboard date window. Membership
+ * ranges are inclusive. Multiple selected groups are later combined as a
+ * union, so a player in two groups is still returned only once. */
+export async function listDashboardPlayerGroups(input: {
+  organizationId: number;
+  startDate?: string | null;
+  endDate?: string | null;
+}): Promise<DashboardPlayerGroupRow[]> {
+  if (!isDatabaseConfigured() || input.organizationId <= 0) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{ id: number; name: string; member_names: string[] | null }>(
+    `
+      SELECT g.id, g.name,
+             COALESCE(
+               array_agg(DISTINCT p.full_name ORDER BY p.full_name)
+                 FILTER (WHERE p.id IS NOT NULL),
+               ARRAY[]::text[]
+             ) AS member_names
+      FROM player_groups g
+      LEFT JOIN player_group_members m
+        ON m.group_id = g.id
+       AND ($2::date IS NULL OR m.valid_to IS NULL OR m.valid_to >= $2::date)
+       AND ($3::date IS NULL OR m.valid_from IS NULL OR m.valid_from <= $3::date)
+      LEFT JOIN players p ON p.id = m.player_id AND p.organization_id = g.organization_id
+      WHERE g.organization_id = $1
+      GROUP BY g.id, g.name
+      ORDER BY g.name ASC
+    `,
+    [input.organizationId, input.startDate || null, input.endDate || null]
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    memberNames: Array.from(new Set((row.member_names ?? []).map((name) => String(name ?? '').trim()).filter(Boolean))),
+  }));
 }
 
 /** Player ids for a group, scoped to the organization -- the fan-out source
@@ -3817,6 +3905,7 @@ export async function setPlayerGroupMembers(input: {
   organizationId: number;
   groupId: number;
   playerIds: number[];
+  memberships?: Array<{ playerId: number; validFrom?: string | null; validTo?: string | null }>;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureTrainingDbReady();
@@ -3831,14 +3920,38 @@ export async function setPlayerGroupMembers(input: {
     [input.organizationId, input.playerIds]
   );
   const validPlayerIds = validPlayers.rows.map((row) => row.id);
+  const submittedMemberships = new Map(
+    (input.memberships ?? []).map((membership) => [
+      Number(membership.playerId),
+      {
+        validFrom: String(membership.validFrom ?? '').trim() || null,
+        validTo: String(membership.validTo ?? '').trim() || null,
+      },
+    ])
+  );
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     await client.query(`DELETE FROM player_group_members WHERE group_id = $1`, [input.groupId]);
     if (validPlayerIds.length > 0) {
-      const values = validPlayerIds.map((_, index) => `($1, $${index + 2})`).join(', ');
-      await client.query(`INSERT INTO player_group_members (group_id, player_id) VALUES ${values}`, [input.groupId, ...validPlayerIds]);
+      const rows = validPlayerIds.map((playerId) => {
+        const dates = submittedMemberships.get(playerId);
+        return { playerId, validFrom: dates?.validFrom ?? null, validTo: dates?.validTo ?? null };
+      });
+      await client.query(
+        `
+          INSERT INTO player_group_members (group_id, player_id, valid_from, valid_to)
+          SELECT $1, item.player_id, item.valid_from, item.valid_to
+          FROM jsonb_to_recordset($2::jsonb)
+            AS item(player_id integer, valid_from date, valid_to date)
+        `,
+        [input.groupId, JSON.stringify(rows.map((row) => ({
+          player_id: row.playerId,
+          valid_from: row.validFrom,
+          valid_to: row.validTo,
+        })))]
+      );
     }
     await client.query('COMMIT');
     return { ok: true };
