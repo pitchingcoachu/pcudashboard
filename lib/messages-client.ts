@@ -33,7 +33,7 @@ export type ConversationSummary = {
 
 export type MessageAttachment = {
   id: number;
-  kind: 'photo' | 'video' | 'pdf';
+  kind: 'photo' | 'video' | 'pdf' | 'file';
   fileName: string;
   contentType: string;
   sizeBytes: number;

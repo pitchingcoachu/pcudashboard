@@ -12,10 +12,12 @@ import {
 } from '../../../../../../lib/messaging-db';
 import { sendPushNotificationToUsers } from '../../../../../../lib/push-notifications';
 
+import { MAX_MESSAGE_ATTACHMENT_BYTES, messageAttachmentKind, normalizeMessageContentType } from '../../../../../../lib/message-attachments';
+
 type AttachmentInput = {
   r2Key: string;
   contentType: string;
-  kind: 'photo' | 'video' | 'pdf';
+  kind: 'photo' | 'video' | 'pdf' | 'file';
   fileName: string;
   sizeBytes: number;
 };
@@ -28,10 +30,11 @@ function parseAttachments(value: unknown, expectedKeyPrefix: string): Attachment
     if (!entry || typeof entry !== 'object') return null;
     const record = entry as Record<string, unknown>;
     const r2Key = String(record.r2Key ?? '').trim();
-    const contentType = String(record.contentType ?? '').trim();
     const fileName = String(record.fileName ?? '').trim();
-    const sizeBytes = Number(record.sizeBytes ?? 0) || 0;
-    const kind = contentType.startsWith('image/') ? 'photo' : contentType.startsWith('video/') ? 'video' : contentType === 'application/pdf' ? 'pdf' : null;
+    const contentType = normalizeMessageContentType(fileName, String(record.contentType ?? ''));
+    const sizeBytes = Number(record.sizeBytes ?? 0);
+    const kind = messageAttachmentKind(contentType);
+    if (!Number.isFinite(sizeBytes) || sizeBytes < 0 || sizeBytes > MAX_MESSAGE_ATTACHMENT_BYTES) return null;
     if (!r2Key || !contentType || !fileName || !kind) return null;
     if (!r2Key.startsWith(expectedKeyPrefix)) return null;
     attachments.push({ r2Key, contentType, fileName, sizeBytes, kind });

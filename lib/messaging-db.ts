@@ -122,7 +122,7 @@ export type ConversationListRow = {
 
 export type MessageAttachmentRow = {
   id: number;
-  kind: 'photo' | 'video' | 'pdf';
+  kind: 'photo' | 'video' | 'pdf' | 'file';
   fileName: string;
   contentType: string;
   sizeBytes: number;
@@ -455,7 +455,7 @@ export async function listMessages(input: {
       const list = attachmentsByMessage.get(row.message_id) ?? [];
       list.push({
         id: row.id,
-        kind: row.kind === 'video' || row.kind === 'pdf' ? row.kind : 'photo',
+        kind: row.kind === 'video' || row.kind === 'pdf' || row.kind === 'file' ? row.kind : 'photo',
         fileName: row.file_name,
         contentType: row.content_type,
         sizeBytes: Number(row.size_bytes ?? '0') || 0,
@@ -560,7 +560,7 @@ export async function listAttachmentsForConversation(conversationId: number): Pr
   return result.rows.map((row) => ({
     id: row.id,
     messageId: row.message_id,
-    kind: row.kind === 'video' || row.kind === 'pdf' ? row.kind : 'photo',
+    kind: row.kind === 'video' || row.kind === 'pdf' || row.kind === 'file' ? row.kind : 'photo',
     fileName: row.file_name,
     contentType: row.content_type,
     sizeBytes: Number(row.size_bytes ?? '0') || 0,
@@ -642,7 +642,7 @@ export async function getMessageById(messageId: number, currentUserId?: number):
     deletedAt: row.deleted_at,
     attachments: attachmentsResult.rows.map((a) => ({
       id: a.id,
-      kind: a.kind === 'video' || a.kind === 'pdf' ? a.kind : 'photo',
+      kind: a.kind === 'video' || a.kind === 'pdf' || a.kind === 'file' ? a.kind : 'photo',
       fileName: a.file_name,
       contentType: a.content_type,
       sizeBytes: Number(a.size_bytes ?? '0') || 0,
@@ -696,7 +696,7 @@ export async function createMessage(input: {
   conversationId: number;
   senderUserId: number;
   body: string | null;
-  attachments: Array<{ r2Key: string; contentType: string; kind: 'photo' | 'video' | 'pdf'; fileName: string; sizeBytes: number }>;
+  attachments: Array<{ r2Key: string; contentType: string; kind: 'photo' | 'video' | 'pdf' | 'file'; fileName: string; sizeBytes: number }>;
 }): Promise<{ id: number }> {
   await ensureMessagingTablesReady();
   const pool = getDbPool();

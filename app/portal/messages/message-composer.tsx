@@ -27,30 +27,41 @@ export function MessageComposer({
 
   async function uploadFile(entry: StagedFile) {
     try {
-      const presigned = await presignAttachment({
-        conversationId,
-        fileName: entry.file.name,
-        contentType: entry.file.type || 'application/octet-stream',
-        sizeBytes: entry.file.size,
-      });
-      const putResponse = await fetch(presigned.uploadUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': presigned.contentType },
-        body: entry.file,
-      });
-      if (!putResponse.ok) throw new Error('Upload failed.');
+      let uploaded: NonNullable<StagedFile['uploaded']>;
+      if (process.env.NODE_ENV === 'development') {
+        const form = new FormData();
+        form.set('file', entry.file);
+        const response = await fetch(`/api/messaging/attachments/local?conversationId=${encodeURIComponent(conversationId)}`, { method: 'POST', body: form });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Upload failed.');
+        uploaded = result;
+      } else {
+        const presigned = await presignAttachment({
+          conversationId,
+          fileName: entry.file.name,
+          contentType: entry.file.type || 'application/octet-stream',
+          sizeBytes: entry.file.size,
+        });
+        const putResponse = await fetch(presigned.uploadUrl, {
+          method: 'PUT',
+          headers: { 'Content-Type': presigned.contentType },
+          body: entry.file,
+        });
+        if (!putResponse.ok) throw new Error('Upload failed.');
+        uploaded = {
+          r2Key: presigned.r2Key,
+          contentType: presigned.contentType,
+          fileName: entry.file.name,
+          sizeBytes: entry.file.size,
+        };
+      }
       setStaged((prev) =>
         prev.map((s) =>
           s.key === entry.key
             ? {
                 ...s,
                 status: 'ready',
-                uploaded: {
-                  r2Key: presigned.r2Key,
-                  contentType: presigned.contentType,
-                  fileName: entry.file.name,
-                  sizeBytes: entry.file.size,
-                },
+                uploaded,
               }
             : s
         )
@@ -82,6 +93,7 @@ export function MessageComposer({
     setStaged((prev) => prev.filter((s) => s.key !== key));
   }
 
+  const hasFailedAttachments = staged.some((s) => s.status === 'error');
   const isUploading = staged.some((s) => s.status === 'uploading');
   const readyAttachments = staged.filter((s) => s.status === 'ready' && s.uploaded).map((s) => s.uploaded!);
 
@@ -89,6 +101,10 @@ export function MessageComposer({
     const trimmed = text.trim();
     if (isUploading) {
       window.alert('Wait for attachments to finish uploading before sending.');
+      return;
+    }
+    if (hasFailedAttachments) {
+      window.alert('Remove failed attachments or try attaching them again before sending.');
       return;
     }
     if (!trimmed && readyAttachments.length === 0) return;
@@ -108,7 +124,7 @@ export function MessageComposer({
     }
   }
 
-  const canSend = (Boolean(text.trim()) || staged.some((s) => s.status === 'ready')) && !isUploading && !isSending;
+  const canSend = (Boolean(text.trim()) || staged.some((s) => s.status === 'ready')) && !isUploading && !hasFailedAttachments && !isSending;
 
   return (
     <div className="portal-messages-composer-wrap">
@@ -130,7 +146,6 @@ export function MessageComposer({
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*,video/*,application/pdf"
           multiple
           style={{ display: 'none' }}
           onChange={(event) => {

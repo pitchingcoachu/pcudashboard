@@ -5,6 +5,8 @@ import { getSessionFromRequest } from '../../../../../lib/auth';
 import { getR2Bucket, getR2Client } from '../../../../../lib/biomechanics-storage';
 import { getMessageAttachment, isConversationParticipant } from '../../../../../lib/messaging-db';
 
+import { messageAttachmentDisposition, normalizeMessageContentType } from '../../../../../lib/message-attachments';
+
 export async function GET(request: Request, context: { params: Promise<{ attachmentId: string }> }) {
   const cookieStore = await cookies();
   const session = getSessionFromRequest(request, cookieStore);
@@ -37,10 +39,12 @@ export async function GET(request: Request, context: { params: Promise<{ attachm
     if (!response.Body) return NextResponse.json({ error: 'Empty response from storage.' }, { status: 502 });
 
     const headers = new Headers();
-    headers.set('Content-Type', attachment.contentType);
+    const contentType = normalizeMessageContentType(attachment.fileName, attachment.contentType);
+    headers.set('Content-Type', contentType);
+    headers.set('X-Content-Type-Options', 'nosniff');
     headers.set('Accept-Ranges', 'bytes');
     headers.set('Cache-Control', 'private, max-age=300');
-    headers.set('Content-Disposition', `inline; filename="${attachment.fileName.replace(/"/g, '')}"`);
+    headers.set('Content-Disposition', messageAttachmentDisposition(attachment.fileName, contentType));
     if (response.ContentLength) headers.set('Content-Length', String(response.ContentLength));
     if (response.ContentRange) headers.set('Content-Range', response.ContentRange);
 

@@ -170,7 +170,7 @@ export function MessageBubble({
             )}
           </div>
         ))}
-      {message.attachments.some((a) => a.kind === 'pdf') || message.body ? (
+      {message.attachments.some((a) => (a.kind === 'pdf' || a.kind === 'file')) || message.body ? (
         <div
           className={`portal-messages-bubble${isOwn ? ' is-own' : ' is-other'}`}
           onPointerDown={onReact ? startLongPress : undefined}
@@ -188,7 +188,7 @@ export function MessageBubble({
           }
         >
           {message.attachments
-            .filter((attachment) => attachment.kind === 'pdf')
+            .filter((attachment) => (attachment.kind === 'pdf' || attachment.kind === 'file'))
             .map((attachment) => (
               <a
                 key={attachment.id}
@@ -197,7 +197,7 @@ export function MessageBubble({
                 rel="noopener noreferrer"
                 className="portal-messages-pdf-chip"
               >
-                <span className="portal-messages-pdf-icon">PDF</span>
+                <span className="portal-messages-pdf-icon">{attachment.kind === 'pdf' ? 'PDF' : 'FILE'}</span>
                 <span className="portal-messages-pdf-meta">
                   <span className="portal-messages-pdf-name">{attachment.fileName}</span>
                   <span className="portal-messages-pdf-size">{formatBytes(attachment.sizeBytes)}</span>

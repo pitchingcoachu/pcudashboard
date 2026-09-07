@@ -6,19 +6,11 @@ import { getSessionFromRequest } from '../../../../lib/auth';
 import { getR2Bucket, getR2Client, isR2Configured } from '../../../../lib/biomechanics-storage';
 import { isConversationParticipant } from '../../../../lib/messaging-db';
 
-const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;
-
-function inferKind(contentType: string): 'photo' | 'video' | 'pdf' | null {
-  const normalized = String(contentType ?? '').toLowerCase();
-  if (normalized.startsWith('image/')) return 'photo';
-  if (normalized.startsWith('video/')) return 'video';
-  if (normalized === 'application/pdf') return 'pdf';
-  return null;
-}
+import { MAX_MESSAGE_ATTACHMENT_BYTES, messageAttachmentKind, normalizeMessageContentType } from '../../../../lib/message-attachments';
 
 function buildR2Key(organizationId: number, conversationId: number, fileName: string, contentType: string): string {
   const safeName = String(fileName ?? 'attachment').replace(/[^a-zA-Z0-9._-]+/g, '-');
-  const kind = inferKind(contentType) ?? 'file';
+  const kind = messageAttachmentKind(contentType);
   return `chat-attachments/org-${organizationId}/conversation-${conversationId}/${kind}-${Date.now()}-${safeName}`;
 }
 
@@ -41,13 +33,13 @@ export async function GET(request: Request) {
   if (!isParticipant) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
   const fileName = String(url.searchParams.get('fileName') ?? '').trim();
-  const contentType = String(url.searchParams.get('contentType') ?? '').trim();
-  const kind = inferKind(contentType);
-  if (!fileName || !kind) {
-    return NextResponse.json({ error: 'Only photo, video, and PDF attachments are supported.' }, { status: 400 });
+  const contentType = normalizeMessageContentType(fileName, String(url.searchParams.get('contentType') ?? ''));
+  if (!fileName) {
+    return NextResponse.json({ error: 'A file name is required.' }, { status: 400 });
   }
-  const sizeBytes = Number(url.searchParams.get('sizeBytes') ?? 0) || 0;
-  if (sizeBytes > MAX_ATTACHMENT_BYTES) {
+  const sizeBytes = Number(url.searchParams.get('sizeBytes') ?? 0);
+  if (!Number.isFinite(sizeBytes) || sizeBytes < 0) return NextResponse.json({ error: 'Invalid attachment size.' }, { status: 400 });
+  if (sizeBytes > MAX_MESSAGE_ATTACHMENT_BYTES) {
     return NextResponse.json({ error: 'Attachment is too large. Limit is 100 MB.' }, { status: 400 });
   }
 
