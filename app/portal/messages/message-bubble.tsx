@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { MessageBody } from './message-body';
 import { attachmentSrc, MESSAGE_REACTION_EMOJIS, type Message } from '../../../lib/messages-client';
 
 const LONG_PRESS_MS = 420;
@@ -204,7 +205,7 @@ export function MessageBubble({
                 </span>
               </a>
             ))}
-          {message.body ? <p className="portal-messages-bubble-text">{message.body}</p> : null}
+          {message.body ? <MessageBody text={message.body} /> : null}
         </div>
       ) : null}
       {zoomedAttachment ? (
