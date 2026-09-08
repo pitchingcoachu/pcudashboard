@@ -44,6 +44,7 @@ export default function PlayerOwnNotes({ playerId, currentUserId }: { playerId: 
   const [noteFiles, setNoteFiles] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [searchText, setSearchText] = useState('');
 
   async function loadNotes() {
     setLoading(true);
@@ -64,10 +65,12 @@ export default function PlayerOwnNotes({ playerId, currentUserId }: { playerId: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playerId]);
 
-  const sortedNotes = useMemo(
-    () => [...notes].sort((a, b) => (b.noteDate === a.noteDate ? b.createdAt.localeCompare(a.createdAt) : b.noteDate.localeCompare(a.noteDate))),
-    [notes]
-  );
+  const sortedNotes = useMemo(() => {
+    const query = searchText.trim().toLowerCase();
+    return notes
+      .filter((note) => !query || `${note.category} ${note.noteText}`.toLowerCase().includes(query))
+      .sort((a, b) => (b.noteDate === a.noteDate ? b.createdAt.localeCompare(a.createdAt) : b.noteDate.localeCompare(a.noteDate)));
+  }, [notes, searchText]);
 
   async function saveNote() {
     if (!noteText.trim()) return;
@@ -146,6 +149,11 @@ export default function PlayerOwnNotes({ playerId, currentUserId }: { playerId: 
             Notes you write here are visible to your coaches. Notes from your coaches marked visible to you also show up here.
           </p>
 
+          <label className="portal-inline-filter" style={{ marginBottom: 12 }}>
+            Search Notes
+            <input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="Search titles or note text…" />
+          </label>
+
           <div className="portal-form-grid" style={{ gridTemplateColumns: '1fr' }}>
             <label>
               Date <NativeDateInput value={noteDate} onChange={setNoteDate} ariaLabel="Date" />
@@ -173,7 +181,7 @@ export default function PlayerOwnNotes({ playerId, currentUserId }: { playerId: 
 
           <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
             {loading ? <p className="portal-muted-text">Loading notes...</p> : null}
-            {!loading && sortedNotes.length === 0 ? <p className="portal-muted-text">No notes yet.</p> : null}
+            {!loading && sortedNotes.length === 0 ? <p className="portal-muted-text">{searchText.trim() ? 'No notes match your search.' : 'No notes yet.'}</p> : null}
             {sortedNotes.map((note) => {
               const isOwn = note.createdByUserId !== null && note.createdByUserId === currentUserId;
               return (

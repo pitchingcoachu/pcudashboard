@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import ffmpeg from '@ffmpeg-installer/ffmpeg';
 import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { deleteObjectFromR2, getR2Bucket, getR2Client } from './biomechanics-storage';
-import { getAiSessionForOrganization, updateAiSessionResult } from './ai-workspace-db';
+import { getAiSessionForOrganization, syncAiSessionPlayerNotes, updateAiSessionResult } from './ai-workspace-db';
 import { summarizeTranscript, transcribeAudioFiles } from './ai-generation';
 
 function runFfmpeg(args: string[]): Promise<void> {
@@ -42,6 +42,7 @@ export async function processAiSession(sessionId: number, organizationId: number
     await client.send(new PutObjectCommand({ Bucket:getR2Bucket(),Key:audioKey,Body:await readFile(audioPath),ContentType:'audio/mp4' }));
     await deleteObjectFromR2(session.sourceR2Key);
     await updateAiSessionResult({ id:sessionId,organizationId,status:'ready',transcript,bullets,audioR2Key:audioKey,audioContentType:'audio/mp4',sourceR2Key:null,error:null });
+    await syncAiSessionPlayerNotes(sessionId, organizationId);
   } catch (error) {
     await updateAiSessionResult({ id:sessionId,organizationId,status:'failed',sourceR2Key:session.sourceR2Key,error:error instanceof Error?error.message:'Processing failed.' }).catch(()=>{});
     throw error;

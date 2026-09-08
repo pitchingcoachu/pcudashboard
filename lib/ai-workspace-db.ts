@@ -184,12 +184,72 @@ export async function updateAiSessionResult(input: { id: number; organizationId:
     [input.id,input.organizationId,input.status,input.transcript ?? null,input.bullets ? JSON.stringify(input.bullets) : null,input.audioR2Key ?? null,input.audioContentType ?? null,input.sourceR2Key ?? null,input.error ?? null]);
 }
 
+export async function syncAiSessionPlayerNotes(id: number, organizationId: number): Promise<void> {
+  await ensureAiWorkspaceReady();
+  const pool = getDbPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `DELETE FROM player_plan_notes AS note
+       USING players AS player
+       WHERE note.player_id = player.id
+         AND player.organization_id = $1
+         AND note.source_type = 'ai_session'
+         AND note.source_id = $2`,
+      [organizationId, String(id)]
+    );
+    const result = await client.query<{
+      title: string;
+      session_type: string;
+      summary_json: unknown;
+      transcript_text: string;
+    }>(
+      `SELECT title, session_type, summary_json, transcript_text
+       FROM ai_sessions
+       WHERE id = $1 AND organization_id = $2 AND status = 'ready' AND player_visible = TRUE`,
+      [id, organizationId]
+    );
+    const session = result.rows[0];
+    if (session) {
+      const bullets = Array.isArray(session.summary_json) ? session.summary_json.map(String).filter(Boolean) : [];
+      const sections = [
+        `AI Session: ${session.title}`,
+        `Session Type: ${session.session_type}`,
+        bullets.length ? `Key Points:\n${bullets.map((bullet) => `• ${bullet}`).join('\n')}` : '',
+        session.transcript_text.trim() ? `Full Transcript:\n${session.transcript_text.trim()}` : '',
+      ].filter(Boolean);
+      await client.query(
+        `INSERT INTO player_plan_notes (
+           player_id, domain, note_date, category, note_text, source_type, source_id,
+           player_visible, created_by_user_id
+         )
+         SELECT player.id, 'General', ai.created_at::date, 'AI Session', $3,
+                'ai_session', $4, TRUE, ai.created_by_user_id
+         FROM ai_sessions AS ai
+         JOIN ai_session_players AS linked ON linked.session_id = ai.id
+         JOIN players AS player ON player.id = linked.player_id AND player.organization_id = ai.organization_id
+         WHERE ai.id = $1 AND ai.organization_id = $2`,
+        [id, organizationId, sections.join('\n\n'), String(id)]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function deleteAiSession(id: number, organizationId: number): Promise<string[]> {
   await ensureAiWorkspaceReady();
-  const result=await getDbPool().query<{ source_r2_key:string|null; audio_r2_key:string|null }>(`DELETE FROM ai_sessions WHERE id=$1 AND organization_id=$2 RETURNING source_r2_key,audio_r2_key`,[id,organizationId]);
+  const pool = getDbPool();
+  await pool.query(`DELETE FROM player_plan_notes AS note USING players AS player WHERE note.player_id=player.id AND player.organization_id=$2 AND note.source_type='ai_session' AND note.source_id=$1`,[String(id),organizationId]);
+  const result=await pool.query<{ source_r2_key:string|null; audio_r2_key:string|null }>(`DELETE FROM ai_sessions WHERE id=$1 AND organization_id=$2 RETURNING source_r2_key,audio_r2_key`,[id,organizationId]);
   return result.rows.flatMap((r)=>[r.source_r2_key,r.audio_r2_key]).filter((v):v is string=>Boolean(v));
 }
-export async function editAiSession(input:{id:number;organizationId:number;title:string;sessionType:string;summaryBullets:string[];transcriptText:string;playerVisible:boolean;keepAudio:boolean}):Promise<void>{await ensureAiWorkspaceReady();await getDbPool().query(`UPDATE ai_sessions SET title=$3,session_type=$4,summary_json=$5::jsonb,transcript_text=$6,player_visible=$7,keep_audio=$8,audio_expires_at=CASE WHEN $8 THEN NULL WHEN audio_r2_key IS NOT NULL THEN COALESCE(audio_expires_at,NOW()+INTERVAL '30 days') ELSE NULL END,updated_at=NOW() WHERE id=$1 AND organization_id=$2`,[input.id,input.organizationId,input.title,input.sessionType,JSON.stringify(input.summaryBullets),input.transcriptText,input.playerVisible,input.keepAudio]);}
+export async function editAiSession(input:{id:number;organizationId:number;title:string;sessionType:string;summaryBullets:string[];transcriptText:string;playerVisible:boolean;keepAudio:boolean}):Promise<void>{await ensureAiWorkspaceReady();await getDbPool().query(`UPDATE ai_sessions SET title=$3,session_type=$4,summary_json=$5::jsonb,transcript_text=$6,player_visible=$7,keep_audio=$8,audio_expires_at=CASE WHEN $8 THEN NULL WHEN audio_r2_key IS NOT NULL THEN COALESCE(audio_expires_at,NOW()+INTERVAL '30 days') ELSE NULL END,updated_at=NOW() WHERE id=$1 AND organization_id=$2`,[input.id,input.organizationId,input.title,input.sessionType,JSON.stringify(input.summaryBullets),input.transcriptText,input.playerVisible,input.keepAudio]);await syncAiSessionPlayerNotes(input.id,input.organizationId);}
 
 function mapFlagRule(row: Record<string, unknown>): FlagRuleRow {
   return { id:Number(row.id),name:String(row.name),domain:row.domain as 'pitching'|'hitting',metric:String(row.metric),pitchType:String(row.pitch_type),

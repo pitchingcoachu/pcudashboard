@@ -949,7 +949,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
             )}
             <label>
               Search Notes
-              <input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="Search text, category, attachment..." />
+              <input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="Search titles or note text…" />
             </label>
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
