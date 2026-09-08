@@ -104,6 +104,9 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           <Link href="/portal/dashboard" className="portal-nav-link">
             Dashboard
           </Link>
+          <Link href="/portal/admin/ai-sessions" className="portal-nav-link">
+            Transcription
+          </Link>
           {canAccessPlayerNotes && (
             <Link href="/portal/admin/player-notes" className="portal-nav-link">
               Player Notes
@@ -118,6 +121,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           { href: '/portal/admin', label: 'Home' },
           ...(canAccessProgramming ? [{ href: '/portal/admin/schedule', label: 'Schedule' }] : []),
           { href: '/portal/dashboard', label: 'Dashboard' },
+          { href: '/portal/admin/ai-sessions', label: 'Transcription' },
           ...(canAccessPlayerNotes ? [{ href: '/portal/admin/player-notes', label: 'Player Notes' }] : []),
           ...moreItems,
         ]

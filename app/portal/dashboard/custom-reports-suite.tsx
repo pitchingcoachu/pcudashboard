@@ -10,6 +10,7 @@ import { getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
 import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 import { calcPitchValue } from './pitch-value';
 import NativeDateInput from '../components/native-date-input';
+import AiReportSummary from './ai-report-summary';
 
 type OptionItem = { value: string; label: string };
 type ReportType = 'Pitching' | 'Hitting' | 'Catching';
@@ -308,6 +309,7 @@ type ReportPayload = {
   showLocationChartKey?: boolean;
   showExitVelocityKey?: boolean;
   showBattedResultsKey?: boolean;
+  showAiSummary?: boolean;
   enableTableColors?: boolean;
   percentileScope?: PercentileScope;
   showCellPercentiles?: boolean;
@@ -2305,6 +2307,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const [showLocationChartKey, setShowLocationChartKey] = useState(false);
   const [showExitVelocityKey, setShowExitVelocityKey] = useState(false);
   const [showBattedResultsKey, setShowBattedResultsKey] = useState(false);
+  const [showAiSummary, setShowAiSummary] = useState(false);
   const [enableTableColors, setEnableTableColors] = useState(true);
   const [percentileScope, setPercentileScope] = useState<PercentileScope>('NCAA');
   const [showCellPercentiles, setShowCellPercentiles] = useState(false);
@@ -4100,6 +4103,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     setShowLocationChartKey(Boolean(payload.showLocationChartKey));
     setShowExitVelocityKey(Boolean(payload.showExitVelocityKey));
     setShowBattedResultsKey(Boolean(payload.showBattedResultsKey));
+    setShowAiSummary(Boolean(payload.showAiSummary));
     setEnableTableColors(payload.enableTableColors !== false);
     setPercentileScope(payload.percentileScope === 'TEAM' || payload.percentileScope === 'MLB' ? payload.percentileScope : 'NCAA');
     setShowCellPercentiles(Boolean(payload.showCellPercentiles));
@@ -4146,6 +4150,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     showLocationChartKey,
     showExitVelocityKey,
     showBattedResultsKey,
+    showAiSummary,
     enableTableColors,
     percentileScope,
     showCellPercentiles,
@@ -4934,6 +4939,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                 <label className="portal-checkbox-label">
                   <input type="checkbox" checked={showBattedResultsKey} onChange={(event) => setShowBattedResultsKey(event.target.checked)} />
                   Show batted results key
+                </label>
+                <label className="portal-checkbox-label">
+                  <input type="checkbox" checked={showAiSummary} onChange={(event) => setShowAiSummary(event.target.checked)} />
+                  Show AI summary at bottom
                 </label>
                 {!isProSchool ? (
                   <label>
@@ -7712,6 +7721,31 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                     </div>
                   ) : null}
                 </div>
+              ) : null}
+              {showAiSummary ? (
+                <AiReportSummary
+                  domain={reportType.toLowerCase() as 'pitching' | 'hitting' | 'catching'}
+                  reportType={`${reportType} custom report`}
+                  title={reportHeaderTitle}
+                  reportStart={globalStartDate}
+                  reportEnd={globalEndDate}
+                  data={{
+                    report: currentPayload(),
+                    panels: Object.fromEntries(
+                      Object.entries(cellsData).map(([cellId, payload]) => [cellId, {
+                        tableColumns: payload.table_columns,
+                        tableRows: payload.table_rows,
+                        chartPoints: payload.chart_points?.slice(0, 500),
+                      }])
+                    ),
+                  }}
+                  comparisonParams={{
+                    school_code: schoolCode || initialSchoolCode,
+                    team_type: reportTeam !== 'All' ? reportTeam : '',
+                    [reportType === 'Pitching' ? 'pitcher' : reportType === 'Hitting' ? 'hitter' : 'catcher']:
+                      reportScope === 'Single Player' && reportPlayers[0] !== 'All' ? reportPlayers[0] : '',
+                  }}
+                />
               ) : null}
               {chartHover ? (
                 <div

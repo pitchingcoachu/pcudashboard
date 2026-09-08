@@ -15,7 +15,6 @@ import { isKnownSchoolBrand, resolveSchoolBrand } from '../../../lib/school-bran
 import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../lib/league-team-name-map';
 import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
 import { dashboardActivityPath, dispatchPortalActivity } from './activity-events';
-import AiReportSummary from './ai-report-summary';
 import { calculateExpectedMovement, magnusAngleDegrees, measuredTiltDegrees } from '../../../lib/expected-movement';
 import DashboardGroupFilter from './dashboard-group-filter';
 
@@ -20225,7 +20224,6 @@ export default function PitchingSuite({
           }}
         />
       ) : null}
-      {overview ? <AiReportSummary domain="pitching" reportType={`Pitching ${dashboardPage}`} title={selectedSinglePitcher || 'Team pitching report'} reportStart={startDate} reportEnd={endDate} data={{tableColumns:overview.table_columns,tableRows:overview.table_rows,chartPoints:overview.chart_points?.slice(0,500)}} /> : null}
       {showTargetSettings ? (
         <div className="portal-modal-backdrop" onClick={() => setShowTargetSettings(false)}>
           <div className="portal-modal-card" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Movement settings">
