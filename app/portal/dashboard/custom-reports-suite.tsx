@@ -2356,6 +2356,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const [teamCurrentRosterNameKeys, setTeamCurrentRosterNameKeys] = useState<string[] | null>(null);
   const [schoolCode, setSchoolCode] = useState(initialSchoolCode);
   const [cellsData, setCellsData] = useState<Record<string, OverviewLitePayload>>({});
+  const [cellRequestUrls, setCellRequestUrls] = useState<Record<string, string>>({});
   const [cellPercentileBaselineRows, setCellPercentileBaselineRows] = useState<
     Record<string, Array<Record<string, string | number | null>>>
   >({});
@@ -3227,6 +3228,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       const resolvedSchoolCode = schoolCode || initialSchoolCode;
       if (reportScope === 'Team' && teamScopePlayers.length === 0) {
         setCellsData({});
+        setCellRequestUrls({});
         setCellPercentileBaselineRows({});
         setCellLoadStates({});
         return;
@@ -3251,11 +3253,13 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       });
       if (!requests.length) {
         setCellsData({});
+        setCellRequestUrls({});
         setCellPercentileBaselineRows({});
         setCellLoadStates({});
         return;
       }
       const requestCellIds = requests.map(({ cellId }) => cellId);
+      setCellRequestUrls((current) => Object.fromEntries(Object.entries(current).filter(([key]) => requestCellIds.includes(key))));
       setCellPercentileBaselineRows((current) => {
         const next: Record<string, Array<Record<string, string | number | null>>> = {};
         for (const [key, value] of Object.entries(current)) {
@@ -3704,6 +3708,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             }
             return sharedHeatmapFetchKey || key;
           })();
+          if (active) {
+            setCellRequestUrls((current) => current[cellId] === key ? current : { ...current, [cellId]: key });
+          }
           const shouldLoadPercentileBaseline =
             normalizedPanelType === 'Summary Table' && reportType !== 'Catching' && (enableTableColors || showCellPercentiles);
           let percentileBaselineKey = '';
@@ -7724,27 +7731,31 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
               ) : null}
               {showAiSummary ? (
                 <AiReportSummary
-                  domain={reportType.toLowerCase() as 'pitching' | 'hitting' | 'catching'}
                   reportType={`${reportType} custom report`}
                   title={reportHeaderTitle}
                   reportStart={globalStartDate}
                   reportEnd={globalEndDate}
-                  data={{
-                    report: currentPayload(),
-                    panels: Object.fromEntries(
-                      Object.entries(cellsData).map(([cellId, payload]) => [cellId, {
-                        tableColumns: payload.table_columns,
-                        tableRows: payload.table_rows,
-                        chartPoints: payload.chart_points?.slice(0, 500),
-                      }])
-                    ),
-                  }}
-                  comparisonParams={{
-                    school_code: schoolCode || initialSchoolCode,
-                    team_type: reportTeam !== 'All' ? reportTeam : '',
-                    [reportType === 'Pitching' ? 'pitcher' : reportType === 'Hitting' ? 'hitter' : 'catcher']:
-                      reportScope === 'Single Player' && reportPlayers[0] !== 'All' ? reportPlayers[0] : '',
-                  }}
+                  panels={Object.entries(cellsData).map(([cellId, payload]) => {
+                    const config = reportScope === 'Team'
+                      ? normalizeCellConfig(cellConfigs[sourceCellIdForTeamScope(cellId, reportRows)])
+                      : effectiveCellConfigForScope(cellId, reportScope, cellConfigs);
+                    return {
+                      id: cellId,
+                      title: config.title || normalizePanelType(config.panelType),
+                      panelType: normalizePanelType(config.panelType),
+                      requestUrl: cellRequestUrls[cellId] || '',
+                      tableColumns: payload.table_columns ?? [],
+                      tableRows: payload.table_rows ?? [],
+                      chartPoints: payload.chart_points ?? [],
+                      options: {
+                        heatStat: normalizeHeatmapStatValue(config.heatStat, reportType),
+                        contact2dColorBy: config.contact2dColorBy,
+                        contact3dColorBy: config.contact3dColorBy,
+                        batSpeedColorBy: config.batSpeedColorBy,
+                        sprayView: config.sprayView,
+                      },
+                    };
+                  })}
                 />
               ) : null}
               {chartHover ? (
