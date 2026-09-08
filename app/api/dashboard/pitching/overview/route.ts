@@ -294,7 +294,8 @@ function filterInvalidPitchTypeRows<T>(rows: T): T {
   }) as T;
 }
 
-function scrubInvalidPitchTypePayload(payload: unknown): unknown {
+function scrubInvalidPitchTypePayload(payload: unknown, preserveUnclassified = false): unknown {
+  if (preserveUnclassified) return payload;
   if (!payload || typeof payload !== 'object') return payload;
   const next: Record<string, unknown> = { ...(payload as Record<string, unknown>) };
   next.chart_points = filterInvalidPitchTypeRows(next.chart_points);
@@ -500,6 +501,7 @@ async function maybeReturnRawPitchingChartPoints(params: {
     hbMax = '',
   } = params;
   const upperSchool = String(schoolCode ?? '').trim().toUpperCase();
+  const preserveUnclassified = ['LI', 'INDY'].includes(upperSchool);
   if (!upperSchool || upperSchool === 'PRO') return null;
   if (!isDatabaseConfigured()) return null;
 
@@ -551,8 +553,10 @@ async function maybeReturnRawPitchingChartPoints(params: {
   } else {
     values.push(upperSchool);
     where.push(`pe.school_code = $${values.length}`);
-    where.push(`NULLIF(TRIM(pe.taggedpitchtype), '') IS NOT NULL`);
-    where.push(`${TAGGED_PITCH_TYPE_TOKEN_SQL} NOT IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null')`);
+    if (!preserveUnclassified) {
+      where.push(`NULLIF(TRIM(pe.taggedpitchtype), '') IS NOT NULL`);
+      where.push(`${TAGGED_PITCH_TYPE_TOKEN_SQL} NOT IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null')`);
+    }
   }
 
   if (startDate) add('pe.session_date >= ?::date', startDate);
@@ -657,7 +661,7 @@ async function maybeReturnRawPitchingChartPoints(params: {
         FROM public.pitch_events pe
         WHERE ${where.join(' AND ')}
       ) rows
-      WHERE pitch_type <> 'Undefined'
+      ${preserveUnclassified ? '' : "WHERE pitch_type <> 'Undefined'"}
       ORDER BY session_date DESC, pitch_event_id DESC
       LIMIT $${values.length + 1}
       `,
@@ -1322,7 +1326,7 @@ export async function GET(request: Request) {
         playerParam: 'pitcher',
         timeoutMs: resolveOverviewTimeoutMs(schoolCode, false),
       });
-      return NextResponse.json(scrubInvalidPitchTypePayload(applyOverviewBackfills(result.payload)), {
+      return NextResponse.json(scrubInvalidPitchTypePayload(applyOverviewBackfills(result.payload), ['LI', 'INDY'].includes(resolvedSchoolCode)), {
         status: result.status,
         headers: RESPONSE_CACHE_HEADERS,
       });
@@ -1688,7 +1692,7 @@ export async function GET(request: Request) {
       const uncachedResponse = await fetch(url.toString(), { cache: 'no-store' });
       const uncachedPayload = (await uncachedResponse.json().catch(() => ({}))) as Record<string, unknown>;
       if (uncachedResponse.ok && hasNonEmptyTableRows(uncachedPayload)) {
-        return NextResponse.json(scrubInvalidPitchTypePayload(applyOverviewBackfills(uncachedPayload)), {
+        return NextResponse.json(scrubInvalidPitchTypePayload(applyOverviewBackfills(uncachedPayload), ['LI', 'INDY'].includes(resolvedSchoolCode)), {
           headers: {
             ...RESPONSE_CACHE_HEADERS,
             'x-dashboard-cache': 'MISS',
@@ -1818,7 +1822,7 @@ export async function GET(request: Request) {
       pcMin,
       pcMax,
     });
-    return NextResponse.json(scrubInvalidPitchTypePayload(payloadWithRollupHeatmaps), {
+    return NextResponse.json(scrubInvalidPitchTypePayload(payloadWithRollupHeatmaps, ['LI', 'INDY'].includes(resolvedSchoolCode)), {
       headers: {
         ...RESPONSE_CACHE_HEADERS,
         'x-dashboard-cache': result.cached ? 'HIT' : 'MISS',

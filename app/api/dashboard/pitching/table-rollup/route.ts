@@ -741,7 +741,7 @@ export async function GET(request: Request) {
   if (teamCode) add('pitcher_team_code = ?', teamCode);
   if (pitcherNorms.length) add('pitcher_norm = ANY(?::text[])', pitcherNorms);
   if (pitchTypeSet.size) add('LOWER(pitch_type) = ANY(?::text[])', Array.from(pitchTypeSet));
-  add(VALID_PITCH_TYPE_SQL);
+  if (!['LI', 'INDY'].includes(schoolCode)) add(VALID_PITCH_TYPE_SQL);
 
   const tableRef = schoolCode === 'PRO'
     ? 'public.pro_pitching_heatmap_daily_bins'
@@ -899,7 +899,7 @@ export async function GET(request: Request) {
     }
     if (hand) addEvent('pitcherthrows_norm = ?', hand);
     if (pitchTypeSet.size) addEvent('LOWER(pitch_type) = ANY(?::text[])', Array.from(pitchTypeSet));
-    addEvent(VALID_PITCH_TYPE_SQL);
+    if (!['LI', 'INDY'].includes(schoolCode)) addEvent(VALID_PITCH_TYPE_SQL);
     const splitExpr = isTeamSplit
       ? "CASE WHEN pitcher_team_norm <> '' THEN pitcher_team_norm ELSE 'Unknown' END"
       : "CASE WHEN pitcher_name <> '' THEN pitcher_name ELSE pitcher_norm END";

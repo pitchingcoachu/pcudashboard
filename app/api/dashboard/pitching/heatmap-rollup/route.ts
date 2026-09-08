@@ -156,7 +156,7 @@ export async function GET(request: Request) {
   if (teamCode) add('pitcher_team_code = ?', teamCode);
   if (pitcherNorms.length) add('pitcher_norm = ANY(?::text[])', pitcherNorms);
   if (pitchTypeAliasList.length) add('pitch_type = ANY(?::text[])', pitchTypeAliasList);
-  add(VALID_PITCH_TYPE_SQL);
+  if (!['LI', 'INDY'].includes(schoolCode)) add(VALID_PITCH_TYPE_SQL);
 
   const tableRef = schoolCode === 'PRO'
     ? 'public.pro_pitching_heatmap_daily_bins'
