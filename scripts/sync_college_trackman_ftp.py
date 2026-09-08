@@ -26,7 +26,7 @@ import psycopg
 from psycopg import sql
 
 
-FILTER_POLICY_VERSION = "source-aware-spin-v2"
+FILTER_POLICY_VERSION = "source-aware-spin-v3"
 
 
 TRACKMAN_SPIN_COLUMNS = (
@@ -269,6 +269,7 @@ def filter_school_rows(
     roster_keys: set[str],
     *,
     allow_roster_match: bool,
+    require_both_team_markers: bool = False,
 ) -> list[dict[str, str]]:
     kept = []
     for row in rows:
@@ -280,11 +281,29 @@ def filter_school_rows(
             normalize_key(find_value(row, "Catcher")),
         }
         row_name_keys.discard("")
-        team_matches = pitcher_team in markers or batter_team in markers
-        roster_matches = allow_roster_match and bool(row_name_keys & roster_keys)
+        team_matches = (
+            pitcher_team in markers and batter_team in markers
+            if require_both_team_markers
+            else pitcher_team in markers or batter_team in markers
+        )
+        roster_matches = (
+            not require_both_team_markers
+            and allow_roster_match
+            and bool(row_name_keys & roster_keys)
+        )
         if team_matches or roster_matches:
             kept.append(row)
     return kept
+
+
+def filter_rows_on_or_after(
+    rows: list[dict[str, str]],
+    path: str,
+    minimum_session_date: date | None,
+) -> list[dict[str, str]]:
+    if minimum_session_date is None:
+        return rows
+    return [row for row in rows if (session_date(row, path) or date.min) >= minimum_session_date]
 
 
 def load_roster_keys(database_url: str, school_code: str) -> set[str]:
@@ -453,9 +472,20 @@ def reconcile_intended_zone_pitch_types(
     return sum(bool(row[0]) for row in result), sum(bool(row[1]) for row in result)
 
 
-def source_checksum(remote: RemoteCsv, markers: set[str], roster_keys: set[str]) -> str:
+def source_checksum(
+    remote: RemoteCsv,
+    markers: set[str],
+    roster_keys: set[str],
+    *,
+    require_both_team_markers: bool,
+    preseason_team_markers: set[str],
+    minimum_session_date: date | None,
+) -> str:
     """Fingerprint both the CSV and the inputs that decide which rows belong to the school."""
     filter_inputs = [FILTER_POLICY_VERSION, remote.source, *sorted(markers)]
+    filter_inputs.append(f"require_both_team_markers={int(require_both_team_markers)}")
+    filter_inputs.extend(f"preseason={marker}" for marker in sorted(preseason_team_markers))
+    filter_inputs.append(f"minimum_session_date={minimum_session_date.isoformat() if minimum_session_date else ''}")
     if remote.source == "practice":
         filter_inputs.extend(sorted(roster_keys))
     digest = hashlib.sha256(remote.payload)
@@ -470,14 +500,28 @@ def sync_file(
     school_code: str,
     markers: set[str],
     roster_keys: set[str],
+    *,
+    require_both_team_markers: bool = False,
+    preseason_team_markers: set[str] | None = None,
+    minimum_session_date: date | None = None,
 ) -> tuple[int, bool]:
+    preseason_markers = preseason_team_markers or set()
     stable_source = f"trackman://{remote.source}{remote.path}"
-    checksum = source_checksum(remote, markers, roster_keys)
+    checksum = source_checksum(
+        remote,
+        markers,
+        roster_keys,
+        require_both_team_markers=require_both_team_markers,
+        preseason_team_markers=preseason_markers,
+        minimum_session_date=minimum_session_date,
+    )
+    decoded_rows = filter_rows_on_or_after(decode_csv(remote.payload), remote.path, minimum_session_date)
     rows = filter_school_rows(
-        decode_csv(remote.payload),
+        decoded_rows,
         markers,
         roster_keys,
         allow_roster_match=remote.source == "practice",
+        require_both_team_markers=require_both_team_markers,
     )
     existing = conn.execute(
         """SELECT file_id, file_checksum, row_count FROM public.pitch_data_files
@@ -529,11 +573,18 @@ def sync_file(
             for player_column in ("pitcher", "batter", "catcher"):
                 if player_column in payload:
                     payload[player_column] = canonical_player_name(school_code, payload[player_column])
+            pitcher_team = normalize_team(find_value(row, "PitcherTeam", "pitcher_team", "Pitcher Team"))
+            batter_team = normalize_team(find_value(row, "BatterTeam", "batter_team", "Batter Team"))
+            is_preseason = bool(preseason_markers.intersection({pitcher_team, batter_team}))
             payload.update(
                 school_code=school_code,
                 file_id=file_id,
                 session_date=session_date(row, remote.path),
-                session_type=find_value(row, "SessionType") or ("Bullpen" if remote.source == "practice" else "Live"),
+                session_type=(
+                    "Pre-Season"
+                    if is_preseason
+                    else find_value(row, "SessionType") or ("Bullpen" if remote.source == "practice" else "Live")
+                ),
                 source_file=stable_source,
                 pitch_key=pitch_key(row),
             )
@@ -561,6 +612,22 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--school", required=True)
     parser.add_argument("--team-marker", action="append", default=[])
+    parser.add_argument(
+        "--require-both-team-markers",
+        action="store_true",
+        help="Keep only rows where both PitcherTeam and BatterTeam are approved team markers.",
+    )
+    parser.add_argument(
+        "--preseason-team-marker",
+        action="append",
+        default=[],
+        help="Label rows involving this team marker as the Pre-Season session type.",
+    )
+    parser.add_argument(
+        "--minimum-session-date",
+        default="",
+        help="Ignore rows dated before this regular-season boundary (YYYY-MM-DD).",
+    )
     parser.add_argument("--start-date", default="")
     parser.add_argument("--end-date", default="")
     parser.add_argument("--lookback-days", type=int, default=7)
@@ -576,11 +643,16 @@ def main() -> int:
     sources = args.source or ["practice", "v3"]
     markers = {normalize_team(school_code), *(normalize_team(value) for value in args.team_marker)}
     markers.discard("")
+    preseason_team_markers = {normalize_team(value) for value in args.preseason_team_marker}
+    preseason_team_markers.discard("")
+    minimum_session_date = parse_date(args.minimum_session_date) if args.minimum_session_date else None
     database_url = os.getenv("DASHBOARD_DATABASE_URL", "").strip() or os.getenv("DATABASE_URL", "").strip()
     roster_keys = load_roster_keys(database_url, school_code) if database_url else set()
     print(
         f"Syncing {school_code} from {start} through {end}; "
-        f"markers={sorted(markers)}, roster_name_keys={len(roster_keys)}"
+        f"markers={sorted(markers)}, require_both={args.require_both_team_markers}, "
+        f"preseason_markers={sorted(preseason_team_markers)}, minimum_session_date={minimum_session_date}, "
+        f"roster_name_keys={len(roster_keys)}"
     )
     files_seen = files_skipped = rows_inserted = 0
     if args.dry_run:
@@ -589,11 +661,17 @@ def main() -> int:
             try:
                 for remote in fetch_remote_csvs(source, start, end):
                     files_seen += 1
-                    rows = filter_school_rows(
+                    decoded_rows = filter_rows_on_or_after(
                         decode_csv(remote.payload),
+                        remote.path,
+                        minimum_session_date,
+                    )
+                    rows = filter_school_rows(
+                        decoded_rows,
                         markers,
                         roster_keys,
                         allow_roster_match=remote.source == "practice",
+                        require_both_team_markers=args.require_both_team_markers,
                     )
                     if rows:
                         matched_files += 1
@@ -624,7 +702,16 @@ def main() -> int:
                 for remote in fetch_remote_csvs(source, start, end):
                     files_seen += 1
                     try:
-                        inserted, skipped = sync_file(conn, remote, school_code, markers, roster_keys)
+                        inserted, skipped = sync_file(
+                            conn,
+                            remote,
+                            school_code,
+                            markers,
+                            roster_keys,
+                            require_both_team_markers=args.require_both_team_markers,
+                            preseason_team_markers=preseason_team_markers,
+                            minimum_session_date=minimum_session_date,
+                        )
                         conn.commit()
                         rows_inserted += inserted
                         files_skipped += int(skipped)

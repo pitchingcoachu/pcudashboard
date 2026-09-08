@@ -26,7 +26,7 @@ export async function applyManagedRosterTeamScope(input: {
   mapField: 'hitters_by_team_code' | 'pitchers_by_team_code';
 }): Promise<void> {
   const schoolCode = String(input.schoolCode ?? '').trim().toUpperCase();
-  if (!schoolCode || schoolCode === 'LEAGUE' || schoolCode === 'PRO') return;
+  if (!schoolCode || schoolCode === 'LEAGUE' || schoolCode === 'INDY' || schoolCode === 'PRO') return;
 
   const organizationId = await resolveOrganizationIdForSchool({
     schoolCode,

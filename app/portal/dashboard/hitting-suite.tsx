@@ -2520,7 +2520,8 @@ export default function HittingSuite({
   const effectiveSplitBy = isLeaderboardPage ? (leaderboardViewBy === 'Team' ? 'Batter Team' : 'Batter') : splitBy;
   const canLoadOverview = useMemo(() => !!filters && !!startDate && !!endDate, [filters, startDate, endDate]);
   const effectiveSchoolCode = String(filters?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();
-  const isLeague = effectiveSchoolCode === 'LEAGUE';
+  const isIndy = effectiveSchoolCode === 'INDY';
+  const isLeague = effectiveSchoolCode === 'LEAGUE' || isIndy;
   const isPro = effectiveSchoolCode === 'PRO';
   const activeSchoolBrand = useMemo(
     () => resolveSchoolBrand(String(filters?.school_code ?? selectedSchoolCode ?? 'PCU')),
@@ -2597,9 +2598,11 @@ export default function HittingSuite({
       const latestDate = clampYmdToToday(playerLastDate || (payload.max_date ?? payload.min_date ?? ''));
       const nextDate = latestDate || toYmdNow();
       const minDate = payload.min_date ?? '';
-      const isLeagueSchool = String(payload.school_code ?? '').toUpperCase() === 'LEAGUE';
+      const payloadSchoolCode = String(payload.school_code ?? '').toUpperCase();
+      const isLeagueSchool = payloadSchoolCode === 'LEAGUE';
+      const isIndySchool = payloadSchoolCode === 'INDY';
       const isProSchool = String(payload.school_code ?? '').toUpperCase() === 'PRO';
-      if (isPlayerRole && !isLeagueSchool && !isProSchool) {
+      if (isPlayerRole && !isLeagueSchool && !isIndySchool && !isProSchool) {
         const schoolCode = String(payload.school_code ?? '').trim().toUpperCase();
         if (schoolCode === 'PCU') {
           setStartDate(nextDate);
@@ -2610,6 +2613,9 @@ export default function HittingSuite({
         const seasonStart = minDate && minDate > defaultSeasonStart ? minDate : defaultSeasonStart;
         setStartDate(seasonStart);
         setEndDate(nextDate || seasonStart);
+      } else if (isIndySchool) {
+        setStartDate(minDate || nextDate);
+        setEndDate(nextDate || minDate);
       } else if (isLeagueSchool) {
         const leagueStart = minDate && minDate > LEAGUE_SEASON_START ? minDate : LEAGUE_SEASON_START;
         if (level === 'D1') {
@@ -2679,10 +2685,14 @@ export default function HittingSuite({
 
   useEffect(() => {
     if (!isLeague) return;
+    if (isIndy) {
+      if (level !== 'All') setLevel('All');
+      return;
+    }
     const options = filters?.level_options?.length ? filters.level_options : NCAA_LEVEL_FILTER_OPTIONS;
     const nextDefault = options.includes('D1') ? 'D1' : (options[0] ?? 'All');
     if (!level || PRO_LEVEL_FILTER_OPTIONS.includes(level) || !options.includes(level)) setLevel(nextDefault);
-  }, [filters?.level_options, isLeague, level]);
+  }, [filters?.level_options, isLeague, isIndy, level]);
 
   const loadCustomTables = async () => {
     setLoadingCustomTables(true);
@@ -5149,7 +5159,7 @@ export default function HittingSuite({
                       />
                     </label>
                   ) : null}
-                  {isPro || isLeague ? (
+                  {isPro || (isLeague && !isIndy) ? (
                     <label>
                       Level
                       <SearchableSingleSelect

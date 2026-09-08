@@ -38,7 +38,7 @@ export function shouldScopeDashboardPlayer(role: string | null | undefined, scho
   const normalizedRole = String(role ?? '').trim().toLowerCase();
   if (normalizedRole !== 'player') return false;
   const school = String(schoolCode ?? '').trim().toUpperCase();
-  return school !== 'PRO' && school !== 'LEAGUE';
+  return school !== 'PRO' && school !== 'LEAGUE' && school !== 'INDY';
 }
 
 function normalizeSpace(value: string): string {

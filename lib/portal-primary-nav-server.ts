@@ -16,7 +16,7 @@ export async function resolveStaffPrimaryNavigation(session: PortalSession): Pro
 
   return {
     canAccessSchedule,
-    canAccessPlayerNotes: school !== 'LEAGUE',
+    canAccessPlayerNotes: school !== 'LEAGUE' && school !== 'INDY',
     moreItems: buildStaffMoreNavItems({
       role: session.role,
       selectedSchool,

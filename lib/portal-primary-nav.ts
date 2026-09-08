@@ -20,7 +20,7 @@ export function buildStaffMoreNavItems(input: {
 }): PortalPrimaryNavItem[] {
   const school = input.selectedSchool.trim().toUpperCase();
   const isTrial = school === 'TRIAL';
-  const isLeague = school === 'LEAGUE';
+  const isLeague = school === 'LEAGUE' || school === 'INDY';
   const isPro = school === 'PRO';
   const isStaff = input.role === 'admin' || input.role === 'coach';
   const showClientManagement = input.canAccessClientManagement && !(input.role === 'coach' && isPro);
