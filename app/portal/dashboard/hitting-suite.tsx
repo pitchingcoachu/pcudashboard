@@ -12,6 +12,7 @@ import NativeDateInput from '../components/native-date-input';
 import { resolveSchoolBrand } from '../../../lib/school-brand';
 import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../lib/league-team-name-map';
 import { dashboardActivityPath, dispatchPortalActivity } from './activity-events';
+import AiReportSummary from './ai-report-summary';
 import DashboardGroupFilter from './dashboard-group-filter';
 
 type OptionItem = { value: string; label: string };
@@ -7673,6 +7674,7 @@ export default function HittingSuite({
             </div>
         </article>
       </div>
+      {overview ? <AiReportSummary domain="hitting" reportType={`Hitting ${dashboardPage}`} title={selectedSingleHitter || 'Team hitting report'} reportStart={startDate} reportEnd={endDate} data={{tableColumns:overview.table_columns,tableRows:overview.table_rows,chartPoints:overview.chart_points?.slice(0,500)}} /> : null}
       {showLeaderboardCorrelation && (isLeaderboardPage || isGameLogPage) ? (
         <LeaderboardCorrelationModal
           open

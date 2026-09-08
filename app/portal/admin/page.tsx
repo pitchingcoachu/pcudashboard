@@ -226,6 +226,11 @@ export default async function AdminHomePage() {
         </Link>
       </article>
       <article className="portal-admin-card">
+        <h2>AI Sessions</h2>
+        <p>Record or upload sessions and turn them into editable transcripts and summaries.</p>
+        <Link href="/portal/admin/ai-sessions" className="btn btn-primary as-link">Open AI Sessions</Link>
+      </article>
+      <article className="portal-admin-card">
         <h2>Nutrition</h2>
         <p>See roster-wide logging consistency and calorie targets.</p>
         <Link href="/portal/admin/nutrition" className="btn btn-primary as-link">

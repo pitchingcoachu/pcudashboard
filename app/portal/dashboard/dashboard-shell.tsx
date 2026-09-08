@@ -13,6 +13,7 @@ import PitchingSuite from './pitching-suite';
 import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../lib/league-team-name-map';
 import { getProTeamDisplayName, getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
 import StuffPlusSuite from './stuff-plus-suite';
+import FlagsSuite from './flags-suite';
 import { dashboardActivityPath, dispatchPortalActivity } from './activity-events';
 
 type DashboardShellProps = {
@@ -49,7 +50,8 @@ type SuiteName =
   | 'Comparison Tool'
   | 'Biomechanics'
   | 'Player Plans'
-  | 'Stuff+ Calculator';
+  | 'Stuff+ Calculator'
+  | 'Flags';
 
 type HomeNavigateRequest = {
   requestId: number;
@@ -72,6 +74,7 @@ const ALL_SUITE_NAMES: SuiteName[] = [
   'Biomechanics',
   'Player Plans',
   'Stuff+ Calculator',
+  'Flags',
 ];
 
 function toFirstLast(value: string): string {
@@ -174,6 +177,7 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
     'Biomechanics': suite === 'Biomechanics',
     'Player Plans': suite === 'Player Plans',
     'Stuff+ Calculator': suite === 'Stuff+ Calculator',
+    Flags: suite === 'Flags',
   }));
   const isLeague = String(selectedSchoolCode || '').toUpperCase() === 'LEAGUE';
   const isPro = String(selectedSchoolCode || '').toUpperCase() === 'PRO';
@@ -204,8 +208,9 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
     if (String(selectedSchoolCode || '').trim().toUpperCase() === 'PCU') base.push('Biomechanics');
     if (!isLeague) base.push('Player Plans');
     if (!isLeague) base.push('Stuff+ Calculator');
+    if (role !== 'player') base.push('Flags');
     return base;
-  }, [isLeague, isPro, selectedSchoolCode]);
+  }, [isLeague, isPro, role, selectedSchoolCode]);
 
   const activeSuite: SuiteName = suiteOptions.includes(suite) ? suite : 'Home';
   const showSuite = (name: SuiteName) => activeSuite === name;
@@ -571,6 +576,7 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
           <StuffPlusSuite />
         </div>
       ) : null}
+      {mountedSuites.Flags ? <div style={{ display: showSuite('Flags') ? 'block' : 'none' }}><FlagsSuite /></div> : null}
     </div>
   );
 }

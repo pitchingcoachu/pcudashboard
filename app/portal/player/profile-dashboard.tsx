@@ -17,6 +17,7 @@ import { uploadPlayerMediaFile } from '../../../lib/upload-player-media';
 import PlayerProLinkPanel from './player-pro-link-panel';
 import PlayerMediaSection from './player-media-section';
 import PlayerOwnNotes from './player-own-notes';
+import AiSessionsSection from './ai-sessions-section';
 import NutritionSection from './nutrition-section';
 
 type TrackedExercise = {
@@ -1107,6 +1108,8 @@ export default function ProfileDashboard({
         </div>
         {mediaExpanded ? <PlayerMediaSection playerId={playerId} isPlayer={sessionRole === 'player'} /> : null}
       </article>
+
+      <AiSessionsSection playerId={playerId} />
 
       <article className="portal-admin-card">
         <div className="portal-row-between" style={{ alignItems: 'center' }}>

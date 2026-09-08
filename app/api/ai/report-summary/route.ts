@@ -1,0 +1,5 @@
+import { NextResponse } from 'next/server';
+import { requireAiAccess } from '../../../../lib/ai-access';
+import { generateReportNarrative } from '../../../../lib/ai-generation';
+export const maxDuration=120;
+export async function POST(request:Request){const access=await requireAiAccess(request);if(!access.ok)return NextResponse.json({error:access.error},{status:access.status});const b=await request.json().catch(()=>({})) as Record<string,unknown>;if(!b.data)return NextResponse.json({error:'Report data is required.'},{status:400});try{const summary=await generateReportNarrative({reportType:String(b.reportType??'Performance report'),title:String(b.title??''),reportStart:String(b.reportStart??''),reportEnd:String(b.reportEnd??''),comparisonStart:String(b.comparisonStart??''),comparisonEnd:String(b.comparisonEnd??''),data:b.data});return NextResponse.json({summary});}catch(error){return NextResponse.json({error:error instanceof Error?error.message:'Could not generate summary.'},{status:500});}}

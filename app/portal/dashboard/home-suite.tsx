@@ -144,6 +144,7 @@ function suiteDescription(name: string): string {
   if (key === 'player plans') return 'Review and manage plan progress for athletes.';
   if (key === 'player notes') return 'Staff notes and communication history in one place.';
   if (key === 'stuff+ calculator') return 'Model and evaluate pitch quality metrics quickly.';
+  if (key === 'flags') return 'Monitor custom pitching, hitting, and performance changes by session average.';
   return 'Open this dashboard suite.';
 }
 

@@ -11,6 +11,7 @@ const SUITE_DESCRIPTIONS: Record<string, string> = {
   'Comparison Tool': 'Compare players or teams side by side.',
   'Player Plans': 'Review assigned player development plans.',
   'Stuff+ Calculator': 'Grade pitch shape and stuff quality.',
+  Flags: 'Monitor custom session-average changes across pitching and hitting.',
 };
 
 export default function MobileDashboardHome({

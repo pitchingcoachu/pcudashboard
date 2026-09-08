@@ -30,7 +30,8 @@ type DashboardSuiteName =
   | 'Comparison Tool'
   | 'Biomechanics'
   | 'Player Plans'
-  | 'Stuff+ Calculator';
+  | 'Stuff+ Calculator'
+  | 'Flags';
 
 const SUITE_SLUG_MAP: Record<string, DashboardSuiteName> = {
   home: 'Home',
@@ -56,6 +57,7 @@ const SUITE_SLUG_MAP: Record<string, DashboardSuiteName> = {
   'stuff-plus': 'Stuff+ Calculator',
   stuff_plus: 'Stuff+ Calculator',
   'stuff+': 'Stuff+ Calculator',
+  flags: 'Flags',
 };
 
 function readSuiteParam(
