@@ -6657,6 +6657,7 @@ def _league_add_labeled_team_keys(by_team_code: Dict[str, List[str]]) -> Dict[st
 
 
 AGGREGATE_TEAM_SCHOOL_CODES = {"LEAGUE", "INDY"}
+UNCLASSIFIED_PITCH_VISIBLE_SCHOOL_CODES = {"LI", "INDY"}
 
 
 def _add_school_team_filter_keys(
@@ -10613,8 +10614,9 @@ def _try_pitching_overview_daily_rollup(
         "(%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)",
         "(%(pitchers_count)s::int = 0 OR pitcher_norm = ANY(%(pitchers_norm)s::text[]))",
         "(%(pitch_types_count)s::int = 0 OR pitch_type = ANY(%(pitch_types)s::text[]))",
-        "pitch_type <> 'Undefined'",
     ]
+    if school_code not in UNCLASSIFIED_PITCH_VISIBLE_SCHOOL_CODES:
+        where_parts.append("pitch_type <> 'Undefined'")
     if school_code == "LEAGUE":
         where_parts.append(LEAGUE_ROLLUP_TEAM_EXCLUSION_SQL)
     if use_split_rollup:
@@ -22804,6 +22806,7 @@ def pitching_overview(
         "qp_locations": qp_locations,
         "pitch_types": selected_pitch_types,
         "pitch_types_count": len(selected_pitch_types),
+        "include_unclassified_pitches": school_code in UNCLASSIFIED_PITCH_VISIBLE_SCHOOL_CODES,
         "ball_types": selected_ball_types,
         "ball_types_count": len(selected_ball_types),
         "zone_locations": selected_zone_locations,
@@ -23543,7 +23546,7 @@ def pitching_overview(
           vmw.video_clip_3 AS video_clip_3_vm
         FROM base_raw br
         __VIDEO_MAP_JOIN__
-        WHERE br.pitch_type <> 'Undefined'
+        WHERE (%(include_unclassified_pitches)s::boolean OR br.pitch_type <> 'Undefined')
           AND (
             %(with_video)s::text IS NULL OR %(with_video)s::text = '' OR %(with_video)s::text = 'All' OR
             (%(with_video)s::text = 'Yes' AND __HAS_VIDEO_EXPR__) OR
@@ -23833,7 +23836,12 @@ def pitching_overview(
                 ),
                 params,
             )
-            table_source_rows = [row for row in cur.fetchall() if str(row.get("pitch_type") or "") != "Undefined"]
+            table_source_rows = [
+                row
+                for row in cur.fetchall()
+                if school_code in UNCLASSIFIED_PITCH_VISIBLE_SCHOOL_CODES
+                or str(row.get("pitch_type") or "") != "Undefined"
+            ]
             table_source_rows = _resolve_college_opp_placeholders(
                 [dict(row) for row in table_source_rows],
                 school_code=school_code,
@@ -24242,6 +24250,7 @@ def pitching_ab_report(
         "school_code": school_code,
         "source_school_codes": source_school_codes,
         "team_type_norm": team_type_norm,
+        "include_unclassified_pitches": school_code in UNCLASSIFIED_PITCH_VISIBLE_SCHOOL_CODES,
         "pitchers_exact": selected_pitchers,
         "pitchers_lower": [str(v or "").strip().lower() for v in selected_pitchers],
         "pitchers_norm": selected_pitcher_keys,
@@ -24485,7 +24494,7 @@ def pitching_ab_report(
                       AND school_code = ANY(%(source_school_codes)s::text[])
                     )
                   )
-                    AND (""" + PITCH_TYPE_NORMALIZE_SQL + """) <> 'Undefined'
+                    AND (%(include_unclassified_pitches)s::boolean OR (""" + PITCH_TYPE_NORMALIZE_SQL + """) <> 'Undefined')
                     AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
                     AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
                     AND (
@@ -24764,6 +24773,7 @@ def hitting_ab_report(
         "school_code": school_code,
         "source_school_codes": source_school_codes,
         "hitters_norm": selected_hitter_keys,
+        "include_unclassified_pitches": school_code in UNCLASSIFIED_PITCH_VISIBLE_SCHOOL_CODES,
         "hitters_count": len(selected_hitter_keys),
         "opp_pitchers_norm": selected_opp_pitcher_keys,
         "opp_pitchers_count": len(selected_opp_pitcher_keys),
@@ -24984,7 +24994,7 @@ def hitting_ab_report(
                     ROW_NUMBER() OVER (ORDER BY session_date, COALESCE(created_at, NOW()), id) AS pitch_number
                   FROM public.pitch_events pe
                   WHERE school_code = ANY(%(source_school_codes)s::text[])
-                    AND (""" + PITCH_TYPE_NORMALIZE_SQL + """) <> 'Undefined'
+                    AND (%(include_unclassified_pitches)s::boolean OR (""" + PITCH_TYPE_NORMALIZE_SQL + """) <> 'Undefined')
                     AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
                     AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
                     AND (
@@ -28321,7 +28331,10 @@ def catching_overview(
                   )
                   AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                   AND """ + _college_level_where_sql("pe") + """
-                  AND (""" + PITCH_TYPE_NORMALIZE_SQL + """) <> 'Undefined'
+                  AND (
+                    UPPER(COALESCE(%(school_code)s::text, '')) IN ('LI', 'INDY')
+                    OR (""" + PITCH_TYPE_NORMALIZE_SQL + """) <> 'Undefined'
+                  )
                   AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
                   AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
                   AND (%(catcher_count)s::int = 0 OR """ + CATCHER_NAME_NORM_SQL + """ = ANY(%(catchers_norm)s::text[]))
@@ -28353,7 +28366,12 @@ def catching_overview(
                     "pitch_types": selected_pitch_types,
                 },
                 )
-                rows = [dict(row) for row in cur.fetchall() if str(row.get("pitch_type") or "") != "Undefined"]
+                rows = [
+                    dict(row)
+                    for row in cur.fetchall()
+                    if school_code in UNCLASSIFIED_PITCH_VISIBLE_SCHOOL_CODES
+                    or str(row.get("pitch_type") or "") != "Undefined"
+                ]
                 _annotate_times_through_order(rows)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"catching overview query failed: {exc}") from exc
