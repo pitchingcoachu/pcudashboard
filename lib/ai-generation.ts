@@ -24,7 +24,7 @@ export async function generateReportNarrative(input: { reportType: string; title
   const response = await getAnthropicClient().messages.create({
     model: DASHBOARD_CHAT_MODEL,
     max_tokens: 1200,
-    system: 'Write a concise professional baseball or athlete-development report narrative for a coach. Explain meaningful trends, improvements, declines, and practical implications. Compare the stated periods. Use only supplied data, state when the sample is limited, and do not diagnose injuries. Return 2-5 short paragraphs with no markdown heading.',
+    system: 'Write a concise professional baseball or athlete-development report narrative for a coach. Explain meaningful trends, improvements, declines, and practical implications. Compare the stated periods. Use only supplied data, state when the sample is limited, and do not diagnose injuries. Return 2-5 short paragraphs. Begin immediately with the coaching analysis. Do not add a heading, repeat the report title, list the date ranges, or use labels such as Session or Reference Window.',
     messages: [{ role: 'user', content: `Report: ${input.reportType}\nTitle: ${input.title}\nReport period: ${input.reportStart} to ${input.reportEnd}\nComparison period: ${input.comparisonStart} to ${input.comparisonEnd}\nData:\n${JSON.stringify(input.data).slice(0, 140000)}` }],
   });
   return extractText(response.content);

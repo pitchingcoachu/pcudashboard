@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import styles from './ai-report-summary.module.css';
 
 function shiftDate(value: string, days: number): string {
   const date = new Date(`${value}T12:00:00Z`);
@@ -69,26 +70,28 @@ export default function AiReportSummary({ reportType, title, reportStart, report
   }
 
   return (
-    <section className="portal-panel" data-export-ignore={include ? undefined : 'true'} style={{ padding: 16, display: 'grid', gap: 10, marginTop: 14 }}>
-      <div className="portal-row-between">
+    <section className={styles.summary} data-export-ignore={include && summary ? undefined : 'true'}>
+      <div className={styles.heading}>
         <div>
-          <h3 style={{ margin: 0 }}>AI Report Summary</h3>
-          <p className="portal-muted-text" style={{ margin: '4px 0 0' }}>Coach-style interpretation of this custom report.</p>
+          <span>Coach Analysis</span>
+          <h3>Report Summary</h3>
         </div>
-        <button className="btn btn-primary" onClick={() => void generate()} disabled={loading || !data || !reportStart || !reportEnd}>
+        <button data-export-ignore="true" className="btn btn-primary" onClick={() => void generate()} disabled={loading || !data || !reportStart || !reportEnd}>
           {loading ? 'Generating…' : summary ? 'Regenerate' : 'Generate summary'}
         </button>
       </div>
-      <div className="portal-form-grid">
+      <p data-export-ignore="true" className={styles.description}>Choose the comparison window, then generate a coach-style reading of the report.</p>
+      <div data-export-ignore="true" className={styles.controls}>
         <label>Report period<input value={`${reportStart} to ${reportEnd}`} readOnly /></label>
         <label>Comparison start<input type="date" value={comparisonStart} onChange={(event) => setComparisonStart(event.target.value)} /></label>
         <label>Comparison end<input type="date" value={comparisonEnd} onChange={(event) => setComparisonEnd(event.target.value)} /></label>
       </div>
-      {error ? <p className="auth-error">{error}</p> : null}
+      {error ? <p data-export-ignore="true" className="auth-error">{error}</p> : null}
       {summary ? (
         <>
-          <textarea rows={8} value={summary} onChange={(event) => setSummary(event.target.value)} />
-          <label className="portal-checkbox-label"><input type="checkbox" checked={include} onChange={(event) => setInclude(event.target.checked)} /> Include this summary in report exports</label>
+          <textarea data-export-ignore="true" className={styles.editor} rows={8} value={summary} onChange={(event) => setSummary(event.target.value)} />
+          <div className={styles.exportText}>{summary}</div>
+          <label data-export-ignore="true" className="portal-checkbox-label"><input type="checkbox" checked={include} onChange={(event) => setInclude(event.target.checked)} /> Include this summary in report exports</label>
         </>
       ) : null}
     </section>
