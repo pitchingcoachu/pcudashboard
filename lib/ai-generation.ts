@@ -42,23 +42,45 @@ function forbiddenReportMetrics(text: string, allowedMetrics: string[]): string[
   return REPORT_METRIC_CONCEPTS.filter((metric) => metric.pattern.test(text) && !metric.pattern.test(allowed)).map((metric) => metric.name);
 }
 
+const UNSUPPORTED_SHAPE_JUDGMENTS = [
+  /\blost (?:its |their |his |her )?shape\b/i,
+  /\b(?:worse|poorer|bad) pitch\b/i,
+  /\bbehav(?:e|es|ed|ing) (?:more )?flat(?:ter)?\b/i,
+  /\b(?:pitch|shape).{0,40}\b(?:flat(?:ter)?|steep(?:er)?)\b/i,
+  /\b(?:ivb|spin efficiency|spineff).{0,80}\bflat(?:ter)?\b/i,
+  /\b(?:ivb|spin efficiency|spineff).{0,80}\bsteep(?:er)?\b/i,
+];
+
+function hasUnsupportedShapeJudgment(text: string): boolean {
+  return UNSUPPORTED_SHAPE_JUDGMENTS.some((pattern) => pattern.test(text));
+}
+
 export async function generateReportNarrative(input: { reportType: string; title: string; reportStart: string; reportEnd: string; comparisonStart: string; comparisonEnd: string; allowedMetrics: string[]; data: unknown }): Promise<string> {
   const system = `Write a concise, useful performance interpretation that sounds like an experienced coach. The only metrics you may name are: ${input.allowedMetrics.join(', ')}. Treat this as a strict whitelist, including acronyms and derived metrics.
 
 Use the precomputed comparisons to identify the two or three most meaningful changes from the player's reference average. Explain what those changes mean together instead of listing every number. Distinguish a real direction from normal stability, and mention limited samples when the supplied sample sizes make a conclusion weak. Give one practical coaching implication grounded in the shown data, such as what to preserve, monitor, or investigate next. Do not invent a cause, mechanical explanation, intent, target, or recommendation that the evidence does not support. MLB context may appear in one sentence only when an MLB benchmark is supplied for that exact whitelisted metric.
 
+Treat pitch-shape metrics carefully. More or less IVB, HB, spin efficiency, or tilt is a shape change, not automatically an improvement or decline. Lower IVB may represent more depth, and lower spin efficiency may be intentional or normal for a cutter or other pitch type. Spin efficiency is not a pitch-quality score. Tilt describes orientation, not quality. Never call a pitch worse, say it lost its shape, or label it flatter or steeper from those metrics alone. Use neutral language such as "showed less IVB," "had more depth," or "the shape shifted from the reference." Only grade a shape change when the evidence includes an explicit target, outcome metric, or directly applicable benchmark that supports the judgment. Do not infer approach angle or trajectory from IVB alone.
+
 Write 2-3 short paragraphs in plain language. Lead immediately with the main takeaway. Do not add headings, bullets, player details, dates, report setup, or an exhaustive stat recap. Do not diagnose injuries.`;
   const userContent = `Report: ${input.reportType}\nTitle: ${input.title}\nReport period: ${input.reportStart} to ${input.reportEnd}\nComparison period: ${input.comparisonStart} to ${input.comparisonEnd}\nAllowed metrics: ${input.allowedMetrics.join(', ')}\nEvidence:\n${JSON.stringify(input.data).slice(0, 140000)}`;
-  const create = (correction = '') => getAnthropicClient().messages.create({ model: DASHBOARD_CHAT_MODEL, max_tokens: 1000, system: correction ? `${system}\n\nYour previous response violated the whitelist by naming: ${correction}. Rewrite it without those metrics.` : system, messages: [{ role: 'user' as const, content: userContent }] });
+  const create = (correction = '') => getAnthropicClient().messages.create({ model: DASHBOARD_CHAT_MODEL, max_tokens: 1000, system: correction ? `${system}\n\n${correction}` : system, messages: [{ role: 'user' as const, content: userContent }] });
   let response = await create();
   let text = extractText(response.content);
-  const forbidden = forbiddenReportMetrics(text, input.allowedMetrics);
-  if (forbidden.length) {
-    response = await create(forbidden.join(', '));
+  let forbidden = forbiddenReportMetrics(text, input.allowedMetrics);
+  let unsupportedShapeJudgment = hasUnsupportedShapeJudgment(text);
+  if (forbidden.length || unsupportedShapeJudgment) {
+    const reasons = [
+      forbidden.length ? `used forbidden metrics (${forbidden.join(', ')})` : '',
+      unsupportedShapeJudgment ? 'made an unsupported pitch-shape quality judgment' : '',
+    ].filter(Boolean).join(' and ');
+    response = await create(`Your previous response ${reasons}. Rewrite from scratch. Use only the visible metric whitelist, keep movement and spin-efficiency changes neutral unless direct evidence supports a quality judgment, and omit any conclusion that depends on unsupported assumptions.`);
     text = extractText(response.content);
+    forbidden = forbiddenReportMetrics(text, input.allowedMetrics);
+    unsupportedShapeJudgment = hasUnsupportedShapeJudgment(text);
   }
-  const stillForbidden = forbiddenReportMetrics(text, input.allowedMetrics);
-  if (stillForbidden.length) throw new Error(`The summary included metrics outside this report (${stillForbidden.join(', ')}). Please generate it again.`);
+  if (forbidden.length) throw new Error(`The summary included metrics outside this report (${forbidden.join(', ')}). Please generate it again.`);
+  if (unsupportedShapeJudgment) throw new Error('The summary made an unsupported pitch-shape judgment. Please generate it again.');
   return text;
 }
 

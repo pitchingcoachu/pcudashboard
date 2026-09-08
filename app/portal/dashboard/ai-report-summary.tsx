@@ -82,7 +82,10 @@ export default function AiReportSummary({ reportType, title, reportStart, report
                       let mlbBenchmark: ReturnType<typeof sanitizeTable> | null = null;
         if (panel.panelType === 'Summary Table' && /pitching|hitting/i.test(reportType)) {
           try {
-            const benchmarkResponse = await fetch(mlbBenchmarkRequest(panel.requestUrl), { cache: 'no-store' });
+            const benchmarkResponse = await fetch(mlbBenchmarkRequest(panel.requestUrl), {
+              cache: 'no-store',
+              signal: AbortSignal.timeout(5_000),
+            });
             const benchmarkPayload = await benchmarkResponse.json() as { table_rows?: ReportRow[] };
             if (benchmarkResponse.ok) mlbBenchmark = sanitizeTable(panel.tableColumns, benchmarkPayload.table_rows ?? []);
           } catch { mlbBenchmark = null; }
