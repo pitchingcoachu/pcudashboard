@@ -26,6 +26,7 @@ export function buildStaffMoreNavItems(input: {
   const showClientManagement = input.canAccessClientManagement && !(input.role === 'coach' && isPro);
 
   return [
+    ...(isStaff ? [{ href: '/portal/admin/ai-sessions', label: 'Transcription' }] : []),
     ...(!isTrial && !isLeague && !isPro ? [{ href: '/portal/admin/pulse', label: 'PULSE' }] : []),
     ...(input.canAccessGameTracker ? [{ href: '/portal/admin/game-tracker', label: 'Game Tracker' }] : []),
     { href: '/profiles', label: 'Profiles' },

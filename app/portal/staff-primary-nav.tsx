@@ -18,7 +18,6 @@ export function staffPrimaryMobileItems(input: Omit<StaffPrimaryNavProps, 'activ
     { href: '/portal/admin', label: 'Home' },
     ...(input.canAccessSchedule ? [{ href: '/portal/admin/schedule', label: 'Schedule' }] : []),
     { href: '/portal/dashboard', label: 'Dashboard' },
-    { href: '/portal/admin/ai-sessions', label: 'Transcription' },
     ...(input.canAccessPlayerNotes ? [{ href: '/portal/admin/player-notes', label: 'Player Notes' }] : []),
     ...input.moreItems,
   ];
@@ -37,9 +36,6 @@ export default function StaffPrimaryNav({ activeHref, canAccessSchedule, canAcce
       ) : null}
       <Link href="/portal/dashboard" className={navClass(activeHref === '/portal/dashboard')}>
         Dashboard
-      </Link>
-      <Link href="/portal/admin/ai-sessions" className={navClass(activeHref === '/portal/admin/ai-sessions')}>
-        Transcription
       </Link>
       {canAccessPlayerNotes ? (
         <Link href="/portal/admin/player-notes" className={navClass(activeHref === '/portal/admin/player-notes')}>

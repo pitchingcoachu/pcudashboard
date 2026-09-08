@@ -128,9 +128,6 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
             <Link href="/portal/dashboard" className="portal-nav-link active">
               Dashboard
             </Link>
-            <Link href="/portal/admin/ai-sessions" className="portal-nav-link">
-              Transcription
-            </Link>
             {canAccessPlayerNotes ? (
               <Link href="/portal/admin/player-notes" className="portal-nav-link">
                 Player Notes
@@ -160,7 +157,6 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
           ? [...(canAccessProgramming ? [{ href: '/portal/player', label: 'Profile' }, { href: '/portal/player/program', label: 'Program' }] : [])]
           : []),
         { href: '/portal/dashboard', label: 'Dashboard' },
-        ...(isStaff ? [{ href: '/portal/admin/ai-sessions', label: 'Transcription' }] : []),
         ...(canAccessPlayerNotes ? [{ href: '/portal/admin/player-notes', label: 'Player Notes' }] : []),
         ...(isStaff ? moreItems : []),
       ]}
