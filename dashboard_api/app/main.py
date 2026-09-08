@@ -1389,6 +1389,8 @@ def _normalize_session_type_filter(value: Optional[str]) -> Optional[str]:
     text = (value or "").strip().lower()
     if not text or text == "all":
         return None
+    if "pre-season" in text or "preseason" in text:
+        return "Pre-Season"
     if "season" in text:
         return "Season"
     if "bull" in text or "prac" in text or text == "bp" or " bp" in text or "bp " in text:
@@ -1404,6 +1406,9 @@ def _session_bucket_for_row(
     *,
     classify_hitting_csv: bool = False,
 ) -> Optional[str]:
+    st_compact = re.sub(r"\s+", "", str(row.get("session_type_norm") or "").strip().lower())
+    if "pre-season" in st_compact or "preseason" in st_compact:
+        return "Pre-Season"
     source_file = str(row.get("source_file_name") or "").strip()
     if classify_hitting_csv and source_file:
         source_basename = re.split(r"[/\\]", source_file)[-1]
@@ -1419,7 +1424,6 @@ def _session_bucket_for_row(
             return "Bullpen"
         if source_basename.lower().endswith(".csv"):
             return "Live"
-    st_compact = re.sub(r"\s+", "", str(row.get("session_type_norm") or "").strip().lower())
     if "bull" in st_compact or "prac" in st_compact or st_compact == "bp":
         return "Bullpen"
     pitcher_team_code = _normalize_team_code(str(row.get("pitcher_team_code") or ""))
@@ -6174,6 +6178,16 @@ def _resolve_college_opp_placeholders(
 
 
 LEAGUE_TEAM_NAME_BY_CODE: Dict[str, str] = {
+    "LI": "Long Island Ducks",
+    "HAG_FLY": "Hagerstown Flying Boxcars",
+    "YOR": "York Revolution",
+    "LAN": "Lancaster Stormers",
+    "WES_POW": "Charleston Dirty Birds",
+    "GAS": "Gastonia Ghost Peppers",
+    "STA_YAN": "Staten Island FerryHawks",
+    "LEX_LEG": "Lexington Legends",
+    "HP": "High Point Rockers",
+    "SMD": "Southern Maryland Blue Crabs",
     "USABASEBALL": "USA Baseball",
     "ABI_WIL": "Abilene Christian University",
     "AIR_FOR": "United States Air Force Academy",
@@ -6642,6 +6656,9 @@ def _league_add_labeled_team_keys(by_team_code: Dict[str, List[str]]) -> Dict[st
     return out
 
 
+AGGREGATE_TEAM_SCHOOL_CODES = {"LEAGUE", "INDY"}
+
+
 def _add_school_team_filter_keys(
     by_team_code: Dict[str, List[str]],
     *,
@@ -6649,7 +6666,7 @@ def _add_school_team_filter_keys(
     team_markers_norm: set[str],
     roster_names: Optional[set[str]] = None,
 ) -> Dict[str, List[str]]:
-    if school_code in {"LEAGUE", "PRO"}:
+    if school_code in {*AGGREGATE_TEAM_SCHOOL_CODES, "PRO"}:
         return by_team_code
     if not by_team_code and not roster_names:
         return by_team_code
@@ -6688,7 +6705,7 @@ def _filter_pitching_rows_by_team_type(
 ) -> List[Dict[str, Any]]:
     if team_type_value in {"", "All"}:
         return rows
-    if school_code == "LEAGUE":
+    if school_code in AGGREGATE_TEAM_SCHOOL_CODES:
         selected_code = _normalize_team_code(_league_team_code_from_value(team_type_value))
         if not selected_code:
             return rows
@@ -6816,6 +6833,8 @@ def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
         "CREIGHTON": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "CREIGHTON", "school_config.R"),
         "HARVARD": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "HARVARD", "school_config.R"),
         "PRO": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "PRO", "school_config.R"),
+        "LI": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "LI", "school_config.R"),
+        "INDY": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "INDY", "school_config.R"),
     }
     config_path = env_path or default_path_by_school.get(school_code.upper(), "")
     if not config_path or not os.path.exists(config_path):
@@ -8618,6 +8637,8 @@ def _refresh_league_daily_rollup(
                       ELSE 'Unknown'
                     END AS batterside_norm,
                     CASE
+                      WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(COALESCE(pe.session_type, pe.sessiontype)), ''), '')), '[^a-z0-9]', '', 'g') = 'preseason'
+                      THEN 'Pre-Season'
                       WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(COALESCE(pe.session_type, pe.sessiontype)), ''), '')), '\\s+', '', 'g') LIKE '%%bull%%'
                         OR regexp_replace(lower(COALESCE(NULLIF(TRIM(COALESCE(pe.session_type, pe.sessiontype)), ''), '')), '\\s+', '', 'g') LIKE '%%prac%%'
                       THEN 'Bullpen'
@@ -8921,6 +8942,8 @@ def _refresh_league_daily_rollup(
                       ELSE 'Unknown'
                     END AS batterside_norm,
                     CASE
+                      WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(COALESCE(pe.session_type, pe.sessiontype)), ''), '')), '[^a-z0-9]', '', 'g') = 'preseason'
+                      THEN 'Pre-Season'
                       WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(COALESCE(pe.session_type, pe.sessiontype)), ''), '')), '\\s+', '', 'g') LIKE '%%bull%%'
                         OR regexp_replace(lower(COALESCE(NULLIF(TRIM(COALESCE(pe.session_type, pe.sessiontype)), ''), '')), '\\s+', '', 'g') LIKE '%%prac%%'
                       THEN 'Bullpen'
@@ -16219,10 +16242,14 @@ def _append_college_rollup_team_filter(
     batter_team_col: str = "batter_team_norm_eff",
 ) -> None:
     team_raw = (team_type_value or "").strip()
-    team_norm = _normalize_team_code(_league_team_code_from_value(team_raw) if school_code == "LEAGUE" else team_raw)
+    team_norm = _normalize_team_code(
+        _league_team_code_from_value(team_raw)
+        if school_code in AGGREGATE_TEAM_SCHOOL_CODES
+        else team_raw
+    )
     if not team_norm or team_norm == "ALL":
         return
-    if school_code == "LEAGUE":
+    if school_code in AGGREGATE_TEAM_SCHOOL_CODES:
         target_col = pitcher_team_col if role == "pitching" else batter_team_col
         if team_norm == "USABASEBALL":
             # "USABASEBALL" is a synthetic code -- USA Baseball tournament
@@ -21745,8 +21772,8 @@ def pitching_filters(
                     raise ValueError("pitching filters snapshot missing ball_types")
                 if school_code == "LEAGUE" and "level_options" not in snapshot_payload:
                     raise ValueError("league pitching filters snapshot missing level_options")
-                if school_code == "LEAGUE" and len(snapshot_payload.get("team_types") or []) <= 1:
-                    raise ValueError("league pitching filters snapshot missing team filters")
+                if school_code in AGGREGATE_TEAM_SCHOOL_CODES and len(snapshot_payload.get("team_types") or []) <= 1:
+                    raise ValueError("aggregate pitching filters snapshot missing team filters")
                 snapshot_response = PitchingFiltersResponse(**snapshot_payload)
                 _filters_cache_set(filters_cache_key, snapshot_response)
                 if _filters_snapshot_is_stale(snapshot_updated_at):
@@ -21782,7 +21809,12 @@ def pitching_filters(
     level_options: List[str] = ["All"]
     try:
         with get_conn() as conn, conn.cursor() as cur:
-            session_types = ["Season", "All"] if school_code == "LEAGUE" else ["Season", "Bullpen", "Live BP", "All"]
+            if school_code in AGGREGATE_TEAM_SCHOOL_CODES:
+                session_types = ["Season", "All"]
+            elif school_code == "LI":
+                session_types = ["Season", "Pre-Season", "All"]
+            else:
+                session_types = ["Season", "Bullpen", "Live BP", "All"]
             use_college_rollup_filters = False
             if school_code != "PRO":
                 cur.execute("SELECT to_regclass('public.pitch_events_daily_rollup_league')::text AS table_name")
@@ -21979,7 +22011,7 @@ def pitching_filters(
                     filter_query_params,
                 )
                 team_codes = [str(row["team_code"]) for row in cur.fetchall() if str(row.get("team_code") or "").strip()]
-                if school_code == "LEAGUE":
+                if school_code in AGGREGATE_TEAM_SCHOOL_CODES:
                     team_types = _league_team_types_from_codes(team_codes)
                 else:
                     team_types = ["All", school_code, "Opponents", "Campers"]
@@ -22017,7 +22049,7 @@ def pitching_filters(
                     str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
                     for row in cur.fetchall()
                 }
-                if school_code == "LEAGUE":
+                if school_code in AGGREGATE_TEAM_SCHOOL_CODES:
                     pitchers_by_team_code = _league_add_labeled_team_keys(pitchers_by_team_code)
 
                 cur.execute(
@@ -22042,7 +22074,7 @@ def pitching_filters(
                     str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
                     for row in cur.fetchall()
                 }
-                if school_code == "LEAGUE":
+                if school_code in AGGREGATE_TEAM_SCHOOL_CODES:
                     opp_hitters_by_team_code = _league_add_labeled_team_keys(opp_hitters_by_team_code)
             else:
                 cur.execute(
@@ -22125,7 +22157,7 @@ def pitching_filters(
                         {"school_code": school_code, "team_markers_norm": team_markers_norm},
                     )
                     ball_types = [str(row["ball_type"]) for row in cur.fetchall() if str(row.get("ball_type") or "").strip()]
-                if school_code == "LEAGUE":
+                if school_code in AGGREGATE_TEAM_SCHOOL_CODES:
                     cur.execute(_league_team_codes_sql_expr(), {"school_code": school_code})
                     league_team_codes = [str(row["team_code"]) for row in cur.fetchall() if str(row.get("team_code") or "").strip()]
                     team_types = _league_team_types_from_codes(league_team_codes)
@@ -22165,7 +22197,7 @@ def pitching_filters(
     known_hitter_keys = set(hitter_norm | campers_norm)
     if known_hitter_keys:
         opp_hitters = [name for name in opp_hitters if _normalize_name_key(name) not in known_hitter_keys]
-    if school_code not in {"LEAGUE", "PRO"}:
+    if school_code not in {*AGGREGATE_TEAM_SCHOOL_CODES, "PRO"}:
         pitchers_by_team_code = _add_school_team_filter_keys(
             pitchers_by_team_code,
             school_code=school_code,
@@ -22736,7 +22768,11 @@ def pitching_overview(
         "pitchers_norm": selected_pitcher_keys,
         "pitchers_count": len(selected_pitcher_keys),
         "team_type": team_type,
-        "team_type_norm": _normalize_team_code(team_type or ""),
+        "team_type_norm": _normalize_team_code(
+            _league_team_code_from_value(team_type)
+            if school_code in AGGREGATE_TEAM_SCHOOL_CODES
+            else team_type or ""
+        ),
         "team_norm": team_norm,
         "team_norm_count": len(team_norm),
         "known_pitchers": team_norm,
@@ -23413,14 +23449,21 @@ def pitching_overview(
               regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '\\s+', '', 'g') ~ '(bull|prac|bp)'
             ) OR
             (
+              %(session_type_filter)s::text = 'Pre-Season' AND
+              regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '[^a-z0-9]', '', 'g') = 'preseason'
+            ) OR
+            (
               %(session_type_filter)s::text = 'Season' AND (
+                regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '[^a-z0-9]', '', 'g') <> 'preseason'
+                AND
                 (
-                  UPPER(COALESCE(%(school_code)s::text, '')) = 'LEAGUE'
+                  UPPER(COALESCE(%(school_code)s::text, '')) IN ('LEAGUE', 'INDY')
                   AND regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '\\s+', '', 'g') !~ '(bull|prac|bp)'
                 )
                 OR
                 (
-                  UPPER(COALESCE(%(school_code)s::text, '')) <> 'LEAGUE'
+                  UPPER(COALESCE(%(school_code)s::text, '')) NOT IN ('LEAGUE', 'INDY')
+                  AND regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '[^a-z0-9]', '', 'g') <> 'preseason'
                   AND (
                     (
                       """ + PITCHER_TEAM_IS_MARKER_SQL + """ AND
@@ -23440,12 +23483,12 @@ def pitching_overview(
             (
               %(session_type_filter)s::text = 'Live' AND (
                 (
-                  UPPER(COALESCE(%(school_code)s::text, '')) = 'LEAGUE'
+                  UPPER(COALESCE(%(school_code)s::text, '')) IN ('LEAGUE', 'INDY')
                   AND regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '\\s+', '', 'g') !~ '(bull|prac|bp)'
                 )
                 OR
                 (
-                  UPPER(COALESCE(%(school_code)s::text, '')) <> 'LEAGUE'
+                  UPPER(COALESCE(%(school_code)s::text, '')) NOT IN ('LEAGUE', 'INDY')
                   AND """ + PITCHER_TEAM_IS_MARKER_SQL + """ AND
                   """ + BATTER_TEAM_NORM_SQL + """ <> '' AND
                   (""" + BATTER_TEAM_IS_MARKER_SQL + """)
@@ -23461,7 +23504,7 @@ def pitching_overview(
               AND %(team_type)s::text = %(school_code)s::text
             ) OR
             (
-              UPPER(COALESCE(%(school_code)s::text, '')) = 'LEAGUE'
+              UPPER(COALESCE(%(school_code)s::text, '')) IN ('LEAGUE', 'INDY')
               AND %(team_type_norm)s::text <> ''
               AND """ + PITCHER_TEAM_NORM_SQL + """ = %(team_type_norm)s::text
             )
@@ -23486,7 +23529,7 @@ def pitching_overview(
             )
             OR
             (
-              UPPER(COALESCE(%(school_code)s::text, '')) <> 'LEAGUE' AND
+              UPPER(COALESCE(%(school_code)s::text, '')) NOT IN ('LEAGUE', 'INDY') AND
               %(team_type)s::text NOT IN ('Opponents', 'Campers', %(school_code)s::text) AND
               (""" + TEAM_BUCKET_SQL + """) = %(team_type)s::text
             )
@@ -25920,7 +25963,7 @@ def hitting_filters(
     level_options: List[str] = ["All"]
     try:
         with get_conn() as conn, conn.cursor() as cur:
-            if school_code == "LEAGUE":
+            if school_code in AGGREGATE_TEAM_SCHOOL_CODES:
                 cur.execute(
                     """
                     SELECT DISTINCT COALESCE(NULLIF(UPPER(TRIM(level_bucket)), ''), '') AS level_value
@@ -26070,7 +26113,7 @@ def hitting_filters(
         name for name in hitters
         if not allowed_hitter_keys or _normalize_name_key(name) in allowed_hitter_keys
     ]
-    if school_code not in {"LEAGUE", "PRO"}:
+    if school_code not in {*AGGREGATE_TEAM_SCHOOL_CODES, "PRO"}:
         hitters_by_team_code = _add_school_team_filter_keys(
             hitters_by_team_code,
             school_code=school_code,
@@ -26097,7 +26140,11 @@ def hitting_filters(
         "team_types": team_types,
         "hands": ["All", "Left", "Right"],
         "batter_sides": ["All", "Left", "Right"],
-        "session_types": ["All", "Batting Practice", "Game"],
+        "session_types": (
+            ["All", "Season", "Pre-Season"]
+            if school_code == "LI"
+            else (["All", "Season"] if school_code == "INDY" else ["All", "Batting Practice", "Game"])
+        ),
         "pitch_types": pitch_types,
         "zone_locations": ZONE_LOCATION_CHOICES,
         "in_zone_options": ["All", "Yes", "No", "Competitive"],
@@ -27110,7 +27157,7 @@ def hitting_overview(
         if venue_filter and not _venue_filter_match(row, venue_filter):
             continue
         if use_team_filter:
-            if school_code == "LEAGUE":
+            if school_code in AGGREGATE_TEAM_SCHOOL_CODES:
                 selected_code = _normalize_team_code(_league_team_code_from_value(team_type_value))
                 row_code = _normalize_team_code(str(row.get("batter_team_code") or ""))
                 if not selected_code or row_code != selected_code:
@@ -27647,17 +27694,27 @@ def catching_filters(
                       )
                     )
                     OR (
+                      %(session_type_filter)s::text = 'Pre-Season' AND
+                      regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '[^a-z0-9]', '', 'g') = 'preseason'
+                    )
+                    OR (
                       %(session_type_filter)s::text = 'Season' AND (
-                        (
-                          """ + PITCHER_TEAM_IS_MARKER_SQL + """ AND
-                          """ + BATTER_TEAM_NORM_SQL + """ <> '' AND
-                          NOT (""" + BATTER_TEAM_IS_MARKER_SQL + """)
-                        )
-                        OR
-                        (
-                          """ + BATTER_TEAM_IS_MARKER_SQL + """ AND
-                          """ + PITCHER_TEAM_NORM_SQL + """ <> '' AND
-                          NOT (""" + PITCHER_TEAM_IS_MARKER_SQL + """)
+                        regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '[^a-z0-9]', '', 'g') <> 'preseason'
+                        AND (
+                          UPPER(COALESCE(%(school_code)s::text, '')) = 'INDY'
+                          OR (
+                            (
+                              """ + PITCHER_TEAM_IS_MARKER_SQL + """ AND
+                              """ + BATTER_TEAM_NORM_SQL + """ <> '' AND
+                              NOT (""" + BATTER_TEAM_IS_MARKER_SQL + """)
+                            )
+                            OR
+                            (
+                              """ + BATTER_TEAM_IS_MARKER_SQL + """ AND
+                              """ + PITCHER_TEAM_NORM_SQL + """ <> '' AND
+                              NOT (""" + PITCHER_TEAM_IS_MARKER_SQL + """)
+                            )
+                          )
                         )
                       )
                     )
@@ -27697,7 +27754,7 @@ def catching_filters(
             )
             pitch_types = [str(row["pitch_type"]) for row in cur.fetchall() if str(row["pitch_type"]) != "Undefined"]
             team_types: List[str]
-            if school_code == "LEAGUE":
+            if school_code in AGGREGATE_TEAM_SCHOOL_CODES:
                 cur.execute(_league_team_codes_sql_expr(), {"school_code": school_code})
                 league_team_codes = [str(row["team_code"]) for row in cur.fetchall() if str(row.get("team_code") or "").strip()]
                 team_types = _league_team_types_from_codes(league_team_codes)
@@ -27732,7 +27789,7 @@ def catching_filters(
                 }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"catching filters query failed: {exc}") from exc
-    if school_code not in {"LEAGUE", "PRO"}:
+    if school_code not in {*AGGREGATE_TEAM_SCHOOL_CODES, "PRO"}:
         catchers_by_team_code = _add_school_team_filter_keys(
             catchers_by_team_code,
             school_code=school_code,
@@ -28311,7 +28368,7 @@ def catching_overview(
     for row in rows:
         row["_venue_context"] = "catching"
         if use_team_filter:
-            if school_code == "LEAGUE":
+            if school_code in AGGREGATE_TEAM_SCHOOL_CODES:
                 selected_code = _normalize_team_code(_league_team_code_from_value(team_type_value))
                 row_code = _normalize_team_code(str(row.get("pitcher_team_code") or ""))
                 if not selected_code or row_code != selected_code:

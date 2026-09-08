@@ -33,7 +33,7 @@ function applyPersonalSchoolOptionExclusions(email: string, codes: string[]): st
 }
 
 function withLeagueAndPro(values: Array<string | null | undefined>): string[] {
-  return Array.from(new Set([...values, 'LEAGUE', 'PRO'].filter(isNonEmptyString)));
+  return Array.from(new Set([...values, 'INDY', 'LEAGUE', 'PRO'].filter(isNonEmptyString)));
 }
 
 function parseOrgSchoolMap(raw: string): Record<number, string> {
@@ -89,6 +89,8 @@ function schoolFromOrganizationName(name: string | null | undefined): string | n
   if (upper.includes('UNIVERSITY OF NORTHWESTERN OHIO')) return 'UNOH';
   if (upper.includes('UNIVERSITY OF ARIZONA')) return 'ARIZONA';
   if (upper.includes('LAKE ERIE COLLEGE')) return 'LEC';
+  if (upper.includes('LONG ISLAND DUCKS')) return 'LI';
+  if (upper.includes('ATLANTIC LEAGUE')) return 'INDY';
   const compact = upper.replace(/[^A-Z0-9]/g, '');
   const allowed = resolveAllowedDashboardSchoolCodes();
   for (const school of allowed) {

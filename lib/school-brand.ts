@@ -162,6 +162,24 @@ const SCHOOL_BRANDS: Record<string, SchoolBrand> = {
     accentRgb: '4, 30, 66',
     accentRgbSecondary: '4, 30, 66',
   },
+  LI: {
+    schoolCode: 'LI',
+    logoSrc: '/long-island-ducks-logo.png',
+    logoAlt: 'Long Island Ducks',
+    accent: '#f47a38',
+    accentSoft: '#007348',
+    accentRgb: '244, 122, 56',
+    accentRgbSecondary: '0, 115, 72',
+  },
+  INDY: {
+    schoolCode: 'INDY',
+    logoSrc: '/atlantic-league-logo.webp',
+    logoAlt: 'Atlantic League Professional Baseball',
+    accent: '#c4002f',
+    accentSoft: '#062660',
+    accentRgb: '196, 0, 47',
+    accentRgbSecondary: '6, 38, 96',
+  },
 };
 
 export const SCHOOL_BRAND_CODES = Object.freeze(Object.keys(SCHOOL_BRANDS));

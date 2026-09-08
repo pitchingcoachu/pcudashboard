@@ -179,7 +179,7 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
     'Stuff+ Calculator': suite === 'Stuff+ Calculator',
     Flags: suite === 'Flags',
   }));
-  const isLeague = String(selectedSchoolCode || '').toUpperCase() === 'LEAGUE';
+  const isLeague = ['LEAGUE', 'INDY'].includes(String(selectedSchoolCode || '').toUpperCase());
   const isPro = String(selectedSchoolCode || '').toUpperCase() === 'PRO';
   const navSearchBorder = isPro
     ? '1px solid rgba(88, 132, 198, 0.62)'

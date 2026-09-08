@@ -37,6 +37,8 @@ export function loadRosterVectorsFromConfig(schoolCode: string): { allowedPitche
     HARVARD: `${bundledRoot}/dashboard_api/config/schools/HARVARD/school_config.R`,
     ARIZONA: `${bundledRoot}/dashboard_api/config/schools/ARIZONA/school_config.R`,
     PRO: `${bundledRoot}/dashboard_api/config/schools/PRO/school_config.R`,
+    LI: `${bundledRoot}/dashboard_api/config/schools/LI/school_config.R`,
+    INDY: `${bundledRoot}/dashboard_api/config/schools/INDY/school_config.R`,
   };
   const configPath = envPath || defaultPathBySchool[upper] || '';
   if (!configPath || !fs.existsSync(configPath)) return null;

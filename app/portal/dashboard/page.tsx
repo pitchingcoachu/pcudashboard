@@ -91,7 +91,7 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
   ]);
 
   const isProSchool = String(selectedSchool ?? '').trim().toUpperCase() === 'PRO';
-  const isLeagueSchool = String(selectedSchool ?? '').trim().toUpperCase() === 'LEAGUE';
+  const isLeagueSchool = ['LEAGUE', 'INDY'].includes(String(selectedSchool ?? '').trim().toUpperCase());
   const isTrialSchool = String(selectedSchool ?? '').trim().toUpperCase() === 'TRIAL';
   const isStaff = session.role === 'admin' || session.role === 'coach';
   const canAccessPlayerNotes = isStaff && !isLeagueSchool;

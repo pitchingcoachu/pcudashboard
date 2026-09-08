@@ -5592,9 +5592,13 @@ export default function PitchingSuite({
     };
   }, []);
 
+  const isIndy =
+    String(selectedSchoolCode ?? '').toUpperCase() === 'INDY' ||
+    String(filters?.school_code ?? '').toUpperCase() === 'INDY';
   const isLeague =
     String(selectedSchoolCode ?? '').toUpperCase() === 'LEAGUE' ||
-    String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
+    String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE' ||
+    isIndy;
   const isPro =
     String(selectedSchoolCode ?? '').toUpperCase() === 'PRO' ||
     String(selectedSchoolCode ?? '').toUpperCase() === 'MLB' ||
@@ -6012,9 +6016,11 @@ export default function PitchingSuite({
       const latestDate = clampYmdToToday(playerLastDate || (payload.max_date ?? payload.min_date ?? ''));
       const nextDate = latestDate || toYmdNow();
       const minDate = payload.min_date ?? '';
-      const isLeagueSchool = String(payload.school_code ?? '').toUpperCase() === 'LEAGUE';
+      const payloadSchoolCode = String(payload.school_code ?? '').toUpperCase();
+      const isLeagueSchool = payloadSchoolCode === 'LEAGUE';
+      const isIndySchool = payloadSchoolCode === 'INDY';
       const isProSchool = String(payload.school_code ?? '').toUpperCase() === 'PRO';
-      if (isPlayerRole && !isLeagueSchool && !isProSchool) {
+      if (isPlayerRole && !isLeagueSchool && !isIndySchool && !isProSchool) {
         const schoolCode = String(payload.school_code ?? '').trim().toUpperCase();
         if (schoolCode === 'PCU') {
           setStartDate(nextDate);
@@ -6025,6 +6031,9 @@ export default function PitchingSuite({
         const seasonStart = minDate && minDate > defaultSeasonStart ? minDate : defaultSeasonStart;
         setStartDate(seasonStart);
         setEndDate(nextDate || seasonStart);
+      } else if (isIndySchool) {
+        setStartDate(minDate || nextDate);
+        setEndDate(nextDate || minDate);
       } else if (isLeagueSchool) {
         const leagueStart = minDate && minDate > LEAGUE_SEASON_START ? minDate : LEAGUE_SEASON_START;
         if (level === 'D1') {
@@ -6094,11 +6103,15 @@ export default function PitchingSuite({
 
   useEffect(() => {
     if (isPro || !isLeague) return;
+    if (isIndy) {
+      if (level !== 'All') setLevel('All');
+      return;
+    }
     const options = collegeLevelPercentileOptions.length ? collegeLevelPercentileOptions : NCAA_LEVEL_FILTER_OPTIONS;
     const nextDefault = options.includes('D1') ? 'D1' : (options[0] ?? 'All');
     const isProOnlyLevel = level === 'MLB' || level === 'AAA';
     if (!level || isProOnlyLevel || !options.includes(level)) setLevel(nextDefault);
-  }, [collegeLevelPercentileOptions, isPro, isLeague, level]);
+  }, [collegeLevelPercentileOptions, isPro, isLeague, isIndy, level]);
 
   useEffect(() => {
     if (isPro) return;
@@ -14882,7 +14895,7 @@ export default function PitchingSuite({
                     placeholder="All"
                   />
                 </label>
-                {isPro || isLeague ? (
+                {isPro || (isLeague && !isIndy) ? (
                   <label>
                     Level
                     <SearchableSingleSelect

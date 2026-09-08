@@ -13,6 +13,8 @@ function formatSchoolCodeLabel(schoolCode: string): string {
   const code = String(schoolCode ?? '').trim().toUpperCase();
   if (code === 'PRO') return 'MLB';
   if (code === 'LEAGUE') return 'NCAA';
+  if (code === 'LI') return 'Long Island Ducks';
+  if (code === 'INDY') return 'Atlantic League';
   return code;
 }
 

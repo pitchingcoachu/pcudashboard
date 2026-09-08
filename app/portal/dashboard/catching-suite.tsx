@@ -503,7 +503,9 @@ export default function CatchingSuite() {
   const overviewInflightRef = useRef(new Map<string, Promise<CatchingOverviewPayload>>());
   const isLeaderboardPage = page === 'Leaderboard';
   const effectiveSplitBy = isLeaderboardPage ? (leaderboardViewBy === 'Team' ? 'Pitcher Team' : 'Catcher') : splitBy;
-  const isLeague = String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
+  const effectiveSchoolCode = String(filters?.school_code ?? '').toUpperCase();
+  const isIndy = effectiveSchoolCode === 'INDY';
+  const isLeague = effectiveSchoolCode === 'LEAGUE' || isIndy;
   const isPro = String(filters?.school_code ?? '').toUpperCase() === 'PRO';
   const activeSchoolBrand = useMemo(
     () => resolveSchoolBrand(String(filters?.school_code ?? 'PCU')),
@@ -559,8 +561,13 @@ export default function CatchingSuite() {
         const latest = clampYmdToToday(payload.max_date ?? payload.min_date ?? '');
         const nextDate = latest || toYmdNow();
         const minDate = payload.min_date ?? '';
-        const isLeagueSchool = String(payload.school_code ?? '').toUpperCase() === 'LEAGUE';
-        if (isLeagueSchool) {
+        const payloadSchoolCode = String(payload.school_code ?? '').toUpperCase();
+        const isLeagueSchool = payloadSchoolCode === 'LEAGUE';
+        const isIndySchool = payloadSchoolCode === 'INDY';
+        if (isIndySchool) {
+          setDateStart(minDate || nextDate);
+          setDateEnd(nextDate || minDate);
+        } else if (isLeagueSchool) {
           const leagueStart = minDate && minDate > LEAGUE_SEASON_START ? minDate : LEAGUE_SEASON_START;
           setDateStart(leagueStart);
           setDateEnd(nextDate || leagueStart);
@@ -590,10 +597,14 @@ export default function CatchingSuite() {
 
   useEffect(() => {
     if (!isLeague) return;
+    if (isIndy) {
+      if (level !== 'All') setLevel('All');
+      return;
+    }
     const options = Array.from(new Set([...(filters?.level_options ?? []), ...NCAA_LEVEL_FILTER_OPTIONS]));
     const nextDefault = options.includes('D1') ? 'D1' : (options[0] ?? 'All');
     if (!level || PRO_LEVEL_FILTER_OPTIONS.includes(level) || !options.includes(level)) setLevel(nextDefault);
-  }, [filters?.level_options, isLeague, level]);
+  }, [filters?.level_options, isLeague, isIndy, level]);
 
   useEffect(() => {
     if (!dateStart && !dateEnd) return;
@@ -1221,7 +1232,7 @@ export default function CatchingSuite() {
                   onChange={setSelectedGroupIds}
                   onMemberNamesChange={setGroupPlayerNames}
                 />
-                {isPro || isLeague ? (
+                {isPro || (isLeague && !isIndy) ? (
                   <label>
                     Level
                     <SearchableSingleSelect
@@ -1235,7 +1246,16 @@ export default function CatchingSuite() {
                 {!isPro && !isLeague ? (
                   <label>
                     Session Type
-                    <SearchableSingleSelect options={toOptions(withAll(['Season', 'Bullpen', 'Live BP']))} value={sessionType} onChange={setSessionType} placeholder="All" />
+                    <SearchableSingleSelect
+                      options={toOptions(withAll(
+                        String(filters?.school_code ?? '').toUpperCase() === 'LI'
+                          ? ['Season', 'Pre-Season']
+                          : ['Season', 'Bullpen', 'Live BP']
+                      ))}
+                      value={sessionType}
+                      onChange={setSessionType}
+                      placeholder="All"
+                    />
                   </label>
                 ) : null}
                 <label>
