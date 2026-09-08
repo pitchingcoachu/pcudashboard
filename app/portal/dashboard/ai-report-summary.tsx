@@ -10,6 +10,14 @@ function shiftDate(value: string, days: number): string {
   return date.toISOString().slice(0, 10);
 }
 
+function cleanNarrative(value: unknown): string {
+  const lines = String(value ?? '').replace(/\r\n/g, '\n').split('\n');
+  while (lines.length && !lines[0].trim()) lines.shift();
+  if (lines[0] && /^(?:#+\s*)?.{0,100}\bsummary\b(?:\s*[-—:].*)?$/i.test(lines[0].trim())) lines.shift();
+  while (lines.length && (!lines[0].trim() || /^(?:session|reference window|comparison window)\s*:/i.test(lines[0].trim()))) lines.shift();
+  return lines.join('\n').trim();
+}
+
 type AiReportSummaryProps = {
   reportType: string;
   title: string;
@@ -54,14 +62,38 @@ export default function AiReportSummary({ reportType, title, reportStart, report
         tableRows: comparisonPayload.table_rows,
         chartPoints: comparisonPayload.chart_points?.slice?.(0, 500),
       };
+      let mlbBenchmark: unknown = null;
+      if (domain === 'pitching' || domain === 'hitting') {
+        try {
+          const benchmarkParams = new URLSearchParams(params);
+          benchmarkParams.delete('pitcher');
+          benchmarkParams.delete('hitter');
+          benchmarkParams.delete('catcher');
+          benchmarkParams.delete('start_date');
+          benchmarkParams.delete('end_date');
+          benchmarkParams.set('percentile_baseline', '1');
+          benchmarkParams.set('percentile_pool', 'mlb');
+          benchmarkParams.set('include_chart_points', '0');
+          const benchmarkResponse = await fetch(`/api/dashboard/${domain}/overview?${benchmarkParams.toString()}`, { cache: 'no-store' });
+          const benchmarkPayload = await benchmarkResponse.json();
+          if (benchmarkResponse.ok) {
+            mlbBenchmark = {
+              tableColumns: benchmarkPayload.table_columns,
+              tableRows: benchmarkPayload.table_rows,
+            };
+          }
+        } catch {
+          mlbBenchmark = null;
+        }
+      }
       const response = await fetch('/api/ai/report-summary', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reportType, title, reportStart, reportEnd, comparisonStart, comparisonEnd, data: { currentReport: data, comparisonReport: comparisonData } }),
+        body: JSON.stringify({ reportType, title, reportStart, reportEnd, comparisonStart, comparisonEnd, data: { currentReport: data, playerReference: comparisonData, mlbBenchmark } }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || 'Could not generate summary.');
-      setSummary(payload.summary ?? '');
+      setSummary(cleanNarrative(payload.summary));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not generate summary.');
     } finally {
