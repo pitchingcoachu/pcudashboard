@@ -4385,7 +4385,7 @@ body.theme-light .portal-option-email {
 
 .portal-custom-reports-sidebar {
   gap: 0.45rem;
-  width: 100%;
+  width: auto;
   height: 100%;
   min-width: 0;
   max-width: 100%;
@@ -4396,9 +4396,11 @@ body.theme-light .portal-option-email {
 }
 
 .portal-custom-reports-sidebar > .btn {
-  width: 100%;
+  width: auto;
   max-width: 100%;
   box-sizing: border-box;
+  justify-self: stretch;
+  margin-inline: 0;
 }
 
 .portal-custom-reports-sidebar h3 {
@@ -4438,8 +4440,9 @@ body.theme-light .portal-option-email {
 }
 
 .portal-custom-reports-toggle-list .portal-color-toggle {
-  justify-content: flex-start;
-  width: fit-content;
+  justify-content: space-between;
+  width: min(11rem, 100%);
+  box-sizing: border-box;
 }
 
 .portal-custom-reports-global-dates {
@@ -4867,7 +4870,32 @@ body.theme-light .portal-option-email {
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  gap: 0.45rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 0.6rem;
+  row-gap: 0.45rem;
+}
+
+.portal-custom-reports-sidebar .portal-form-grid > *,
+.portal-custom-reports-sidebar .portal-form-grid label > * {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.portal-custom-reports-sidebar .portal-form-grid input,
+.portal-custom-reports-sidebar .portal-form-grid textarea,
+.portal-custom-reports-sidebar .portal-form-grid select,
+.portal-custom-reports-sidebar .portal-form-grid .portal-search-select-trigger {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+@media (max-width: 1120px) {
+  .portal-custom-reports-sidebar .portal-form-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .portal-custom-reports-legend {
