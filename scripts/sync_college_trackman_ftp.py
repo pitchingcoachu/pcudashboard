@@ -359,6 +359,7 @@ def database_columns(conn: psycopg.Connection) -> dict[str, str]:
 
 
 def ensure_trackman_spin_columns(conn: psycopg.Connection) -> None:
+    conn.execute("ALTER TABLE public.pitch_events ADD COLUMN IF NOT EXISTS autopitchtype TEXT")
     for column in TRACKMAN_SPIN_COLUMNS:
         conn.execute(
             sql.SQL("ALTER TABLE public.pitch_events ADD COLUMN IF NOT EXISTS {} TEXT").format(

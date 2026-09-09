@@ -15989,29 +15989,51 @@ def _kick_modifications_sync_background(school_code: str) -> None:
             _MOD_SYNC_REFRESH_RUNNING.discard(normalized_school)
 
 
+PITCH_TYPE_SOURCE_SQL = """
+COALESCE(
+  NULLIF(
+    CASE
+      WHEN regexp_replace(lower(COALESCE(TRIM(taggedpitchtype), '')), '[^a-z0-9]', '', 'g')
+           IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null') THEN ''
+      ELSE TRIM(taggedpitchtype)
+    END,
+    ''
+  ),
+  NULLIF(
+    CASE
+      WHEN regexp_replace(lower(COALESCE(TRIM(autopitchtype), '')), '[^a-z0-9]', '', 'g')
+           IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null') THEN ''
+      ELSE TRIM(autopitchtype)
+    END,
+    ''
+  ),
+  ''
+)
+""".strip()
+
 PITCH_TYPE_NORMALIZE_SQL = """
 CASE
-  WHEN regexp_replace(lower(COALESCE(TRIM(taggedpitchtype), '')), '[^a-z0-9]', '', 'g')
+  WHEN regexp_replace(lower(""" + PITCH_TYPE_SOURCE_SQL + """), '[^a-z0-9]', '', 'g')
        IN ('', 'unknown', 'undefined', 'other') THEN 'Undefined'
-  WHEN regexp_replace(lower(COALESCE(TRIM(taggedpitchtype), '')), '[^a-z0-9]', '', 'g')
-       IN ('fastball', 'fourseamfastball', 'ff', 'fa') THEN 'Fastball'
-  WHEN regexp_replace(lower(COALESCE(TRIM(taggedpitchtype), '')), '[^a-z0-9]', '', 'g')
+  WHEN regexp_replace(lower(""" + PITCH_TYPE_SOURCE_SQL + """), '[^a-z0-9]', '', 'g')
+       IN ('fastball', 'fourseam', 'fourseamfastball', '4seamfastball', 'ff', 'fa') THEN 'Fastball'
+  WHEN regexp_replace(lower(""" + PITCH_TYPE_SOURCE_SQL + """), '[^a-z0-9]', '', 'g')
        IN ('sinker', 'oneseamfastball', 'twoseamfastball', 'twoseamfasball', 'si', 'ft') THEN 'Sinker'
-  WHEN regexp_replace(lower(COALESCE(TRIM(taggedpitchtype), '')), '[^a-z0-9]', '', 'g')
+  WHEN regexp_replace(lower(""" + PITCH_TYPE_SOURCE_SQL + """), '[^a-z0-9]', '', 'g')
        IN ('changeup', 'ch') THEN 'ChangeUp'
-  WHEN regexp_replace(lower(COALESCE(TRIM(taggedpitchtype), '')), '[^a-z0-9]', '', 'g')
+  WHEN regexp_replace(lower(""" + PITCH_TYPE_SOURCE_SQL + """), '[^a-z0-9]', '', 'g')
        IN ('sweeper', 'st') THEN 'Sweeper'
-  WHEN regexp_replace(lower(COALESCE(TRIM(taggedpitchtype), '')), '[^a-z0-9]', '', 'g')
+  WHEN regexp_replace(lower(""" + PITCH_TYPE_SOURCE_SQL + """), '[^a-z0-9]', '', 'g')
        IN ('splitter', 'splitfinger', 'splitfingerfastball', 'sp', 'fs') THEN 'Splitter'
-  WHEN regexp_replace(lower(COALESCE(TRIM(taggedpitchtype), '')), '[^a-z0-9]', '', 'g')
+  WHEN regexp_replace(lower(""" + PITCH_TYPE_SOURCE_SQL + """), '[^a-z0-9]', '', 'g')
        IN ('curveball', 'cu', 'knucklecurve', 'kc') THEN 'Curveball'
-  WHEN regexp_replace(lower(COALESCE(TRIM(taggedpitchtype), '')), '[^a-z0-9]', '', 'g')
+  WHEN regexp_replace(lower(""" + PITCH_TYPE_SOURCE_SQL + """), '[^a-z0-9]', '', 'g')
        IN ('cutter', 'fc') THEN 'Cutter'
-  WHEN regexp_replace(lower(COALESCE(TRIM(taggedpitchtype), '')), '[^a-z0-9]', '', 'g')
+  WHEN regexp_replace(lower(""" + PITCH_TYPE_SOURCE_SQL + """), '[^a-z0-9]', '', 'g')
        IN ('slider', 'sl') THEN 'Slider'
-  WHEN regexp_replace(lower(COALESCE(TRIM(taggedpitchtype), '')), '[^a-z0-9]', '', 'g')
+  WHEN regexp_replace(lower(""" + PITCH_TYPE_SOURCE_SQL + """), '[^a-z0-9]', '', 'g')
        IN ('knuckleball', 'kn') THEN 'Knuckleball'
-  ELSE COALESCE(NULLIF(TRIM(taggedpitchtype), ''), 'Undefined')
+  ELSE COALESCE(NULLIF(TRIM(""" + PITCH_TYPE_SOURCE_SQL + """), ''), 'Undefined')
 END
 """
 

@@ -5139,6 +5139,7 @@ export default function PitchingSuite({
   const [gameLogColumns, setGameLogColumns] = useState<string[]>([]);
   const [gameLogRowPitches, setGameLogRowPitches] = useState<Record<string, PitchActionPoint[]>>({});
   const [loadingGameLog, setLoadingGameLog] = useState(false);
+  const [loadingGameLogVideoKey, setLoadingGameLogVideoKey] = useState('');
   const [gameLogError, setGameLogError] = useState('');
   const [gameLogSortColumn, setGameLogSortColumn] = useState('Date');
   const [gameLogSortDirection, setGameLogSortDirection] = useState<SortDirection>('desc');
@@ -5151,6 +5152,7 @@ export default function PitchingSuite({
   const [pitchLogSortDirection, setPitchLogSortDirection] = useState<SortDirection>('desc');
   const [pinnedPitchLogKeys, setPinnedPitchLogKeys] = useState<Set<string>>(new Set());
   const pitchLogDefaultTableAppliedRef = useRef(false);
+  const gameLogRequestParamsRef = useRef('');
   const autoFallbackAppliedRef = useRef(false);
   const filtersCacheRef = useRef(new Map<string, { at: number; payload: FiltersPayload }>());
   const overviewCacheRef = useRef(new Map<string, { at: number; payload: OverviewPayload }>());
@@ -7443,6 +7445,7 @@ export default function PitchingSuite({
       setGameLogRows([]);
       setGameLogColumns([]);
       setGameLogRowPitches({});
+      gameLogRequestParamsRef.current = '';
       setGameLogError('');
       setLoadingGameLog(false);
       return;
@@ -7489,7 +7492,12 @@ export default function PitchingSuite({
       if (pitchersParam) params.set('pitcher', pitchersParam);
       if (hittersParam) params.set('opp_hitter', hittersParam);
       if (pitchTypesParam) params.set('pitch_types', pitchTypesParam);
-      if (!isPro && !isLeague && ballTypesParam) params.set('ball_types', ballTypesParam);
+      // LI/INDY game rollups contain TrackMan game baseballs only. Sending
+      // the default Baseball filter needlessly bypasses their rollup and
+      // forces a full raw-table scan for the season Game Log.
+      if (!isPro && !isLeague && !['LI', 'INDY'].includes(schoolCode) && ballTypesParam) {
+        params.set('ball_types', ballTypesParam);
+      }
       if (zoneParam) params.set('zone_locations', zoneParam);
       if (resultsParam) params.set('pitch_results', resultsParam);
       if (countParam) params.set('count_filter', countParam);
@@ -7509,9 +7517,13 @@ export default function PitchingSuite({
       if (ipMax) params.set('ip_max', ipMax);
       params.set('include_chart_points', isPcuBullpenSelection ? '1' : '0');
       if (isPcuBullpenSelection) params.set('chart_points_limit', '9000');
-      params.set('include_row_pitches', '1');
+      // Load aggregate game rows first. A full-season LI/INDY pitch/video
+      // payload exceeds 30 MB, so fetch only the selected game's pitches
+      // when its pitch count is clicked.
+      params.set('include_row_pitches', '0');
       params.set('include_trend_rows', '0');
       if (isPcuBullpenSelection) params.set('force_raw', '1');
+      gameLogRequestParamsRef.current = params.toString();
       const response = await fetch(`/api/dashboard/pitching/overview?${params.toString()}`, {
         signal: controller.signal,
         cache: 'no-store',
@@ -8578,6 +8590,62 @@ export default function PitchingSuite({
     setActionPitches(refreshed);
     setActionVideoLookupLoading(false);
     setActionVideoRefreshNonce((value) => value + 1);
+  };
+
+  const openGameLogVideoQueue = async (
+    row: Record<string, unknown>,
+    gameRowKey: string,
+    currentPitches: PitchActionPoint[]
+  ) => {
+    if (currentPitches.length) {
+      await openActionModal(sortPitchesChronologically(currentPitches));
+      return;
+    }
+    const requestTemplate = gameLogRequestParamsRef.current;
+    const gameDate = String(row.Date ?? '').trim();
+    if (!requestTemplate || !gameRowKey || !/^\d{4}-\d{2}-\d{2}$/.test(gameDate)) return;
+
+    setLoadingGameLogVideoKey(gameRowKey);
+    try {
+      const params = new URLSearchParams(requestTemplate);
+      params.set('start_date', gameDate);
+      params.set('end_date', gameDate);
+      params.set('split_by', 'Game');
+      params.set('include_chart_points', '0');
+      params.set('include_row_pitches', '1');
+      params.set('include_trend_rows', '0');
+      const response = await fetch(`/api/dashboard/pitching/overview?${params.toString()}`, { cache: 'no-store' });
+      const payload = (await response.json().catch(() => ({}))) as OverviewPayload & { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to load pitches for this game.');
+
+      const pitchMap = (payload.row_pitches_by_key ?? {}) as Record<string, PitchActionPoint[]>;
+      let pitches = Array.isArray(pitchMap[gameRowKey]) ? pitchMap[gameRowKey] : [];
+      if (!pitches.length) {
+        const target = parseGameSplitToken(gameRowKey);
+        const canonicalTeamToken = (value: unknown): string => {
+          const raw = String(value ?? '').trim();
+          return normalizeLeagueTeamToken(resolveLeagueTeamCodeFromValue(raw) || raw);
+        };
+        const targetTeam = canonicalTeamToken(row.Team ?? target.team ?? '');
+        const targetOpponent = canonicalTeamToken(row.Opponent ?? target.opponent ?? '');
+        const match = Object.entries(pitchMap).find(([candidateKey]) => {
+          const candidate = parseGameSplitToken(candidateKey);
+          return candidate.date === gameDate
+            && canonicalTeamToken(candidate.team) === targetTeam
+            && canonicalTeamToken(candidate.opponent) === targetOpponent
+            && (!target.gameKey || target.gameKey === '-' || candidate.gameKey === target.gameKey);
+        });
+        pitches = match?.[1] ?? [];
+      }
+      if (!pitches.length) return;
+      const sorted = sortPitchesChronologically(pitches);
+      setGameLogRowPitches((current) => ({ ...current, [gameRowKey]: sorted }));
+      await openActionModal(sorted);
+    } catch (error) {
+      console.error('[dashboard][game-log] failed to load game pitches', error);
+    } finally {
+      setLoadingGameLogVideoKey((current) => (current === gameRowKey ? '' : current));
+    }
   };
 
   useEffect(() => {
@@ -16635,7 +16703,12 @@ export default function PitchingSuite({
                             // API split column).
                             const gameRowKey = String(row._game_split_key ?? '');
                             const gameRowPitches = gameRowKey ? (gameLogRowPitches[gameRowKey] ?? []) : [];
-                            const canOpenGameVideo = column === '#' && !isSummaryRow && gameRowPitches.length > 0;
+                            const gamePitchCount = Number(row['#'] ?? row.P ?? 0);
+                            const canOpenGameVideo = column === '#'
+                              && !isSummaryRow
+                              && gameRowKey.length > 0
+                              && (gameRowPitches.length > 0 || (Number.isFinite(gamePitchCount) && gamePitchCount > 0));
+                            const isLoadingGameVideo = canOpenGameVideo && loadingGameLogVideoKey === gameRowKey;
                             const percentileValue = getCellPercentile(
                               row as Record<string, string | number | null>,
                               column,
@@ -16670,10 +16743,13 @@ export default function PitchingSuite({
                                   textAlign: 'center',
                                   background: gameLogSortColumn === column ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : undefined,
                                   color: gameLogSortColumn === column ? '#fff' : undefined,
-                                  cursor: canOpenGameVideo ? 'pointer' : undefined,
+                                  cursor: isLoadingGameVideo ? 'wait' : (canOpenGameVideo ? 'pointer' : undefined),
                                   textDecoration: canOpenGameVideo ? 'underline' : undefined,
                                 }}
-                                onClick={canOpenGameVideo ? () => void openActionModal(sortPitchesChronologically(gameRowPitches)) : undefined}
+                                title={isLoadingGameVideo ? 'Loading pitches…' : (canOpenGameVideo ? 'Open game pitches' : undefined)}
+                                onClick={canOpenGameVideo && !isLoadingGameVideo
+                                  ? () => void openGameLogVideoQueue(row, gameRowKey, gameRowPitches)
+                                  : undefined}
                               >
                                 {column === 'Team' && isPro && !isSummaryRow ? (
                                   (() => {
