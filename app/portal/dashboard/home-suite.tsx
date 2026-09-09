@@ -210,7 +210,8 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
   const isArizonaSchool = normalizedSchoolCode === 'ARIZONA';
   const isLeagueSchool = normalizedSchoolCode === 'LEAGUE';
   const isIndySchool = normalizedSchoolCode === 'INDY';
-  const isHeavySchool = isProSchool || isLeagueSchool || isIndySchool;
+  const isLongIslandSchool = normalizedSchoolCode === 'LI';
+  const isHeavySchool = isProSchool || isLeagueSchool || isIndySchool || isLongIslandSchool;
   const shouldLoadAlerts = !isHeavySchool && role !== 'player';
   const homeSearchBorder = isProSchool
     ? '1px solid rgba(88, 132, 198, 0.62)'
@@ -476,7 +477,7 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
   function resolveHeavyLeaderboardWindow(): { startDate: string; endDate: string } {
     const endDate = todayYmd();
     if (isProSchool) return { startDate: '2026-03-25', endDate };
-    if (isIndySchool) return { startDate: '2026-04-21', endDate };
+    if (isLongIslandSchool || isIndySchool) return { startDate: '2026-04-01', endDate };
     if (isLeagueSchool) return { startDate: '2026-02-13', endDate: '2026-06-22' };
     return { startDate: '2026-02-13', endDate };
   }

@@ -1,0 +1,15 @@
+.player{display:grid;gap:10px;width:100%}
+.stage{position:relative;display:grid;width:100%;place-items:center;overflow:hidden;border:1px solid rgba(var(--portal-accent-rgb,200,16,46),.3);border-radius:14px;background:radial-gradient(circle at 50% 15%,rgba(var(--portal-accent-rgb,200,16,46),.16),transparent 42%),#050505;box-shadow:inset 0 0 0 1px rgba(255,255,255,.025)}
+.landscape{aspect-ratio:16/9}
+.portrait{width:min(100%,430px);max-height:72vh;aspect-ratio:9/16;justify-self:center}
+.social{width:min(100%,600px);height:min(72vh,700px);justify-self:center}
+.media{display:block;width:100%;height:100%;border:0;background:#000;object-fit:contain}
+.fallback{display:grid;min-height:260px;place-content:center;gap:9px;padding:28px;text-align:center}
+.fallback strong{font-size:1.05rem;color:var(--text-main,#fff)}
+.fallback span{max-width:460px;color:var(--text-muted,#aaa);font-size:.82rem;line-height:1.55}
+.bar{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:38px}
+.provider{display:inline-flex;align-items:center;gap:8px;color:var(--text-muted,#aaa);font-size:.72rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
+.provider::before{width:7px;height:7px;border-radius:50%;background:rgb(var(--portal-accent-rgb,200,16,46));box-shadow:0 0 12px rgba(var(--portal-accent-rgb,200,16,46),.7);content:''}
+.external{display:inline-flex;align-items:center;justify-content:center;min-height:36px;padding:8px 13px;border:1px solid rgba(var(--portal-accent-rgb,200,16,46),.55);border-radius:9px;background:rgba(var(--portal-accent-rgb,200,16,46),.1);color:var(--text-main,#fff);font-size:.76rem;font-weight:850;text-decoration:none;transition:background .16s ease,border-color .16s ease,transform .16s ease}
+.external:hover{border-color:rgb(var(--portal-accent-rgb,200,16,46));background:rgba(var(--portal-accent-rgb,200,16,46),.2);transform:translateY(-1px)}
+@media(max-width:640px){.stage{border-radius:10px}.portrait{width:min(100%,390px);max-height:68vh}.social{height:min(68vh,620px)}.bar{align-items:stretch;flex-direction:column}.external{width:100%}}

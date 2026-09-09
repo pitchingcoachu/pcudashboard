@@ -20,6 +20,7 @@ type PlayerPlanNote = {
   attachmentMimeType: string | null;
   attachmentDataUrl: string | null;
   playerVisible?: boolean;
+  isPinned?: boolean;
   createdAt: string;
 };
 
@@ -666,6 +667,28 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
     }
   }
 
+  // Pinning only applies to notes tied to a real linked player (player_plan_notes);
+  // roster-only unlinked players (dashboardPlayerName, no playerId) don't support it.
+  async function togglePin(note: PlayerPlanNote) {
+    if (!note.playerId || note.playerId <= 0) return;
+    setMessage('');
+    const nextPinned = !note.isPinned;
+    try {
+      const response = await fetch('/api/player/plan-notes', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'setPinned', noteId: note.id, playerId: note.playerId, isPinned: nextPinned }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to update pin.');
+      setNotes((current) =>
+        current.map((item) => (item.id === note.id && Number(item.playerId ?? 0) === Number(note.playerId ?? 0) ? { ...item, isPinned: nextPinned } : item))
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to update pin.');
+    }
+  }
+
   const filteredNotes = useMemo(() => {
     const query = searchText.trim().toLowerCase();
     const startDate = normalizeDateOnly(filterStartDate);
@@ -681,9 +704,19 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
     });
   }, [notes, filterCategory, filterStartDate, filterEndDate, searchText]);
 
+  // Pinned notes surface in their own section above the date groups, rather
+  // than staying buried in whichever date group they happen to fall in --
+  // otherwise "pin to top" wouldn't actually move a note to the top of a
+  // date-grouped view the way it does in the flat player-own-notes list.
+  const pinnedNotes = useMemo(
+    () => filteredNotes.filter((note) => note.isPinned).sort((a, b) => b.noteDate.localeCompare(a.noteDate)),
+    [filteredNotes]
+  );
+
   const notesByDate = useMemo(() => {
     const grouped = new Map<string, PlayerPlanNote[]>();
     for (const note of filteredNotes) {
+      if (note.isPinned) continue;
       if (!grouped.has(note.noteDate)) grouped.set(note.noteDate, []);
       grouped.get(note.noteDate)?.push(note);
     }
@@ -913,6 +946,153 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
   ];
   const previewIndex = mediaPreview ? mediaGalleryItems.findIndex((item) => item.id === mediaPreview.id) : -1;
   const openMediaGalleryItem = (item: MediaGalleryItem) => setMediaPreview(item);
+
+  // Shared by both the pinned-notes section and the date-grouped list below,
+  // so pinning/editing/deleting/attachments behave identically wherever the
+  // card is shown.
+  function renderNoteCard(note: PlayerPlanNote) {
+    const canPin = Boolean(note.playerId && note.playerId > 0);
+    return (
+      <article
+        key={`note-${note.playerId ?? 'dashboard'}-${note.id}`}
+        style={{
+          border: note.isPinned ? '1px solid rgba(250, 204, 21, 0.45)' : '1px solid rgba(255,255,255,0.12)',
+          borderRadius: 10,
+          padding: 10,
+          background: 'rgba(0,0,0,0.16)',
+        }}
+      >
+        <div className="portal-row-between" style={{ alignItems: 'center', gap: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            {note.isPinned ? <span aria-label="Pinned" title="Pinned">📌</span> : null}
+            {selectedPlayerName === 'All' ? (
+              <span style={{ fontSize: 15, fontWeight: 700, color: '#e2e8f0' }}>
+                {formatNameFirstLast(note.dashboardPlayerName ?? '')}
+              </span>
+            ) : null}
+            <span style={{ ...categoryBadgeStyle(note.category), borderRadius: 999, padding: '2px 8px', fontSize: 12, fontWeight: 700 }}>
+              {note.category}
+            </span>
+          </div>
+          {parseNoteAttachments(note).length > 0 ? (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {parseNoteAttachments(note).map((attachment, idx) => (
+                <button
+                  key={`att-${note.id}-${idx}`}
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => {
+                    if (attachment.mediaId) {
+                      const item = mediaGalleryItems.find((entry) => entry.id === `player-${attachment.mediaId}`);
+                      if (item) {
+                        openMediaGalleryItem(item);
+                        return;
+                      }
+                    }
+                    if (attachment.mimeType.startsWith('image/') || attachment.mimeType.startsWith('video/') || attachment.mimeType === 'application/pdf') {
+                      const galleryId = `note-${note.id}-${idx}`;
+                      const item = mediaGalleryItems.find((entry) => entry.id === galleryId);
+                      openMediaGalleryItem(item ?? {
+                        id: galleryId,
+                        title: attachment.name,
+                        url: attachment.dataUrl,
+                        mimeType: attachment.mimeType,
+                        downloadName: attachment.name,
+                        initialAnnotations: attachment.breakdownAnnotations ?? [],
+                        saveAnnotations: attachment.mimeType === 'application/pdf' ? undefined : (annotations) => saveNoteAttachmentBreakdownAnnotations(note, idx, annotations),
+                      });
+                      return;
+                    }
+                    setAttachmentPreview(attachment);
+                  }}
+                >
+                  {parseNoteAttachments(note).length > 1 ? `Attachment ${idx + 1}` : 'Open Attachment'}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+        {editingNoteId === note.id ? (
+          <textarea
+            rows={5}
+            value={editingText}
+            onChange={(event) => setEditingText(event.target.value)}
+            style={{
+              marginTop: 12,
+              marginBottom: 18,
+              color: '#ffffff',
+              width: '100%',
+              background: 'transparent',
+              border: '1px solid rgba(255,255,255,0.2)',
+              borderRadius: 8,
+              padding: 8,
+              fontSize: 16,
+              lineHeight: 1.45,
+            }}
+          />
+        ) : (
+          <p style={{ margin: '12px 0 18px 0', whiteSpace: 'pre-wrap', color: '#ffffff' }}>{note.noteText}</p>
+        )}
+        {editingNoteId === note.id ? (
+          <label className="portal-inline-filter" style={{ marginTop: 4 }}>
+            <input
+              type="checkbox"
+              checked={editingPlayerVisible}
+              onChange={(event) => setEditingPlayerVisible(event.target.checked)}
+            />
+            Visible to player
+          </label>
+        ) : note.playerVisible ? (
+          <span
+            style={{
+              display: 'inline-block',
+              marginTop: 4,
+              padding: '2px 8px',
+              borderRadius: 999,
+              fontSize: '0.72rem',
+              fontWeight: 700,
+              color: 'var(--accent, #dcc1a1)',
+              border: '1px solid var(--accent, #dcc1a1)',
+            }}
+          >
+            Visible to player
+          </span>
+        ) : null}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+          {editingNoteId === note.id ? (
+            <>
+              <button type="button" className="btn btn-primary" onClick={() => void saveEditedNote(note)}>
+                Save
+              </button>
+              <button type="button" className="btn btn-ghost" onClick={() => setEditingNoteId(null)}>
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => {
+                setEditingNoteId(note.id);
+                setEditingText(note.noteText);
+                setEditingPlayerVisible(Boolean(note.playerVisible));
+              }}
+            >
+              Edit
+            </button>
+          )}
+          {canPin ? (
+            <button type="button" className="btn btn-ghost" onClick={() => void togglePin(note)}>
+              {note.isPinned ? 'Unpin' : 'Pin to top'}
+            </button>
+          ) : null}
+          <button type="button" className="btn btn-ghost" onClick={() => void deleteNote(note)}>
+            Delete
+          </button>
+        </div>
+      </article>
+    );
+  }
 
   return (
     <section className={embedded ? 'portal-admin-card' : 'portal-panel portal-admin-panel'} style={{ padding: '1rem' }}>
@@ -1258,7 +1438,16 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
               </label>
             </div>
             {loadingPlayers || loadingNotes ? <p className="portal-muted-text">Loading notes...</p> : null}
-            {!notesByDate.length ? (
+            {pinnedNotes.length > 0 ? (
+              <section className="portal-day-card" style={{ borderLeft: '3px solid rgba(250, 204, 21, 0.75)', marginTop: 10 }}>
+                <div className="portal-row-between" style={{ marginBottom: 6 }}>
+                  <h4 style={{ margin: 0 }}>📌 Pinned</h4>
+                  <span className="portal-muted-text">{`${pinnedNotes.length} note${pinnedNotes.length === 1 ? '' : 's'}`}</span>
+                </div>
+                <div style={{ display: 'grid', gap: 8 }}>{pinnedNotes.map((note) => renderNoteCard(note))}</div>
+              </section>
+            ) : null}
+            {!notesByDate.length && !pinnedNotes.length ? (
               <p className="portal-muted-text">No notes match your filters.</p>
             ) : (
               <div style={{ display: 'grid', gap: 12, marginTop: 10 }}>
@@ -1268,134 +1457,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
                       <h4 style={{ margin: 0 }}>{new Date(`${noteDateKey}T00:00:00Z`).toLocaleDateString()}</h4>
                       <span className="portal-muted-text">{`${dayNotes.length} note${dayNotes.length === 1 ? '' : 's'}`}</span>
                     </div>
-                    <div style={{ display: 'grid', gap: 8 }}>
-                      {dayNotes.map((note) => (
-                        <article key={`note-${note.playerId ?? 'dashboard'}-${note.id}`} style={{ border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, padding: 10, background: 'rgba(0,0,0,0.16)' }}>
-                          <div className="portal-row-between" style={{ alignItems: 'center', gap: 12 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                              {selectedPlayerName === 'All' ? (
-                                <span style={{ fontSize: 15, fontWeight: 700, color: '#e2e8f0' }}>
-                                  {formatNameFirstLast(note.dashboardPlayerName ?? '')}
-                                </span>
-                              ) : null}
-                              <span style={{ ...categoryBadgeStyle(note.category), borderRadius: 999, padding: '2px 8px', fontSize: 12, fontWeight: 700 }}>
-                                {note.category}
-                              </span>
-                            </div>
-                            {parseNoteAttachments(note).length > 0 ? (
-                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                                {parseNoteAttachments(note).map((attachment, idx) => (
-                                  <button
-                                    key={`att-${note.id}-${idx}`}
-                                    type="button"
-                                    className="btn btn-ghost"
-                                    onClick={() => {
-                                      if (attachment.mediaId) {
-                                        const item = mediaGalleryItems.find((entry) => entry.id === `player-${attachment.mediaId}`);
-                                        if (item) {
-                                          openMediaGalleryItem(item);
-                                          return;
-                                        }
-                                      }
-                                      if (attachment.mimeType.startsWith('image/') || attachment.mimeType.startsWith('video/') || attachment.mimeType === 'application/pdf') {
-                                        const galleryId = `note-${note.id}-${idx}`;
-                                        const item = mediaGalleryItems.find((entry) => entry.id === galleryId);
-                                        openMediaGalleryItem(item ?? {
-                                          id: galleryId,
-                                          title: attachment.name,
-                                          url: attachment.dataUrl,
-                                          mimeType: attachment.mimeType,
-                                          downloadName: attachment.name,
-                                          initialAnnotations: attachment.breakdownAnnotations ?? [],
-                                          saveAnnotations: attachment.mimeType === 'application/pdf' ? undefined : (annotations) => saveNoteAttachmentBreakdownAnnotations(note, idx, annotations),
-                                        });
-                                        return;
-                                      }
-                                      setAttachmentPreview(attachment);
-                                    }}
-                                  >
-                                    {parseNoteAttachments(note).length > 1 ? `Attachment ${idx + 1}` : 'Open Attachment'}
-                                  </button>
-                                ))}
-                              </div>
-                            ) : null}
-                          </div>
-                          {editingNoteId === note.id ? (
-                            <textarea
-                              rows={5}
-                              value={editingText}
-                              onChange={(event) => setEditingText(event.target.value)}
-                              style={{
-                                marginTop: 12,
-                                marginBottom: 18,
-                                color: '#ffffff',
-                                width: '100%',
-                                background: 'transparent',
-                                border: '1px solid rgba(255,255,255,0.2)',
-                                borderRadius: 8,
-                                padding: 8,
-                                fontSize: 16,
-                                lineHeight: 1.45,
-                              }}
-                            />
-                          ) : (
-                            <p style={{ margin: '12px 0 18px 0', whiteSpace: 'pre-wrap', color: '#ffffff' }}>{note.noteText}</p>
-                          )}
-                          {editingNoteId === note.id ? (
-                            <label className="portal-inline-filter" style={{ marginTop: 4 }}>
-                              <input
-                                type="checkbox"
-                                checked={editingPlayerVisible}
-                                onChange={(event) => setEditingPlayerVisible(event.target.checked)}
-                              />
-                              Visible to player
-                            </label>
-                          ) : note.playerVisible ? (
-                            <span
-                              style={{
-                                display: 'inline-block',
-                                marginTop: 4,
-                                padding: '2px 8px',
-                                borderRadius: 999,
-                                fontSize: '0.72rem',
-                                fontWeight: 700,
-                                color: 'var(--accent, #dcc1a1)',
-                                border: '1px solid var(--accent, #dcc1a1)',
-                              }}
-                            >
-                              Visible to player
-                            </span>
-                          ) : null}
-                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-                            {editingNoteId === note.id ? (
-                              <>
-                                <button type="button" className="btn btn-primary" onClick={() => void saveEditedNote(note)}>
-                                  Save
-                                </button>
-                                <button type="button" className="btn btn-ghost" onClick={() => setEditingNoteId(null)}>
-                                  Cancel
-                                </button>
-                              </>
-                            ) : (
-                              <button
-                                type="button"
-                                className="btn btn-ghost"
-                                onClick={() => {
-                                  setEditingNoteId(note.id);
-                                  setEditingText(note.noteText);
-                                  setEditingPlayerVisible(Boolean(note.playerVisible));
-                                }}
-                              >
-                                Edit
-                              </button>
-                            )}
-                            <button type="button" className="btn btn-ghost" onClick={() => void deleteNote(note)}>
-                              Delete
-                            </button>
-                          </div>
-                        </article>
-                      ))}
-                    </div>
+                    <div style={{ display: 'grid', gap: 8 }}>{dayNotes.map((note) => renderNoteCard(note))}</div>
                   </section>
                 ))}
               </div>

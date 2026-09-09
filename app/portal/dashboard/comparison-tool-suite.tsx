@@ -149,6 +149,12 @@ type PaneState = {
 };
 
 const LEAGUE_SEASON_START = '2026-02-13';
+const ATLANTIC_LEAGUE_SEASON_START = '2026-04-01';
+
+function todayYmd(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
 
 const DOMAIN_TABLES: Record<Domain, string[]> = {
   Pitching: ['Stuff', 'Expected Movement', 'Process', 'Results', 'Bullpen', 'Live', 'Banny', 'Usage', 'Raw Data'],
@@ -1212,17 +1218,19 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
         setState((current) => {
           const latest = String(payload.max_date ?? '');
           const min = String(payload.min_date ?? '');
-          const isLeagueSchool = String(payload.school_code ?? '').trim().toUpperCase() === 'LEAGUE';
-          const defaultStart = isLeagueSchool
-            ? (min && min > LEAGUE_SEASON_START ? min : LEAGUE_SEASON_START)
-            : latest;
+          const schoolCode = String(payload.school_code ?? '').trim().toUpperCase();
+          const isLeagueSchool = schoolCode === 'LEAGUE';
+          const isAtlanticLeagueSchool = ['LI', 'INDY'].includes(schoolCode);
+          const defaultStart = isAtlanticLeagueSchool
+            ? ATLANTIC_LEAGUE_SEASON_START
+            : (isLeagueSchool ? (min && min > LEAGUE_SEASON_START ? min : LEAGUE_SEASON_START) : latest);
           const tableModes = payload.table_modes?.length ? payload.table_modes : DOMAIN_TABLES[current.domain];
           const splitOptions = payload.split_by_options?.length ? payload.split_by_options : DOMAIN_SPLIT_BY[current.domain];
           const keepCustomSelection = String(current.tableMode).startsWith('custom_saved:');
           return {
             ...current,
             startDate: current.startDate || defaultStart,
-            endDate: current.endDate || latest,
+            endDate: current.endDate || (isAtlanticLeagueSchool ? todayYmd() : latest),
             tableMode: keepCustomSelection || tableModes.includes(current.tableMode) ? current.tableMode : tableModes[0],
             splitBy: splitOptions.includes(current.splitBy) ? current.splitBy : splitOptions[0],
           };

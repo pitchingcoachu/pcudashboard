@@ -17,6 +17,8 @@ import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
 import { dashboardActivityPath, dispatchPortalActivity } from './activity-events';
 import { calculateExpectedMovement, magnusAngleDegrees, measuredTiltDegrees } from '../../../lib/expected-movement';
 import DashboardGroupFilter from './dashboard-group-filter';
+import { IntendedTargetLocationSvg } from './intended-target-location-graphic';
+import type { LiveFlightPitch } from './live-flight-replay';
 
 const BallFlightPanel = dynamic(() => import('./ball-flight-panel'), {
   loading: () => <p className="portal-muted-text">Loading Flight Lab…</p>,
@@ -24,6 +26,10 @@ const BallFlightPanel = dynamic(() => import('./ball-flight-panel'), {
 
 const IntendedZonePanel = dynamic(() => import('./intended-zone-panel'), {
   loading: () => <p className="portal-muted-text">Loading Intended Target…</p>,
+});
+
+const LiveFlightReplay = dynamic(() => import('./live-flight-replay'), {
+  loading: () => <p className="portal-muted-text">Loading flight replay…</p>,
 });
 
 type FiltersPayload = {
@@ -349,6 +355,31 @@ type BreakdownAnnotationDragState = {
   anchor: { x: number; y: number };
   points: Array<{ x: number; y: number }>;
 };
+// Shape returned by POST /api/dashboard/pitching/intended-zone/by-pitch-events
+// for one pitch_events_id -- the target/miss location fields feed
+// IntendedTargetLocationGraphic, and flight (when present) feeds the
+// fullscreen LiveFlightReplay step.
+type ActionIntendedTargetData = {
+  intendedSideFt: number;
+  intendedHeightFt: number;
+  targetRadiusFt: number;
+  plateLocSide: number | null;
+  plateLocHeight: number | null;
+  missDistanceFt: number | null;
+  missDirection: string | null;
+  pitchType: string | null;
+  targetHit: boolean;
+  flight: {
+    releaseSideFt: number | null;
+    releaseHeightFt: number | null;
+    releaseExtensionFt: number | null;
+    accelerationXFt: number | null;
+    accelerationZFt: number | null;
+    positionYFt: number | null;
+    velocityYFt: number | null;
+    accelerationYFt: number | null;
+  } | null;
+};
 const BREAKDOWN_TOOL_LABELS: Record<BreakdownTool, string> = {
   line: 'Line',
   arrow: 'Arrow',
@@ -392,6 +423,7 @@ const PITCH_TYPE_DISPLAY_ORDER = [
 ] as const;
 const LEAGUE_SEASON_START = '2026-02-13';
 const LEAGUE_D1_SEASON_END = '2026-06-22';
+const ATLANTIC_LEAGUE_SEASON_START = '2026-04-01';
 const PRO_SEASON_START = '2026-03-25';
 const HANDED_MOVEMENT_PERCENTILE_COLUMNS = new Set(
   ['IVB', 'HB', 'Side', 'rTilt', 'bTilt'].map((column) => normalizePercentileColumnToken(column))
@@ -592,7 +624,9 @@ function formatDashboardDateLabel(
   const today = toYmdNow();
   if (isProSchool && startDate === PRO_SEASON_START && endDate === today) return '2026 Season';
   const schoolCode = String(schoolCodeRaw ?? '').trim().toUpperCase();
-  const isCollegeSchool = !!schoolCode && schoolCode !== 'PRO' && schoolCode !== 'LEAGUE' && schoolCode !== 'PCU';
+  const isAtlanticLeagueSchool = ['LI', 'INDY'].includes(schoolCode);
+  if (isAtlanticLeagueSchool && startDate === ATLANTIC_LEAGUE_SEASON_START && endDate === today) return '2026 Season';
+  const isCollegeSchool = !!schoolCode && schoolCode !== 'PRO' && schoolCode !== 'LEAGUE' && !isAtlanticLeagueSchool && schoolCode !== 'PCU';
   const collegeSeasonStart = schoolCode === 'CNU' ? '2026-01-30' : '2026-02-13';
   const playerLastGameDate = String(playerLastGameDateRaw ?? '').trim();
   if (isCollegeSchool && startDate === collegeSeasonStart && !!playerLastGameDate && endDate >= playerLastGameDate) {
@@ -1694,6 +1728,21 @@ const FALLBACK_AVAILABLE_CUSTOM_COLUMNS = [
   'BABIP',
 ];
 
+// Sourced from Intended Target data (intended_zone_pitches), not the upstream
+// dashboard API -- merged into table_rows server-side by
+// app/api/dashboard/pitching/overview/route.ts's withIntendedTargetTableColumns.
+// Column names must match that function's INTENDED_TARGET_TABLE_COLUMNS exactly.
+const INTENDED_TARGET_CUSTOM_COLUMNS = [
+  'ITMissAvg',
+  'ITMissMed',
+  'ITHit4%',
+  'ITHit8%',
+  'ITHit12%',
+  'ITHit16%',
+  'ITHit20%',
+  'ITMissDir',
+];
+
 const COLUMN_HEADER_TOOLTIPS: Record<string, string> = {
   'Fastball%': 'Fastball Usage Rate',
   'Sinker%': 'Sinker Usage Rate',
@@ -1708,6 +1757,14 @@ const COLUMN_HEADER_TOOLTIPS: Record<string, string> = {
   'Change/Split%': 'Changeup and Splitter Usage',
   '2kFB%': 'Fastball and Sinker Usage in 2 strike',
   '2kOS%': 'Fastball and Sinker Usage in 2 strike',
+  ITMissAvg: 'Intended Target: Average Miss Distance (ft)',
+  ITMissMed: 'Intended Target: Median Miss Distance (ft)',
+  'ITHit4%': 'Intended Target: Hit Rate at 4" Target',
+  'ITHit8%': 'Intended Target: Hit Rate at 8" Target',
+  'ITHit12%': 'Intended Target: Hit Rate at 12" Target',
+  'ITHit16%': 'Intended Target: Hit Rate at 16" Target',
+  'ITHit20%': 'Intended Target: Hit Rate at 20" Target',
+  ITMissDir: 'Intended Target: Most Common Miss Direction',
 };
 
 const TREND_METRIC_OPTIONS: OptionItem[] = [
@@ -5487,6 +5544,40 @@ export default function PitchingSuite({
   const [actionExportState, setActionExportState] = useState<'idle' | 'submitting' | 'submitted' | 'error'>('idle');
   const [actionExportMessage, setActionExportMessage] = useState('');
   const [actionExportName, setActionExportName] = useState('');
+  // Off by default -- most video has no Intended Target data, so unlike
+  // showMetrics this is opt-in. When on, uses actionExportTargetInches
+  // (independent from the on-screen size picker's own state) for both the
+  // burned-in panel and the hit/miss determination shown in it.
+  const [actionExportIncludeIntendedTarget, setActionExportIncludeIntendedTarget] = useState(false);
+  const [actionExportTargetInches, setActionExportTargetInches] = useState(8);
+  // "Standard" is the existing plain video view (default, unchanged).
+  // "Intended Target" adds the 2D target graphic beside the video and,
+  // once the video ends, a brief fullscreen 3D flight replay before
+  // auto-advancing -- see actionIntendedTargetByPitchEventId/
+  // actionIntendedTargetPhase below.
+  const [actionViewMode, setActionViewMode] = useState<'standard' | 'intendedTarget'>('standard');
+  // Separate from actionViewMode -- lets a coach keep the 2D target graphic
+  // beside the video without the fullscreen flight-replay/auto-advance
+  // sequence interrupting playback after every pitch. On by default so
+  // existing behavior (once actionViewMode is turned on) is unchanged.
+  const [actionIntendedTargetShowFlight, setActionIntendedTargetShowFlight] = useState(true);
+  // Same fixed sizes as the Stats/Pitch Log tabs (lib/training-db.ts's
+  // INTENDED_ZONE_TARGET_SIZE_PRESET_INCHES) -- every pitch's miss distance
+  // is measured from the same center point regardless of which size a
+  // coach selected for that session, so hit/miss and the drawn target
+  // circle here are recomputed from missDistanceFt against this selection,
+  // not locked to whichever size that pitch's own session used.
+  const [actionIntendedTargetDisplayInches, setActionIntendedTargetDisplayInches] = useState(8);
+  // Keyed by pitch_events_id -- populated once per actionPitches load (not
+  // per pitch step) via POST /api/dashboard/pitching/intended-zone/by-pitch-events.
+  // A pitch absent from this map has no Intended Target data and is played
+  // as a normal video with no graphic/replay steps, per product decision.
+  const [actionIntendedTargetByPitchEventId, setActionIntendedTargetByPitchEventId] = useState<Map<number, ActionIntendedTargetData>>(new Map());
+  // 'video' = normal playback (+ the 2D graphic beside it, when data exists
+  // and actionViewMode is 'intendedTarget'); 'flight' = the fullscreen 3D
+  // replay is showing, auto-advancing to the next pitch after a pause.
+  const [actionIntendedTargetPhase, setActionIntendedTargetPhase] = useState<'video' | 'flight'>('video');
+  const actionIntendedTargetAdvanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [breakdownMode, setBreakdownMode] = useState(false);
   const [breakdownToolbarVisible, setBreakdownToolbarVisible] = useState(true);
   const [breakdownTool, setBreakdownTool] = useState<BreakdownTool>('line');
@@ -6020,9 +6111,9 @@ export default function PitchingSuite({
       const minDate = payload.min_date ?? '';
       const payloadSchoolCode = String(payload.school_code ?? '').toUpperCase();
       const isLeagueSchool = payloadSchoolCode === 'LEAGUE';
-      const isIndySchool = payloadSchoolCode === 'INDY';
+      const isAtlanticLeagueSchool = ['LI', 'INDY'].includes(payloadSchoolCode);
       const isProSchool = String(payload.school_code ?? '').toUpperCase() === 'PRO';
-      if (isPlayerRole && !isLeagueSchool && !isIndySchool && !isProSchool) {
+      if (isPlayerRole && !isLeagueSchool && !isAtlanticLeagueSchool && !isProSchool) {
         const schoolCode = String(payload.school_code ?? '').trim().toUpperCase();
         if (schoolCode === 'PCU') {
           setStartDate(nextDate);
@@ -6033,9 +6124,9 @@ export default function PitchingSuite({
         const seasonStart = minDate && minDate > defaultSeasonStart ? minDate : defaultSeasonStart;
         setStartDate(seasonStart);
         setEndDate(nextDate || seasonStart);
-      } else if (isIndySchool) {
-        setStartDate(minDate || nextDate);
-        setEndDate(nextDate || minDate);
+      } else if (isAtlanticLeagueSchool) {
+        setStartDate(ATLANTIC_LEAGUE_SEASON_START);
+        setEndDate(toYmdNow());
       } else if (isLeagueSchool) {
         const leagueStart = minDate && minDate > LEAGUE_SEASON_START ? minDate : LEAGUE_SEASON_START;
         if (level === 'D1') {
@@ -6213,7 +6304,9 @@ export default function PitchingSuite({
         controller.abort();
       };
     }
-    const seasonStart = String(filters.min_date ?? '').trim() || (schoolCode === 'CNU' ? '2026-01-30' : '2026-02-13');
+    const seasonStart = ['LI', 'INDY'].includes(schoolCode)
+      ? ATLANTIC_LEAGUE_SEASON_START
+      : String(filters.min_date ?? '').trim() || (schoolCode === 'CNU' ? '2026-01-30' : '2026-02-13');
     const seasonEnd = String(filters.max_date ?? toYmdNow()).trim() || toYmdNow();
     const params = new URLSearchParams();
     params.set('start_date', seasonStart);
@@ -6362,7 +6455,14 @@ export default function PitchingSuite({
     params.set('start_date', startDate);
     params.set('end_date', endDate);
     params.delete('force_raw');
-    if (postEditCacheBust) params.set('_cb', String(postEditCacheBust));
+    if (postEditCacheBust) {
+      params.set('_cb', String(postEditCacheBust));
+      // The plot is updated optimistically as soon as an edit saves, while
+      // aggregate rollups rebuild in the background. Read the edited pitch
+      // rows directly for the rest of this page session so the tables and
+      // plots cannot disagree during that rebuild.
+      params.set('force_raw', '1');
+    }
 
     const apiTeamType = isLeague
       ? resolveLeagueTeamTypeForApi(teamType, [filters?.pitchers_by_team_code, filters?.opp_hitters_by_team_code])
@@ -7517,9 +7617,10 @@ export default function PitchingSuite({
       if (ipMax) params.set('ip_max', ipMax);
       params.set('include_chart_points', isPcuBullpenSelection ? '1' : '0');
       if (isPcuBullpenSelection) params.set('chart_points_limit', '9000');
-      // Load aggregate game rows first. A full-season LI/INDY pitch/video
-      // payload exceeds 30 MB, so fetch only the selected game's pitches
-      // when its pitch count is clicked.
+      // The season Game Log only needs aggregate rows initially. Eagerly
+      // attaching every pitch/video record creates a 30MB+ response for LI
+      // and INDY and can exceed the gateway timeout. The selected game's
+      // pitches are fetched on demand when its pitch count is clicked.
       params.set('include_row_pitches', '0');
       params.set('include_trend_rows', '0');
       if (isPcuBullpenSelection) params.set('force_raw', '1');
@@ -8469,6 +8570,47 @@ export default function PitchingSuite({
   };
 
   const currentActionPitch = actionPitches[actionIndex] ?? null;
+  const actionCurrentIntendedTarget = currentActionPitch?.pitch_event_id
+    ? (actionIntendedTargetByPitchEventId.get(Number(currentActionPitch.pitch_event_id)) ?? null)
+    : null;
+  // solvePlateTime() in live-flight-replay.tsx solves a projectile-motion
+  // quadratic using ONLY the y-axis (depth) triple of position/velocity/
+  // acceleration to find time-to-plate -- x/z are otherwise the only axes
+  // flightPoint() itself reads. An earlier version of this zeroed out y
+  // (along with the unused x/z position+velocity) as "never read", which
+  // actually broke the replay entirely: with y all zero the quadratic
+  // degenerates and duration solves to 0, so LiveFlightReplay reported
+  // "Trajectory unavailable" for every pitch. x/z position+velocity truly
+  // are unused and stay zeroed; y must be real.
+  const actionCurrentFlightPitch: LiveFlightPitch | null =
+    actionCurrentIntendedTarget && currentActionPitch
+      ? {
+          id: Number(currentActionPitch.pitch_event_id ?? actionIndex),
+          pitchIndex: actionIndex + 1,
+          pitchType: actionCurrentIntendedTarget.pitchType,
+          intendedSideFt: actionCurrentIntendedTarget.intendedSideFt,
+          intendedHeightFt: actionCurrentIntendedTarget.intendedHeightFt,
+          targetRadiusFt: actionIntendedTargetDisplayInches / 2 / 12,
+          plateLocSide: actionCurrentIntendedTarget.plateLocSide,
+          plateLocHeight: actionCurrentIntendedTarget.plateLocHeight,
+          missDirection: actionCurrentIntendedTarget.missDirection,
+          missDistanceFt: actionCurrentIntendedTarget.missDistanceFt,
+          flightData: actionCurrentIntendedTarget.flight
+            ? {
+                position: { x: 0, y: actionCurrentIntendedTarget.flight.positionYFt ?? 0, z: 0 },
+                velocity: { x: 0, y: actionCurrentIntendedTarget.flight.velocityYFt ?? 0, z: 0 },
+                acceleration: {
+                  x: actionCurrentIntendedTarget.flight.accelerationXFt ?? 0,
+                  y: actionCurrentIntendedTarget.flight.accelerationYFt ?? 0,
+                  z: actionCurrentIntendedTarget.flight.accelerationZFt ?? 0,
+                },
+                releaseSideFt: actionCurrentIntendedTarget.flight.releaseSideFt,
+                releaseHeightFt: actionCurrentIntendedTarget.flight.releaseHeightFt,
+                releaseExtensionFt: actionCurrentIntendedTarget.flight.releaseExtensionFt,
+              }
+            : null,
+        }
+      : null;
 
   const refreshActionPitchVideoUrls = async (pitches: PitchActionPoint[]): Promise<PitchActionPoint[]> => {
     if (!pitches.length) return pitches;
@@ -8550,7 +8692,13 @@ export default function PitchingSuite({
   };
 
   const openActionModal = async (pitches: PitchActionPoint[], startingPitch?: PitchActionPoint) => {
-    const deduped = Array.from(new Map(pitches.map((pitch) => [pitchIdentityKey(pitch), pitch])).values());
+    const nextMode: 'video' | 'edit' | 'spin' =
+      visualOption === 'Pitch Edit' && canUsePitchEdits ? 'edit' : visualOption === 'Spin Visual' ? 'spin' : 'video';
+    const modalPitches =
+      nextMode === 'edit' && pitchEditSelectMode === 'single' && startingPitch
+        ? [startingPitch]
+        : pitches;
+    const deduped = Array.from(new Map(modalPitches.map((pitch) => [pitchIdentityKey(pitch), pitch])).values());
     if (!deduped.length) return;
     const startIndex = startingPitch
       ? Math.max(
@@ -8558,8 +8706,6 @@ export default function PitchingSuite({
           deduped.findIndex((pitch) => pitchIdentityKey(pitch) === pitchIdentityKey(startingPitch))
         )
       : 0;
-    const nextMode: 'video' | 'edit' | 'spin' =
-      visualOption === 'Pitch Edit' && canUsePitchEdits ? 'edit' : visualOption === 'Spin Visual' ? 'spin' : 'video';
     const startPitch = deduped[startIndex];
     const firstPitchHasVideo = Boolean(startPitch?.video_clip_1 || startPitch?.video_clip_2 || startPitch?.video_clip_3);
     setActionPitches(deduped);
@@ -8582,6 +8728,13 @@ export default function PitchingSuite({
     setActionVideoLookupLoading(nextMode === 'video' && !firstPitchHasVideo);
     setActionVideoRefreshNonce((value) => value + 1);
     setBreakdownToolbarVisible(true);
+    setActionViewMode('standard');
+    setActionIntendedTargetPhase('video');
+    setActionIntendedTargetByPitchEventId(new Map());
+    if (actionIntendedTargetAdvanceTimerRef.current) {
+      clearTimeout(actionIntendedTargetAdvanceTimerRef.current);
+      actionIntendedTargetAdvanceTimerRef.current = null;
+    }
     actionVideoRetryKeysRef.current.clear();
     actionCompareVideoLookupKeysRef.current.clear();
 
@@ -8656,6 +8809,43 @@ export default function PitchingSuite({
     setActionSaveState('idle');
     setActionSaveMessage('');
   }, [actionIndex, currentActionPitch?.pitch_type, currentActionPitch?.pitcher]);
+
+  // Fetched once per actionPitches load (not per pitch step, to avoid a
+  // request on every Next click) -- most pitches won't have a match, which
+  // is expected and fine; those simply stay absent from the map and play as
+  // normal video with no Intended Target graphic/replay steps.
+  const actionPitchEventIdsKey = actionPitches
+    .map((pitch) => Number(pitch.pitch_event_id ?? -1))
+    .filter((id) => Number.isFinite(id) && id > 0)
+    .sort((a, b) => a - b)
+    .join(',');
+  useEffect(() => {
+    if (!actionPitchEventIdsKey) {
+      setActionIntendedTargetByPitchEventId(new Map());
+      return;
+    }
+    let cancelled = false;
+    const pitchEventIds = actionPitchEventIdsKey.split(',').map((id) => Number(id));
+    (async () => {
+      try {
+        const response = await fetch('/api/dashboard/pitching/intended-zone/by-pitch-events', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pitchEventIds }),
+        });
+        const payload = (await response.json().catch(() => ({}))) as { pitches?: Record<string, ActionIntendedTargetData> };
+        if (cancelled || !response.ok || !payload.pitches) return;
+        setActionIntendedTargetByPitchEventId(new Map(Object.entries(payload.pitches).map(([id, data]) => [Number(id), data])));
+      } catch {
+        // Best-effort -- if this fails, actionViewMode simply has no matched
+        // pitches to show the Intended Target graphic/replay for; the
+        // Standard view is unaffected.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [actionPitchEventIdsKey]);
 
   useEffect(() => {
     if (!actionMode) return;
@@ -9729,10 +9919,49 @@ export default function PitchingSuite({
         if (actionSideBySide) rightCompareVideoRef.current?.pause();
         if (isMultiCameraActive) multiCameraVideoRefs.current.forEach((video) => video?.pause());
         setActionVideoPlaying(false);
+
+        // Intended Target view: a pitch with matching data transitions into
+        // the fullscreen flight replay instead of just sitting paused; a
+        // pitch with no match (most video, by design) falls through to the
+        // existing pause-on-end behavior above with no further action.
+        // actionIntendedTargetShowFlight lets a coach keep the 2D graphic
+        // without this fullscreen step interrupting playback at all.
+        if (actionViewMode === 'intendedTarget' && actionIntendedTargetShowFlight && actionIntendedTargetPhase === 'video') {
+          const pitchEventId = Number(currentActionPitch?.pitch_event_id ?? -1);
+          if (pitchEventId > 0 && actionIntendedTargetByPitchEventId.has(pitchEventId)) {
+            setActionIntendedTargetPhase('flight');
+          }
+        }
       }
     }, 50);
     return () => window.clearInterval(timer);
-  }, [actionSideBySide, actionVideoDuration, isMultiCameraActive]);
+  }, [actionIntendedTargetByPitchEventId, actionIntendedTargetPhase, actionIntendedTargetShowFlight, actionSideBySide, actionViewMode, actionVideoDuration, currentActionPitch, isMultiCameraActive]);
+
+  // Auto-advance timer for the fullscreen flight-replay phase: shows the
+  // replay for a few seconds, then moves to the next pitch and resets to
+  // video playback. Cleared/reset whenever the phase, pitch, or view mode
+  // changes so a manual Prev/Next during the pause never leaves a stray
+  // timer that jumps the pitch again later.
+  useEffect(() => {
+    if (actionViewMode !== 'intendedTarget' || actionIntendedTargetPhase !== 'flight') return;
+    actionIntendedTargetAdvanceTimerRef.current = setTimeout(() => {
+      setActionIntendedTargetPhase('video');
+      setActionIndex((current) => Math.min(actionPitchCount - 1, current + 1));
+    }, 3500);
+    return () => {
+      if (actionIntendedTargetAdvanceTimerRef.current) {
+        clearTimeout(actionIntendedTargetAdvanceTimerRef.current);
+        actionIntendedTargetAdvanceTimerRef.current = null;
+      }
+    };
+  }, [actionIntendedTargetPhase, actionPitchCount, actionViewMode]);
+
+  // Any pitch change (manual Prev/Next, or the auto-advance above landing on
+  // a new pitch) always resets back to the video phase -- never carries the
+  // fullscreen replay over onto the next pitch's own video.
+  useEffect(() => {
+    setActionIntendedTargetPhase('video');
+  }, [actionIndex]);
 
   useEffect(() => {
     if (!actionSideBySide) return;
@@ -9805,6 +10034,8 @@ export default function PitchingSuite({
           camera: camerasToSend,
           mode: actionExportMode,
           showMetrics: actionExportShowMetrics,
+          includeIntendedTarget: actionExportIncludeIntendedTarget,
+          targetInches: actionExportTargetInches,
           name: actionExportName.trim() || undefined,
         }),
       });
@@ -14818,7 +15049,13 @@ export default function PitchingSuite({
     () =>
       (() => {
         const base = overview?.available_table_columns?.length ? overview.available_table_columns : FALLBACK_AVAILABLE_CUSTOM_COLUMNS;
-        return base.includes('PV/100') ? base : [...base, 'PV/100'];
+        const withPv100 = base.includes('PV/100') ? base : [...base, 'PV/100'];
+        // Intended Target columns are computed locally (app/api/dashboard/pitching/overview/route.ts's
+        // withIntendedTargetTableColumns), not by the upstream dashboard API, so
+        // they never appear in available_table_columns -- spliced in here the
+        // same way PV/100 is, so they show up in the picker alongside K%/Whiff%/etc.
+        const missing = INTENDED_TARGET_CUSTOM_COLUMNS.filter((column) => !withPv100.includes(column));
+        return missing.length ? [...withPv100, ...missing] : withPv100;
       })(),
     [overview?.available_table_columns]
   );
@@ -19087,6 +19324,47 @@ export default function PitchingSuite({
                             </div>
                             <div style={{ display: 'grid', gap: 6 }}>
                               <div style={{ fontSize: '0.7rem', fontWeight: 700, color: actionModalTheme.muted, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                                Intended Target Panel
+                              </div>
+                              <div style={{ display: 'flex', gap: 6 }}>
+                                <button
+                                  type="button"
+                                  className={actionExportIncludeIntendedTarget ? 'btn btn-primary' : 'btn btn-ghost'}
+                                  style={actionExportIncludeIntendedTarget ? { flex: 1, padding: '0.4rem 0.5rem' } : { ...actionModalButtonStyle, flex: 1, padding: '0.4rem 0.5rem' }}
+                                  onClick={() => setActionExportIncludeIntendedTarget(true)}
+                                >
+                                  On
+                                </button>
+                                <button
+                                  type="button"
+                                  className={!actionExportIncludeIntendedTarget ? 'btn btn-primary' : 'btn btn-ghost'}
+                                  style={!actionExportIncludeIntendedTarget ? { flex: 1, padding: '0.4rem 0.5rem' } : { ...actionModalButtonStyle, flex: 1, padding: '0.4rem 0.5rem' }}
+                                  onClick={() => setActionExportIncludeIntendedTarget(false)}
+                                >
+                                  Off
+                                </button>
+                              </div>
+                              <div style={{ fontSize: '0.7rem', color: actionModalTheme.muted, lineHeight: 1.3 }}>
+                                Burns in the target/miss graphic + miss distance for pitches with Intended Target data. Pitches without it export unchanged.
+                              </div>
+                              {actionExportIncludeIntendedTarget ? (
+                                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                                  {[4, 8, 12, 16, 20].map((inches) => (
+                                    <button
+                                      key={inches}
+                                      type="button"
+                                      className={actionExportTargetInches === inches ? 'btn btn-primary' : 'btn btn-ghost'}
+                                      style={{ padding: '0.3rem 0.5rem', fontSize: '0.78rem' }}
+                                      onClick={() => setActionExportTargetInches(inches)}
+                                    >
+                                      {inches}″
+                                    </button>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                            <div style={{ display: 'grid', gap: 6 }}>
+                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: actionModalTheme.muted, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
                                 Pitches
                               </div>
                               <div style={{ display: 'flex', gap: 6 }}>
@@ -20080,6 +20358,26 @@ export default function PitchingSuite({
                         >
                           Loop
                         </button>
+                        <button
+                          type="button"
+                          className={actionViewMode === 'intendedTarget' ? 'btn btn-primary' : 'btn btn-ghost'}
+                          style={actionViewMode === 'intendedTarget' ? { padding: '0.42rem 0.75rem' } : actionModalButtonStyle}
+                          title="Show the intended target/miss graphic beside video, then a brief flight replay, for pitches that have Intended Target data"
+                          onClick={() => setActionViewMode((mode) => (mode === 'intendedTarget' ? 'standard' : 'intendedTarget'))}
+                        >
+                          Intended Target View
+                        </button>
+                        {actionViewMode === 'intendedTarget' ? (
+                          <button
+                            type="button"
+                            className={actionIntendedTargetShowFlight ? 'btn btn-primary' : 'btn btn-ghost'}
+                            style={actionIntendedTargetShowFlight ? { padding: '0.42rem 0.75rem' } : actionModalButtonStyle}
+                            title="When on, video end triggers a brief fullscreen flight replay before auto-advancing. When off, only the 2D target graphic shows -- no fullscreen step, no auto-advance."
+                            onClick={() => setActionIntendedTargetShowFlight((value) => !value)}
+                          >
+                            Flight Replay
+                          </button>
+                        ) : null}
                         <button type="button" className="btn btn-ghost" style={actionModalButtonStyle} onClick={() => stepActionVideo(-5 / 60)}>
                           -5 Frames
                         </button>
@@ -20229,6 +20527,54 @@ export default function PitchingSuite({
                       ))}
                     </div>
                     <hr style={{ width: '100%', borderColor: actionModalTheme.border, margin: '1rem 0 0' }} />
+                    {actionMode === 'video' && actionViewMode === 'intendedTarget' && actionCurrentIntendedTarget ? (
+                      <div style={{ marginTop: 10 }}>
+                        <div style={{ display: 'flex', justifyContent: 'center', gap: 4, marginBottom: 6 }}>
+                          {[4, 8, 12, 16, 20].map((inches) => (
+                            <button
+                              key={inches}
+                              type="button"
+                              className={actionIntendedTargetDisplayInches === inches ? 'btn btn-primary' : 'btn btn-ghost'}
+                              style={{ padding: '0.2rem 0.4rem', fontSize: '0.72rem', minHeight: 0 }}
+                              onClick={() => setActionIntendedTargetDisplayInches(inches)}
+                            >
+                              {inches}″
+                            </button>
+                          ))}
+                        </div>
+                        <div style={{ display: 'grid', justifyContent: 'center' }}>
+                          <IntendedTargetLocationSvg
+                            ariaLabel="Intended target and actual location"
+                            pitch={{
+                              pitchIndex: actionIndex + 1,
+                              intendedSideFt: actionCurrentIntendedTarget.intendedSideFt,
+                              intendedHeightFt: actionCurrentIntendedTarget.intendedHeightFt,
+                              targetRadiusFt: actionIntendedTargetDisplayInches / 2 / 12,
+                              plateLocSide: actionCurrentIntendedTarget.plateLocSide ?? 0,
+                              plateLocHeight: actionCurrentIntendedTarget.plateLocHeight ?? 0,
+                              pitchType: actionCurrentIntendedTarget.pitchType,
+                            }}
+                            style={{ width: 172, height: 186 }}
+                          />
+                        </div>
+                        {(() => {
+                          const displayRadiusFt = actionIntendedTargetDisplayInches / 2 / 12;
+                          const displayHit = actionCurrentIntendedTarget.missDistanceFt !== null && actionCurrentIntendedTarget.missDistanceFt <= displayRadiusFt;
+                          return (
+                            <>
+                              <div style={{ fontSize: '0.78rem', fontWeight: 700, textAlign: 'center', marginTop: 4, color: displayHit ? '#4ade80' : '#f87171' }}>
+                                {displayHit ? 'Target hit' : 'Miss'}
+                              </div>
+                              <div style={{ fontSize: '0.78rem', fontWeight: 600, textAlign: 'center', marginTop: 2, color: actionModalTheme.muted }}>
+                                {actionCurrentIntendedTarget.missDistanceFt !== null
+                                  ? `Miss distance: ${(actionCurrentIntendedTarget.missDistanceFt * 12).toFixed(1)}″`
+                                  : 'Miss distance: —'}
+                              </div>
+                            </>
+                          );
+                        })()}
+                      </div>
+                    ) : (
                     <div style={{ display: 'grid', justifyContent: 'center', marginTop: 10 }}>
                       <svg viewBox={`0 0 ${actionZoneW} ${actionZoneH}`} style={{ width: 172, height: 186 }}>
                         <polygon
@@ -20275,6 +20621,7 @@ export default function PitchingSuite({
                         ) : null}
                       </svg>
                     </div>
+                    )}
                     <div style={{ display: 'grid', justifyContent: 'center' }}>
                       <img
                         src="/pearl-clam-transparent.png"
@@ -20287,6 +20634,28 @@ export default function PitchingSuite({
                 </div>
               </>
             )}
+            {actionMode === 'video' && actionViewMode === 'intendedTarget' && actionIntendedTargetPhase === 'flight' ? (
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  zIndex: 100,
+                  background: '#000',
+                  display: 'grid',
+                }}
+              >
+                <LiveFlightReplay
+                  pitch={actionCurrentFlightPitch}
+                  currentPitchNumber={actionIndex + 1}
+                  totalPitches={actionPitchCount}
+                  hasPrevious={actionIndex > 0}
+                  hasNext={actionIndex < actionPitchCount - 1}
+                  followingLive={false}
+                  onPrevious={() => setActionIndex((i) => Math.max(0, i - 1))}
+                  onNext={() => setActionIndex((i) => Math.min(actionPitchCount - 1, i + 1))}
+                />
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}

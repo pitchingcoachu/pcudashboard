@@ -141,7 +141,8 @@ export default function AiSessionsClient() {
       await load();
       setOpenId(created.id);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Processing failed.');
+      const detail = error instanceof Error ? error.message : '';
+      setMessage(/^(?:load failed|failed to fetch)$/i.test(detail) ? 'The recording could not reach storage. Please try again.' : detail || 'Processing failed.');
       await load();
     } finally {
       setBusy(false);

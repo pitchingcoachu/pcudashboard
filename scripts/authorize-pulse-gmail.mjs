@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 
 const credentialsPath = process.argv[2];
 if (!credentialsPath) throw new Error('Pass the downloaded Google OAuth credentials JSON path.');
+const label = String(process.argv[3] ?? 'arizona').trim().toLowerCase().replace(/[^a-z0-9-]/g, '') || 'arizona';
 
 const credentialsJson = JSON.parse(await readFile(credentialsPath, 'utf8'));
 const credentials = credentialsJson.installed ?? credentialsJson.web;
@@ -26,7 +27,7 @@ authorizationUrl.search = new URLSearchParams({
   state,
 }).toString();
 
-const resultPath = '/private/tmp/arizona-pulse-gmail-oauth.json';
+const resultPath = `/private/tmp/${label}-pulse-gmail-oauth.json`;
 
 await new Promise((resolve, reject) => {
   const timeout = setTimeout(() => {

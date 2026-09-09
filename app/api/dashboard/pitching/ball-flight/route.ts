@@ -68,10 +68,12 @@ type SpinSampleRow = {
   rotation_x: number | string | null;
   rotation_y: number | string | null;
   rotation_z: number | string | null;
+  phase_degrees_per_frame?: number | string | null;
   source?: string | null;
   confidence?: number | string | null;
   source_url?: string | null;
   coordinate_frame?: string | null;
+  model_version?: string | null;
 };
 
 function csvValues(value: string): string[] {
@@ -326,10 +328,12 @@ function serializeSpinSamples(rows: SpinSampleRow[]) {
       y: finiteNumber(row.rotation_y),
       z: finiteNumber(row.rotation_z),
     },
+    phaseDegreesPerFrame: finiteNumber(row.phase_degrees_per_frame),
     source: row.source === 'edger_video' ? 'edger_video' : 'trackman_measured',
     confidence: finiteNumber(row.confidence),
     sourceUrl: row.source_url ? String(row.source_url) : null,
     coordinateFrame: row.coordinate_frame ? String(row.coordinate_frame) : 'trackman',
+    modelVersion: row.model_version ? String(row.model_version) : null,
   })).filter((row) => (
     row.spinRate !== null
     && row.spinAxis.x !== null && row.spinAxis.y !== null && row.spinAxis.z !== null
@@ -750,9 +754,19 @@ async function collegeVideoSpinSamples(args: {
   const { schoolCode, search, scopedPitcher } = args;
   const focusedPitcher = hasFocusedPitcher(search, scopedPitcher);
   const params: QueryValue[] = [];
+  const eligibleVideoEstimate = (alias: string) => process.env.VERCEL_ENV === 'production'
+    ? `${alias}.status = 'accepted'`
+    : `(${alias}.status = 'accepted' OR (${alias}.status = 'testing' AND ${alias}.model_version = 'edger-seam-fit-v5'))`;
   const where = [
     `vse.school_code = ${addParam(params, schoolCode)}`,
-    `vse.status = 'accepted'`,
+    eligibleVideoEstimate('vse'),
+    `vse.model_version = (
+      SELECT latest.model_version
+      FROM public.video_spin_estimates latest
+      WHERE latest.pitch_event_id = vse.pitch_event_id AND ${eligibleVideoEstimate('latest')}
+      ORDER BY latest.updated_at DESC, latest.model_version DESC
+      LIMIT 1
+    )`,
     `pe.session_date IS NOT NULL`,
     `${textNumber('pe.spinrate')} IS NOT NULL`,
   ];
@@ -839,10 +853,12 @@ async function collegeVideoSpinSamples(args: {
       NULL::double precision AS longitudinal_angle,
       axis_x, axis_y, axis_z,
       rotation_x, rotation_y, rotation_z,
+      phase_degrees_per_frame,
       'edger_video'::text AS source,
       confidence,
       source_url,
-      coordinate_frame
+      coordinate_frame,
+      model_version
     FROM filtered vse
     WHERE lower(COALESCE(normalized_pitch_type, '')) <> 'undefined'
       AND (${focusedPitcher ? 'TRUE' : `detail_rank <= ${detailLimit!}`})

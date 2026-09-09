@@ -383,3 +383,83 @@ export async function lookupPitchExportMetrics(ids: number[], schoolCode: string
     client.release();
   }
 }
+
+export type PitchFlightPhysics = {
+  releaseSideFt: number | null;
+  releaseHeightFt: number | null;
+  releaseExtensionFt: number | null;
+  accelerationXFt: number | null;
+  accelerationZFt: number | null;
+  // solvePlateTime() in live-flight-replay.tsx solves a projectile-motion
+  // quadratic for "when does this pitch reach the plate" using ONLY the
+  // y-axis (depth) triple below -- position.y/velocity.y/acceleration.y are
+  // TrackMan's y0/vy0/ay0 (distance-to-plate, closing speed, deceleration).
+  // Without these the duration solves to 0/NaN and the replay reports
+  // "Trajectory unavailable" even though acceleration.x/z and the release
+  // point are present -- confirmed by reading solvePlateTime directly after
+  // an initial implementation wrongly zeroed these out as "unused".
+  positionYFt: number | null;
+  velocityYFt: number | null;
+  accelerationYFt: number | null;
+};
+
+const numberFromTextColumn = (column: string) => `(regexp_match(COALESCE(${column}, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision`;
+
+/** Historical counterpart to the live TrackMan webhook's flightData (see
+ * liveFlightByPlayId in app/api/dashboard/pitching/intended-zone/pitches/route.ts)
+ * -- pulls the same 9-parameter trajectory model (position/velocity/
+ * acceleration at release) plus release point off pitch_events, which are
+ * populated for every synced pitch, live session or not. This is what makes
+ * the flight replay work for the video modal's historical pitches, which by
+ * definition are reviewed well after any live session has ended. */
+export async function lookupPitchFlightPhysics(ids: number[]): Promise<Map<number, PitchFlightPhysics>> {
+  const result = new Map<number, PitchFlightPhysics>();
+  if (!ids.length) return result;
+  await ensureAuthDbReady();
+  const pool = getDbPool();
+  const client = await pool.connect();
+  try {
+    const rows = await client.query<{
+      pitch_event_id: number;
+      release_side: number | null;
+      release_height: number | null;
+      extension: number | null;
+      accel_x: number | null;
+      accel_y: number | null;
+      accel_z: number | null;
+      position_y: number | null;
+      velocity_y: number | null;
+    }>(
+      `
+      SELECT
+        pe.id AS pitch_event_id,
+        ${numberFromTextColumn('pe.relside')} AS release_side,
+        ${numberFromTextColumn('pe.relheight')} AS release_height,
+        ${numberFromTextColumn('pe.extension')} AS extension,
+        ${numberFromTextColumn('pe.ax0')} AS accel_x,
+        ${numberFromTextColumn('pe.ay0')} AS accel_y,
+        ${numberFromTextColumn('pe.az0')} AS accel_z,
+        ${numberFromTextColumn('pe.y0')} AS position_y,
+        ${numberFromTextColumn('pe.vy0')} AS velocity_y
+      FROM public.pitch_events pe
+      WHERE pe.id = ANY($1::int[])
+      `,
+      [ids]
+    );
+    for (const row of rows.rows) {
+      result.set(Number(row.pitch_event_id), {
+        releaseSideFt: row.release_side,
+        releaseHeightFt: row.release_height,
+        releaseExtensionFt: row.extension,
+        accelerationXFt: row.accel_x,
+        accelerationZFt: row.accel_z,
+        positionYFt: row.position_y,
+        velocityYFt: row.velocity_y,
+        accelerationYFt: row.accel_y,
+      });
+    }
+    return result;
+  } finally {
+    client.release();
+  }
+}

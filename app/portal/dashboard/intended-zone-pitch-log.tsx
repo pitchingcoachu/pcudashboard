@@ -2,34 +2,18 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import styles from './intended-zone-panel.module.css';
+import { IntendedTargetLocationGraphic } from './intended-target-location-graphic';
 
 const PAGE_SIZE = 18;
-const ZONE_W = 230;
-const ZONE_H = 250;
 const X_MIN = -2.5;
 const X_MAX = 2.5;
 const Y_MIN = 0;
 const Y_MAX = 4.5;
-const PAD = 10;
-const SCALE = Math.min((ZONE_W - PAD * 2) / (X_MAX - X_MIN), (ZONE_H - PAD * 2) / (Y_MAX - Y_MIN));
-const DRAWN_W = (X_MAX - X_MIN) * SCALE;
-const DRAWN_H = (Y_MAX - Y_MIN) * SCALE;
-const LEFT_PAD = (ZONE_W - DRAWN_W) / 2;
-const TOP_PAD = (ZONE_H - DRAWN_H) / 2;
-const px = (x: number) => LEFT_PAD + (x - X_MIN) * SCALE;
-const py = (y: number) => TOP_PAD + (Y_MAX - y) * SCALE;
 const STRIKE_LEFT = -0.88;
 const STRIKE_RIGHT = 0.88;
 const STRIKE_BOTTOM = 1.5;
 const STRIKE_TOP = 3.6;
 const STRIKE_CENTER_Y = (STRIKE_BOTTOM + STRIKE_TOP) / 2;
-const STRIKE_THIRD_X = (STRIKE_RIGHT - STRIKE_LEFT) / 3;
-const STRIKE_THIRD_Y = (STRIKE_TOP - STRIKE_BOTTOM) / 3;
-const POCKETS = Array.from({ length: 9 }, (_, index) => ({
-  number: index + 1,
-  x: STRIKE_LEFT + STRIKE_THIRD_X * ((index % 3) + 0.5),
-  y: STRIKE_TOP - STRIKE_THIRD_Y * (Math.floor(index / 3) + 0.5),
-}));
 
 const PITCH_COLORS: Record<string, string> = {
   Fastball: '#ffcc33', Sinker: '#f97316', Cutter: '#c08457', Slider: '#ef4444', Sweeper: '#a855f7',
@@ -43,6 +27,15 @@ const DIRECTION_LABELS: Record<string, string> = {
 };
 
 const PITCH_LOG_ENDPOINT = '/api/dashboard/pitching/intended-zone/pitch-log';
+
+// Same fixed sizes as the Stats tab's target-hit-rate columns (lib/training-db.ts's
+// INTENDED_ZONE_TARGET_SIZE_PRESET_INCHES) -- every pitch's miss distance is
+// measured from the same center point regardless of which size a coach
+// selected for that session, so hit/miss here can be recomputed for any of
+// these sizes instead of being locked to whatever size each pitch's own
+// session happened to use.
+const TARGET_SIZE_DISPLAY_PRESETS = [4, 8, 12, 16, 20] as const;
+const DEFAULT_TARGET_SIZE_INCHES = 8;
 
 function waitForRetry(delayMs: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, delayMs));
@@ -111,45 +104,6 @@ function pitchDate(pitch: PitchLogRow): Date {
   return new Date(pitch.thrownAt || pitch.sessionStartedAt);
 }
 
-function PitchLocationGraphic({ pitch }: { pitch: PitchLogRow }) {
-  const color = PITCH_COLORS[pitch.pitchType ?? 'Undefined'] ?? PITCH_COLORS.Undefined;
-  const targetX = px(pitch.intendedSideFt);
-  const targetY = py(pitch.intendedHeightFt);
-  const actualX = px(pitch.plateLocSide);
-  const actualY = py(pitch.plateLocHeight);
-  return (
-    <div className={styles.historyPitchVisual}>
-      <svg viewBox={`0 0 ${ZONE_W} ${ZONE_H}`} aria-label={`Pitch ${pitch.pitchIndex}: intended target and actual location`}>
-        <polygon points={`${px(-0.75)},${py(0.55)} ${px(0.75)},${py(0.55)} ${px(0.75)},${py(0.65)} ${px(0)},${py(0.75)} ${px(-0.75)},${py(0.65)}`} fill="none" stroke="rgba(226,232,240,.75)" strokeWidth="3" />
-        <rect x={px(-1.5)} y={py(STRIKE_CENTER_Y + 1.5)} width={px(1.5) - px(-1.5)} height={py(STRIKE_CENTER_Y - 1.5) - py(STRIKE_CENTER_Y + 1.5)} fill="none" stroke="rgba(148,163,184,.28)" strokeWidth="2" />
-        <line x1={px(-1.5)} y1={py(STRIKE_CENTER_Y)} x2={px(1.5)} y2={py(STRIKE_CENTER_Y)} stroke="rgba(148,163,184,.2)" />
-        <line x1={px(0)} y1={py(STRIKE_CENTER_Y - 1.5)} x2={px(0)} y2={py(STRIKE_CENTER_Y + 1.5)} stroke="rgba(148,163,184,.2)" />
-        <rect x={px(STRIKE_LEFT)} y={py(STRIKE_TOP)} width={px(STRIKE_RIGHT) - px(STRIKE_LEFT)} height={py(STRIKE_BOTTOM) - py(STRIKE_TOP)} fill="rgba(15,23,42,.28)" stroke="#e2e8f0" strokeWidth="3" />
-        {[1, 2].map((third) => (
-          <line key={`vertical-${third}`} x1={px(STRIKE_LEFT + STRIKE_THIRD_X * third)} y1={py(STRIKE_TOP)} x2={px(STRIKE_LEFT + STRIKE_THIRD_X * third)} y2={py(STRIKE_BOTTOM)} stroke="rgba(148,163,184,.48)" strokeWidth="1" />
-        ))}
-        {[1, 2].map((third) => (
-          <line key={`horizontal-${third}`} x1={px(STRIKE_LEFT)} y1={py(STRIKE_TOP - STRIKE_THIRD_Y * third)} x2={px(STRIKE_RIGHT)} y2={py(STRIKE_TOP - STRIKE_THIRD_Y * third)} stroke="rgba(148,163,184,.48)" strokeWidth="1" />
-        ))}
-        {POCKETS.map((pocket) => (
-          <text key={pocket.number} x={px(pocket.x)} y={py(pocket.y)} className={styles.historyPocketNumber}>{pocket.number}</text>
-        ))}
-        <line x1={targetX} y1={targetY} x2={actualX} y2={actualY} stroke="rgba(226,232,240,.55)" strokeWidth="1.5" strokeDasharray="5 4" />
-        <circle cx={targetX} cy={targetY} r={Math.max(5, pitch.targetRadiusFt * SCALE)} fill="rgba(74,222,128,.17)" stroke="#4ade80" strokeWidth="2.3" strokeDasharray="5 4" />
-        <circle cx={targetX} cy={targetY} r="3" fill="#86efac" />
-        <circle cx={actualX} cy={actualY} r="8" fill={color} stroke="#f8fafc" strokeWidth="2" />
-      </svg>
-      <div className={styles.historyPitchLegend}>
-        <span>
-          <svg className={styles.historyLegendTarget} viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="5" /><circle cx="7" cy="7" r="1.5" /></svg>
-          Intended target
-        </span>
-        <span><i className={styles.historyLegendActual} style={{ background: color }} /> Actual location</span>
-      </div>
-    </div>
-  );
-}
-
 export default function IntendedZonePitchLog({
   pitcherName,
   startDate,
@@ -163,12 +117,27 @@ export default function IntendedZonePitchLog({
   selectedPitchTypes: string[];
   selectedBallTypes: string[];
 }) {
-  const [pitches, setPitches] = useState<PitchLogRow[]>([]);
+  const [rawPitches, setRawPitches] = useState<PitchLogRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [displayTargetInches, setDisplayTargetInches] = useState<number>(DEFAULT_TARGET_SIZE_INCHES);
+
+  // Every pitch's targetHit/targetRadiusFt as returned by the API reflect
+  // whichever size that pitch's OWN session happened to use -- overridden
+  // here with one coach-selected size applied uniformly, recomputed from
+  // each pitch's actual missDistanceFt (same center target regardless of
+  // size, so this is always valid).
+  const pitches = useMemo(() => {
+    const radiusFt = displayTargetInches / 2 / 12;
+    return rawPitches.map((pitch) => ({
+      ...pitch,
+      targetRadiusFt: radiusFt,
+      targetHit: pitch.missDistanceFt !== null && pitch.missDistanceFt <= radiusFt,
+    }));
+  }, [rawPitches, displayTargetInches]);
 
   const loadPitches = useCallback(async () => {
     setLoading(true);
@@ -190,10 +159,10 @@ export default function IntendedZonePitchLog({
         await waitForRetry(250);
         loadedPitches = await fetchPitchLog(query);
       }
-      setPitches(loadedPitches);
+      setRawPitches(loadedPitches);
       setPage(1);
     } catch (loadError) {
-      setPitches([]);
+      setRawPitches([]);
       setError(loadError instanceof Error ? loadError.message : 'Unable to load intended target pitch history.');
     } finally {
       setLoading(false);
@@ -231,7 +200,7 @@ export default function IntendedZonePitchLog({
       const dateRange = startDate && endDate
         ? `${new Date(`${startDate}T00:00:00`).toLocaleDateString()} – ${new Date(`${endDate}T00:00:00`).toLocaleDateString()}`
         : 'All selected dates';
-      const filterLine = [dateRange, selectedPitchTypes.length ? selectedPitchTypes.join(', ') : 'All pitch types', selectedBallTypes.length ? selectedBallTypes.join(', ') : 'All ball types'].join('  ·  ');
+      const filterLine = [dateRange, selectedPitchTypes.length ? selectedPitchTypes.join(', ') : 'All pitch types', selectedBallTypes.length ? selectedBallTypes.join(', ') : 'All ball types', `${displayTargetInches}″ target`].join('  ·  ');
       // The API returns newest first for the on-screen log. Reports read as
       // a progression: pitch 1 is the oldest selected pitch and the newest
       // pitch is last.
@@ -378,7 +347,7 @@ export default function IntendedZonePitchLog({
     } finally {
       setIsExporting(false);
     }
-  }, [endDate, pitcherName, pitches, selectedBallTypes, selectedPitchTypes, startDate]);
+  }, [displayTargetInches, endDate, pitcherName, pitches, selectedBallTypes, selectedPitchTypes, startDate]);
 
   return (
     <section className={styles.historyLogShell}>
@@ -389,6 +358,22 @@ export default function IntendedZonePitchLog({
           <p>Every completed target from the selected sessions, paired with its actual TrackMan location.</p>
         </div>
         <div className={styles.historyLogHeaderTools}>
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>Target Size</label>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {TARGET_SIZE_DISPLAY_PRESETS.map((inches) => (
+                <button
+                  key={inches}
+                  type="button"
+                  className={styles.resetButton}
+                  style={displayTargetInches === inches ? { borderColor: 'rgb(var(--portal-accent-rgb, 200, 16, 46))', color: '#f8fafc' } : undefined}
+                  onClick={() => setDisplayTargetInches(inches)}
+                >
+                  {inches}″
+                </button>
+              ))}
+            </div>
+          </div>
           <div className={styles.historyLogSummary}>
             <div><span>Pitches</span><strong>{pitches.length}</strong></div>
             <div><span>Target hit</span><strong>{summary.hitPct === null ? '—' : `${summary.hitPct.toFixed(1)}%`}</strong></div>
@@ -422,7 +407,7 @@ export default function IntendedZonePitchLog({
                   <span className={pitch.targetHit ? styles.historyHitBadge : styles.historyMissBadge}>{pitch.targetHit ? 'Target hit' : 'Miss'}</span>
                 </header>
                 <div className={styles.historyPitchBody}>
-                  <PitchLocationGraphic pitch={pitch} />
+                  <IntendedTargetLocationGraphic pitch={pitch} />
                   <div className={styles.historyPitchDetails}>
                     <div className={styles.historyPitchTimestamp}>
                       <strong>{Number.isNaN(date.getTime()) ? 'Unknown date' : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</strong>

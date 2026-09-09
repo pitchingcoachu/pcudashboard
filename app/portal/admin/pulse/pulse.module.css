@@ -79,3 +79,78 @@
 .exportSheet{--ink:#eef4ff;--muted:#91a2ba;--line:#2a3a52;--panel:#091522;position:fixed;z-index:1000;left:0;top:calc(100vh + 20px);width:1400px;min-height:940px;height:auto;overflow:visible;padding:28px 34px;pointer-events:none;background:#07182d;color:var(--ink);font-family:inherit}.exportHeader{display:grid;grid-template-columns:150px 1fr 190px;align-items:center;min-height:100px;padding-bottom:18px;border-bottom:2px solid rgba(255,255,255,.18);text-align:center}.exportHeader p{margin:0;color:#55d8ff;font-size:.72rem;font-weight:900;letter-spacing:.18em}.exportHeader h2{margin:5px 0 3px;font-size:2rem}.exportHeader span{color:#aebbd0;font-size:.76rem}.exportLogoBox{display:flex;align-items:center;justify-content:flex-start;height:76px}.exportLogoBox img{width:76px;height:76px;object-fit:contain}.exportLogoBox strong{font-size:1.4rem}.exportPearl{display:flex;align-items:center;justify-content:flex-end;height:64px}.exportPearl img{display:block;width:170px;height:44px;object-fit:contain}.exportCards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}.exportCards>div{padding:12px 16px;border:1px solid #2a3a52;border-radius:12px;background:#0b2039}.exportCards small{display:block;color:#91a2ba;font-size:.64rem;font-weight:900;letter-spacing:.1em}.exportCards strong{display:block;margin-top:6px;font-size:1.45rem}.exportCharts{display:grid;grid-template-columns:1fr 1fr;gap:14px}.exportCharts .panel{height:315px;margin:0;padding:14px}.exportCharts .chart{min-height:250px}.exportCharts .chartPlot svg,.exportCharts .chart svg{height:205px}.exportData{margin-top:14px;border:1px solid #2a3a52;border-radius:12px;overflow:hidden;background:#091522}.exportDataTitle{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid #2a3a52}.exportDataTitle h3{margin:0;font-size:.76rem;letter-spacing:.08em;text-transform:uppercase}.exportDataTitle span{color:#91a2ba;font-size:.64rem}.exportData table{width:100%;border-collapse:collapse;table-layout:fixed;color:#e8f0fc;font-size:.59rem;text-align:center}.exportData th{padding:6px 5px;background:#0d223b;color:#8fa4bd;font-size:.52rem;letter-spacing:.07em;text-transform:uppercase}.exportData td{padding:5px;border-top:1px solid rgba(77,101,132,.28);font-variant-numeric:tabular-nums}.exportData tbody tr:nth-child(even){background:rgba(18,46,78,.35)}.exportFooter{margin-top:10px;color:#91a2ba;font-size:.62rem;text-align:right}
 
 @media(max-width:1050px){.sidebarToggle{top:175px;left:auto;right:0;transform:translate(50%,-50%)}.sidebarHidden .sidebarToggle{top:50%;right:auto;left:0;transform:translateY(-50%)}}
+
+/* PCU Pulse: charcoal, Pitching Coach U red, and warm pearl neutrals. */
+.shell[data-school-code='PCU']{--cyan:#c8102e;--ink:#f7f4f1;--muted:#aaa0a2;--line:rgba(200,16,46,.28);--panel:#121011}
+:global(body:not(.theme-light)) .shell[data-school-code='PCU'],
+:global(body.theme-light) .shell[data-school-code='PCU']{--cyan:#c8102e}
+:global(body:not(.theme-light)) .shell[data-school-code='PCU'] .hero{background:radial-gradient(circle at 8% 0%,rgba(200,16,46,.25),transparent 42%),linear-gradient(135deg,#1a1113,#090809)}
+:global(body:not(.theme-light)) .shell[data-school-code='PCU'] .hero p{color:#bdb3b4}
+:global(body:not(.theme-light)) .shell[data-school-code='PCU'] .workspace{background:#0b090a}
+:global(body:not(.theme-light)) .shell[data-school-code='PCU'] .rosterHead,
+:global(body:not(.theme-light)) .shell[data-school-code='PCU'] .dataTable th{background:#1b1517;color:#b9adaf}
+:global(body:not(.theme-light)) .shell[data-school-code='PCU'] .roster button{background:#100d0e;border-bottom-color:#2d2225}
+:global(body:not(.theme-light)) .shell[data-school-code='PCU'] .roster button:hover,
+:global(body:not(.theme-light)) .shell[data-school-code='PCU'] .roster .selectedPlayer{background:linear-gradient(90deg,rgba(200,16,46,.24),rgba(200,16,46,.035))}
+:global(body:not(.theme-light)) .shell[data-school-code='PCU'] .filters input,
+:global(body:not(.theme-light)) .shell[data-school-code='PCU'] .filters select{background:#100d0e}
+:global(body:not(.theme-light)) .shell[data-school-code='PCU'] .uploadBox button,
+:global(body:not(.theme-light)) .shell[data-school-code='PCU'] .filters button,
+:global(body:not(.theme-light)) .shell[data-school-code='PCU'] .pager button{border-color:#423235;background:#1b1617;color:#f7f4f1}
+:global(body:not(.theme-light)) .shell[data-school-code='PCU'] .cards>div,
+:global(body:not(.theme-light)) .shell[data-school-code='PCU'] .metricCards>div{background:linear-gradient(155deg,#1a1516,#0f0c0d)}
+:global(body:not(.theme-light)) .shell[data-school-code='PCU'] .grid{stroke:#3a2d30}
+:global(body:not(.theme-light)) .shell[data-school-code='PCU'] .sidebarToggle{background:#1a1416}
+:global(body:not(.theme-light)) .shell[data-school-code='PCU'] .sidebarToggle:hover{background:#29191d}
+:global(body:not(.theme-light)) .shell[data-school-code='PCU'] .chartTooltip,
+:global(body:not(.theme-light)) .shell[data-school-code='PCU'] .chart [data-pulse-chart-tooltip]{border-color:#54363d;background:rgba(15,12,13,.98)}
+.shell[data-school-code='PCU'] .syncButton{border-color:#df3150;background:linear-gradient(135deg,#c8102e,#830a20);box-shadow:0 10px 28px rgba(200,16,46,.22)}
+.shell[data-school-code='PCU'] .syncButton:hover:not(:disabled){box-shadow:0 14px 34px rgba(200,16,46,.34)}
+.shell[data-school-code='PCU'] .exportButton{background:rgba(200,16,46,.14)}
+.shell[data-school-code='PCU'] .exportButton:hover{background:rgba(200,16,46,.26)}
+.shell[data-school-code='PCU'] .roster .diagnosticValue{border-color:#59464a;color:#eee7e2}
+.shell[data-school-code='PCU'] .roster .acuteValue{border-color:#d4465f}
+.shell[data-school-code='PCU'] .roster .chronicValue{border-color:#dcc1a1}
+.shell[data-school-code='PCU'] .roster .oneDayValue{border-color:#9d1830}
+.shell[data-school-code='PCU'] .roster .throwCount{color:#e7dfdc}
+.shell[data-school-code='PCU'] .neutral{color:#a99d9f!important;background:rgba(169,157,159,.13)!important}
+.shell[data-school-code='PCU'] .tabs button{border:1px solid rgba(200,16,46,.22);border-bottom:0;background:#171214;color:#b9adaf}
+.shell[data-school-code='PCU'] .tabs button:hover{background:#26171b;color:#fff8f5}
+.shell[data-school-code='PCU'] .tabs .activeTab{border-color:#c8102e;background:#c8102e;color:#fff8f5!important}
+.shell[data-school-code='PCU'] .profileTitle>span{border-color:#7f3846;color:#f1cbd2}
+.shell[data-school-code='PCU'] .hoverGuide{stroke:#eadfdb}
+.shell[data-school-code='PCU'] .chartTooltip span,
+.shell[data-school-code='PCU'] .chart [data-pulse-chart-tooltip]>span{color:#c4b8b9}
+:global(body:not(.theme-light)) .shell[data-school-code='PCU'] .dataTable tbody tr:hover{background:#211719}
+
+:global(body.theme-light) .shell[data-school-code='PCU']{--ink:#241b1d;--muted:#746668;--line:rgba(200,16,46,.22);--panel:#fffaf7}
+:global(body.theme-light) .shell[data-school-code='PCU'] .hero{background:radial-gradient(circle at 8% 0%,rgba(200,16,46,.12),transparent 42%),#fffaf7}
+:global(body.theme-light) .shell[data-school-code='PCU'] .hero p{color:#685a5c}
+:global(body.theme-light) .shell[data-school-code='PCU'] .workspace,
+:global(body.theme-light) .shell[data-school-code='PCU'] .roster button{background:#fffdfb}
+:global(body.theme-light) .shell[data-school-code='PCU'] .rosterHead,
+:global(body.theme-light) .shell[data-school-code='PCU'] .dataTable th{background:#f2e5e4;color:#6d565a}
+:global(body.theme-light) .shell[data-school-code='PCU'] .uploadBox button,
+:global(body.theme-light) .shell[data-school-code='PCU'] .filters button,
+:global(body.theme-light) .shell[data-school-code='PCU'] .pager button{border-color:#dcc9c8;background:#f8efed;color:#321f23}
+:global(body.theme-light) .shell[data-school-code='PCU'] .tabs button{border-color:#dfc4c7;background:#f5e8e7;color:#715b5f}
+:global(body.theme-light) .shell[data-school-code='PCU'] .tabs button:hover{background:#eed5d8;color:#3a2227}
+:global(body.theme-light) .shell[data-school-code='PCU'] .tabs .activeTab{border-color:#c8102e;background:#c8102e;color:#fff8f5!important}
+:global(body.theme-light) .shell[data-school-code='PCU'] .cards>div,
+:global(body.theme-light) .shell[data-school-code='PCU'] .metricCards>div,
+:global(body.theme-light) .shell[data-school-code='PCU'] .panel{background:#fffaf7}
+:global(body.theme-light) .shell[data-school-code='PCU'] .dataTable tbody tr:hover{background:#faeeee}
+
+.shell[data-school-code='PCU'] .exportSheet{--ink:#f7f4f1;--muted:#b5aaab;--line:#4b3036;--panel:#151112;background:#100d0e}
+.shell[data-school-code='PCU'] .exportHeader p{color:#e24762}
+.shell[data-school-code='PCU'] .exportHeader span,
+.shell[data-school-code='PCU'] .exportCards small,
+.shell[data-school-code='PCU'] .exportDataTitle span,
+.shell[data-school-code='PCU'] .exportFooter{color:#b5aaab}
+.shell[data-school-code='PCU'] .exportCards>div{border-color:#4b3036;background:#1c1517}
+.shell[data-school-code='PCU'] .exportData{border-color:#4b3036;background:#151112}
+.shell[data-school-code='PCU'] .exportDataTitle{border-bottom-color:#4b3036}
+.shell[data-school-code='PCU'] .exportData table{color:#f2ece8}
+.shell[data-school-code='PCU'] .exportData th{background:#24171a;color:#c5b5b7}
+.shell[data-school-code='PCU'] .exportData td{border-top-color:rgba(125,84,93,.32)}
+.shell[data-school-code='PCU'] .exportData tbody tr:nth-child(even){background:rgba(93,38,49,.24)}

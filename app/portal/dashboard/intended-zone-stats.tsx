@@ -119,9 +119,12 @@ function formatShortDateSafe(isoDate: string): string {
   }
 }
 
-// Only render one column per target size that actually shows up in the
-// current rows -- there's no fixed preset list, since web lets a coach drag
-// a free-form slider while mobile has 3 presets, so the real data decides.
+// computeTargetHitRates (lib/training-db.ts) now always returns all five
+// standard sizes (4"/8"/12"/16"/20") recomputed from each pitch's own miss
+// distance -- a pitch thrown at an 8" target still tells you whether it
+// would have hit a 16" one, since every target shares the same center point
+// and only the radius changes. This just collects whatever sizes are
+// present so the table doesn't hardcode the list a second time.
 function collectTargetInchesColumns(rows: { targetHitRates: TargetHitRate[] }[]): number[] {
   const set = new Set<number>();
   for (const row of rows) {

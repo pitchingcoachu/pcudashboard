@@ -1,4 +1,5 @@
 import { getAnthropicClient, DASHBOARD_CHAT_MODEL } from './anthropic-client';
+import { canonicalReportMetric, type PlayerGoalReportEvidence } from './report-goal-evidence';
 
 function extractText(content: Array<{ type: string; text?: string }>): string {
   return content.filter((block) => block.type === 'text').map((block) => block.text ?? '').join('\n').trim();
@@ -30,6 +31,9 @@ const REPORT_METRIC_CONCEPTS = [
   { name: 'Launch Angle', pattern: /\b(?:launch angle|\bla\b)\b/i }, { name: 'Bat Speed', pattern: /\bbat speed\b/i },
   { name: 'Whiff Rate', pattern: /\b(?:whiff|swstrk)\s*%?/i }, { name: 'Strike Rate', pattern: /\bstrike\s*%/i },
   { name: 'Chase Rate', pattern: /\bchase\s*%?/i }, { name: 'Swing Rate', pattern: /\bswing\s*%/i },
+  { name: 'First Pitch Strike Rate', pattern: /\b(?:fps|first pitch strike)\s*%?/i },
+  { name: 'In-Zone Rate', pattern: /\b(?:in[ -]?zone|zone)\s*%/i },
+  { name: 'Competitive Pitch Rate', pattern: /\b(?:comp|competitive)\s*%/i },
   { name: 'Ground Ball Rate', pattern: /\b(?:ground ball|gb)\s*%/i }, { name: 'Barrel Rate', pattern: /\bbarrel\s*%?/i },
   { name: 'xWOBA', pattern: /\bxwoba\b/i }, { name: 'xISO', pattern: /\biso\b/i },
   { name: 'Run Value', pattern: /\b(?:run value|rv\/100)\b/i }, { name: 'Pitch Value', pattern: /\b(?:pitch value|pv\/100)\b/i },
@@ -55,10 +59,66 @@ function hasUnsupportedShapeJudgment(text: string): boolean {
   return UNSUPPORTED_SHAPE_JUDGMENTS.some((pattern) => pattern.test(text));
 }
 
+function reportGoalEvidence(data: unknown): PlayerGoalReportEvidence[] {
+  if (!data || typeof data !== 'object') return [];
+  const goals = (data as { playerGoalEvidence?: unknown }).playerGoalEvidence;
+  return Array.isArray(goals) ? (goals as PlayerGoalReportEvidence[]) : [];
+}
+
+function formatGoalMetricValue(metric: string, value: number): string {
+  const metricKey = canonicalReportMetric(metric);
+  if (metric.includes('%') || metricKey.endsWith('pct')) return `${value.toFixed(1)}%`;
+  if (new Set(['avg', 'slg', 'obp', 'ops', 'woba', 'xwoba', 'iso', 'xiso', 'babip']).has(metricKey)) {
+    return value.toFixed(3).replace(/^0/, '');
+  }
+  if (metricKey === 'spinrate') return `${Math.round(value)} rpm`;
+  if (metricKey === 'velocity' || metricKey === 'maxvelocity') return `${value.toFixed(1)} mph`;
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function goalAlreadyCovered(text: string, goal: PlayerGoalReportEvidence): boolean {
+  const normalizedText = text.toLowerCase().replace(/[^a-z0-9]+/g, '');
+  const metricToken = String(goal.metric ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  const metricKey = canonicalReportMetric(goal.metric);
+  const metricAliases: Record<string, string[]> = {
+    fpspct: ['fps', 'firstpitchstrike'],
+    inzonepct: ['inzone', 'zonerate'],
+    comppct: ['comppct', 'competitivepitch'],
+    strikepct: ['strikepct', 'strikerate'],
+  };
+  const metricCovered = [metricToken, ...(metricAliases[metricKey] ?? [])].filter(Boolean).some((value) => normalizedText.includes(value));
+  const scopedPitchTypes = goal.filters.pitchTypes.map((value) => value.toLowerCase().replace(/[^a-z0-9]+/g, '')).filter(Boolean);
+  const scopeCovered = !scopedPitchTypes.length || scopedPitchTypes.some((value) => normalizedText.includes(value));
+  const targetCovered = normalizedText.includes(String(goal.targetValue).replace(/[^0-9]+/g, ''));
+  return metricCovered && scopeCovered && targetCovered;
+}
+
+function appendMissingGoalCoverage(text: string, data: unknown): string {
+  const missing = reportGoalEvidence(data).filter((goal) => !goalAlreadyCovered(text, goal));
+  if (!missing.length) return text;
+  const sentences = missing.flatMap((goal) => {
+    const comparison = goal.comparisons[0];
+    if (!comparison) return [];
+    const pitchType = goal.filters.pitchTypes.length === 1 ? `${goal.filters.pitchTypes[0]} ` : '';
+    const sample = comparison.currentSampleSize && comparison.currentSampleSize > 0
+      ? ` over ${comparison.currentSampleSize} pitch${comparison.currentSampleSize === 1 ? '' : 'es'}`
+      : '';
+    const targetStatus = comparison.targetMet
+      ? `met the ${formatGoalMetricValue(goal.metric, goal.targetValue)} target`
+      : goal.comparator === 'Less Than'
+        ? `remained above the ${formatGoalMetricValue(goal.metric, goal.targetValue)} target`
+        : `remained below the ${formatGoalMetricValue(goal.metric, goal.targetValue)} target`;
+    return [`On the ${pitchType}${goal.metric} goal, the report ${comparison.trend === 'stable' ? 'held steady' : comparison.trend} from ${formatGoalMetricValue(goal.metric, comparison.reference)} to ${formatGoalMetricValue(goal.metric, comparison.current)}${sample} and ${targetStatus}.`];
+  });
+  return sentences.length ? `${text.trim()}\n\n${sentences.join(' ')}` : text;
+}
+
 export async function generateReportNarrative(input: { reportType: string; title: string; reportStart: string; reportEnd: string; comparisonStart: string; comparisonEnd: string; allowedMetrics: string[]; data: unknown }): Promise<string> {
   const system = `Write a concise, useful performance interpretation that sounds like an experienced coach. The only metrics you may name are: ${input.allowedMetrics.join(', ')}. Treat this as a strict whitelist, including acronyms and derived metrics.
 
 Use the precomputed comparisons to identify the two or three most meaningful changes from the player's reference average. Explain what those changes mean together instead of listing every number. Distinguish a real direction from normal stability, and mention limited samples when the supplied sample sizes make a conclusion weak. Give one practical coaching implication grounded in the shown data, such as what to preserve, monitor, or investigate next. Do not invent a cause, mechanical explanation, intent, target, or recommendation that the evidence does not support. MLB context may appear in one sentence only when an MLB benchmark is supplied for that exact whitelisted metric.
+
+The evidence may contain playerGoalEvidence. Those entries are the only player-plan goals relevant to this report: they have a numeric target, a visible matching metric, applicable report context, and a same-metric comparison. When entries are supplied, briefly address each relevant goal using its current value, reference value, target, comparator, and supplied trend. Say whether the player improved, regressed, or remained stable toward that goal, and say the target was met only when targetMet is true. Do not mention goals at all when playerGoalEvidence is absent or empty. Never infer or discuss subjective, mechanical, physical, or otherwise unmeasured goals. Never apply a goal to a different metric, pitch type, count, batter side, or session context. In a bullpen context, do not introduce competition-result goals such as Whiff%, chase, batted-ball outcomes, K%, or BB%.
 
 Treat pitch-shape metrics carefully. More or less IVB, HB, spin efficiency, or tilt is a shape change, not automatically an improvement or decline. Lower IVB may represent more depth, and lower spin efficiency may be intentional or normal for a cutter or other pitch type. Spin efficiency is not a pitch-quality score. Tilt describes orientation, not quality. Never call a pitch worse, say it lost its shape, or label it flatter or steeper from those metrics alone. Use neutral language such as "showed less IVB," "had more depth," or "the shape shifted from the reference." Only grade a shape change when the evidence includes an explicit target, outcome metric, or directly applicable benchmark that supports the judgment. Do not infer approach angle or trajectory from IVB alone.
 
@@ -79,6 +139,9 @@ Write 2-3 short paragraphs in plain language. Lead immediately with the main tak
     forbidden = forbiddenReportMetrics(text, input.allowedMetrics);
     unsupportedShapeJudgment = hasUnsupportedShapeJudgment(text);
   }
+  text = appendMissingGoalCoverage(text, input.data);
+  forbidden = forbiddenReportMetrics(text, input.allowedMetrics);
+  unsupportedShapeJudgment = hasUnsupportedShapeJudgment(text);
   if (forbidden.length) throw new Error(`The summary included metrics outside this report (${forbidden.join(', ')}). Please generate it again.`);
   if (unsupportedShapeJudgment) throw new Error('The summary made an unsupported pitch-shape judgment. Please generate it again.');
   return text;

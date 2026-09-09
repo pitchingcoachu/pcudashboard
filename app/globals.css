@@ -4390,9 +4390,20 @@ body.theme-light .portal-option-email {
   min-width: 0;
   max-width: 100%;
   box-sizing: border-box;
+  /* portal-admin-card is a grid. Its implicit auto column was sizing to its
+     widest child, which let 100% form controls include the card padding. */
+  grid-template-columns: minmax(0, 1fr);
   align-self: stretch;
   align-content: start;
   grid-auto-rows: max-content;
+}
+
+.portal-custom-reports-sidebar > * {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  justify-self: stretch;
+  margin-inline: 0;
 }
 
 .portal-custom-reports-sidebar > .btn {

@@ -43,12 +43,12 @@ type HomeSearchBaseSnapshot = {
 
 const homeSearchBaseCache = new Map<string, { at: number; payload: HomeSearchBaseSnapshot }>();
 const homeSearchBaseInflight = new Map<string, Promise<HomeSearchBaseSnapshot>>();
-const HOME_SEARCH_ROSTER_CACHE_VERSION = 'pcu-roster-2026-07-26-league-d1-window';
+const HOME_SEARCH_ROSTER_CACHE_VERSION = 'pcu-roster-2026-09-08-atlantic-window';
 
 function resolveHomeSearchBaseTtlMs(schoolCode: string): number {
   const upper = String(schoolCode ?? '').trim().toUpperCase();
   if (upper === 'PRO') return 10 * 60 * 1000;
-  if (upper === 'LEAGUE') return 5 * 60 * 1000;
+  if (['LI', 'LEAGUE', 'INDY'].includes(upper)) return 5 * 60 * 1000;
   return 2 * 60 * 1000;
 }
 
@@ -147,6 +147,7 @@ function resolveSeasonWindow(schoolCode: string, latestAvailableDate: string | n
   const today = todayIso();
 
   if (upper === 'PRO') return { startDate: '2026-03-25', endDate: today };
+  if (['LI', 'INDY'].includes(upper)) return { startDate: '2026-04-01', endDate: today };
   if (upper === 'LEAGUE') return { startDate: '2026-02-13', endDate: '2026-06-22' };
   if (upper === 'CNU') return { startDate: '2026-01-31', endDate: today };
   if (upper === 'PCU') {
@@ -162,6 +163,7 @@ function resolveScopedPlayerWindow(schoolCode: string, latestAvailableDate: stri
   if (upper === 'PCU') return { startDate: latest, endDate: latest };
   if (upper === 'CNU') return { startDate: '2026-01-31', endDate: latest };
   if (upper === 'PRO') return { startDate: '2026-03-25', endDate: latest };
+  if (['LI', 'INDY'].includes(upper)) return { startDate: '2026-04-01', endDate: todayIso() };
   if (upper === 'LEAGUE') return { startDate: '2026-02-13', endDate: '2026-06-22' };
   return { startDate: '2026-02-13', endDate: latest };
 }

@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import ExerciseVideoPlayer from '../../../../../components/exercise-video-player';
 import type { DrillSectionState, HittingDrillsState } from '../../../../../lib/hitting-drills-program';
 import { uploadPlayerMediaFile } from '../../../../../lib/upload-player-media';
 
@@ -11,29 +12,6 @@ type DrillVideo = {
 
 function normalizeDrillName(value: string): string {
   return value.trim().toLowerCase();
-}
-
-function embedVideoUrl(raw: string): string {
-  try {
-    const parsed = new URL(raw);
-    if (parsed.hostname.includes('youtube.com')) {
-      const videoId = parsed.searchParams.get('v');
-      if (videoId) return `https://www.youtube.com/embed/${videoId}`;
-      const shortMatch = parsed.pathname.match(/^\/shorts\/([^/?#]+)/i);
-      if (shortMatch?.[1]) return `https://www.youtube.com/embed/${shortMatch[1]}`;
-    }
-    if (parsed.hostname.includes('youtu.be')) {
-      const videoId = parsed.pathname.replace('/', '').trim();
-      if (videoId) return `https://www.youtube.com/embed/${videoId}`;
-    }
-    if (parsed.hostname.includes('vimeo.com')) {
-      const id = parsed.pathname.split('/').filter(Boolean)[0];
-      if (id) return `https://player.vimeo.com/video/${id}`;
-    }
-    return raw;
-  } catch {
-    return raw;
-  }
 }
 
 function CameraIcon() {
@@ -176,7 +154,7 @@ export default function HittingDrillsReadonly({
     drillVideos.forEach((video) => {
       const name = normalizeDrillName(video.name);
       const url = video.instructionVideoUrl.trim();
-      if (name && url) next[name] = embedVideoUrl(url);
+      if (name && url) next[name] = url;
     });
     return next;
   }, [drillVideos]);
@@ -244,15 +222,7 @@ export default function HittingDrillsReadonly({
                 Close
               </button>
             </div>
-            <div className="tutorial-video-frame-wrap">
-              <iframe
-                src={videoPreview.url}
-                title={`${videoPreview.title} video`}
-                className="tutorial-video-frame"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                allowFullScreen
-              />
-            </div>
+            <ExerciseVideoPlayer url={videoPreview.url} title={videoPreview.title} />
           </article>
         </div>
       )}

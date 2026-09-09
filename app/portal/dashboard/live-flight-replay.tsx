@@ -18,6 +18,7 @@ export type LiveFlightPitch = {
   plateLocSide: number | null;
   plateLocHeight: number | null;
   missDirection: string | null;
+  missDistanceFt: number | null;
   flightData: {
     position: Point3;
     velocity: Point3;
@@ -307,7 +308,7 @@ export default function LiveFlightReplay({
   const clockUpdateRef = useRef(0);
   const previousPitchIdRef = useRef<number | null>(null);
   const [camera, setCamera] = useState<CameraView>('batter');
-  const [speed, setSpeed] = useState(1);
+  const [speed, setSpeed] = useState(0.5);
   const [autoReplay, setAutoReplay] = useState(true);
   const [playing, setPlaying] = useState(false);
   const [displayTime, setDisplayTime] = useState(0);
@@ -368,6 +369,9 @@ export default function LiveFlightReplay({
         </div>
         <div className={styles.headerActions}>
           {pitch?.missDirection ? <span className={styles.miss}>{MISS_LABELS[pitch.missDirection] ?? pitch.missDirection}</span> : null}
+          {pitch?.missDistanceFt !== null && pitch?.missDistanceFt !== undefined ? (
+            <span className={styles.miss}>{(pitch.missDistanceFt * 12).toFixed(1)}″</span>
+          ) : null}
           <button type="button" className={styles.replay} onClick={replay} disabled={!hasFlight}>Replay</button>
         </div>
       </header>

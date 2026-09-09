@@ -11,6 +11,16 @@ type DailyEvent = { date:string; throws:number; highEffortThrows:number; armSpee
 type SyncStatus = { lastRequestedAt:string|null; lastCompletedAt:string|null; status:'idle'|'queued'|'success'|'failed'; cooldownUntil:string|null };
 type Data = { schoolCode:string; players:Player[]; selectedPlayerKey:string; workload:Workload[]; events:EventRow[]; dailyEvents:DailyEvent[]; uploads:Array<{id:string;fileName:string;kind:string;rowCount:number;insertedRows:number;minDate:string;maxDate:string;createdAt:string}>; sync:SyncStatus; summary:{throws7:number;throws28:number;avgTorque7:number|null;avgArmSpeed7:number|null;avgStress7:number|null;avgStress28:number|null} };
 
+const PULSE_SYNC_SCHOOLS = new Set(['ARIZONA', 'PCU']);
+const DEFAULT_CHART_COLORS = {
+  oneDay: '#22b8e6', acRatio: '#ff9f1c', chronic: '#17c3b2', acute: '#8d79ff',
+  armSpeed: '#22b8e6', torque: '#ff5a7a', armSlot: '#f4bd4f', shoulderRotation: '#8d79ff',
+};
+const PCU_CHART_COLORS = {
+  oneDay: '#c8102e', acRatio: '#e5b567', chronic: '#dcc1a1', acute: '#ef536c',
+  armSpeed: '#c8102e', torque: '#dcc1a1', armSlot: '#e5b567', shoulderRotation: '#f4f1ed',
+};
+
 const fmt = (value:number|null, digits=2) => value == null ? '—' : value.toFixed(digits).replace(/\.00$/, '');
 const dateLabel = (value:string) => new Date(`${value}T12:00:00`).toLocaleDateString(undefined,{month:'short',day:'numeric'});
 const fullDate = (value:string) => new Date(value).toLocaleString(undefined,{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'});
@@ -88,6 +98,8 @@ function LineChart({ rows, lines, bars }:{ rows:Array<Record<string,unknown>>; l
 }
 
 export default function PulseDashboard({ schoolCode,schoolLogoSrc,schoolLogoAlt }:{schoolCode:string;schoolLogoSrc:string|null;schoolLogoAlt:string}) {
+  const isPcu=schoolCode.trim().toUpperCase()==='PCU';
+  const chartColors=isPcu?PCU_CHART_COLORS:DEFAULT_CHART_COLORS;
   const [data,setData]=useState<Data|null>(null); const [error,setError]=useState(''); const [loading,setLoading]=useState(true);
   const [player,setPlayer]=useState(''); const [query,setQuery]=useState(''); const [tab,setTab]=useState<'workload'|'events'>('workload');
   const [start,setStart]=useState(()=>localIsoDate(-27)); const [end,setEnd]=useState(()=>localIsoDate()); const [sort,setSort]=useState('desc');
@@ -128,7 +140,7 @@ export default function PulseDashboard({ schoolCode,schoolLogoSrc,schoolLogoAlt 
       const captureWidth=Math.ceil(Math.max(node.scrollWidth,nodeRect.width));
       const captureHeight=Math.ceil(Math.max(node.scrollHeight,nodeRect.height));
       const canvas=await withTimeout(html2canvas(node,{
-        backgroundColor:'#07182d',
+        backgroundColor:isPcu?'#100d0e':'#07182d',
         // 1.25x is already ~210 DPI once this tall one-page report is fitted
         // to landscape letter. Higher values add memory/CPU without visible
         // print benefit and can stall PDF export on iPads and older laptops.
@@ -159,7 +171,7 @@ export default function PulseDashboard({ schoolCode,schoolLogoSrc,schoolLogoAlt 
       }),45000,'The report took too long to render. Please try exporting again.');
       const pdf=new jsPDF({orientation:'landscape',unit:'pt',format:'letter'});
       const pageWidth=pdf.internal.pageSize.getWidth(); const pageHeight=pdf.internal.pageSize.getHeight(); const margin=16;
-      pdf.setFillColor(7,24,45);pdf.rect(0,0,pageWidth,pageHeight,'F');
+      if(isPcu)pdf.setFillColor(16,13,14);else pdf.setFillColor(7,24,45);pdf.rect(0,0,pageWidth,pageHeight,'F');
       const scale=Math.min((pageWidth-margin*2)/canvas.width,(pageHeight-margin*2)/canvas.height);
       const width=canvas.width*scale; const height=canvas.height*scale;
       const offsetX=(pageWidth-width)/2; const offsetY=(pageHeight-height)/2;
@@ -197,8 +209,8 @@ export default function PulseDashboard({ schoolCode,schoolLogoSrc,schoolLogoAlt 
   const syncQueued=data?.sync.status==='queued';
   const syncDisabled=syncing||cooldownSeconds>0;
   const eventSlice=data?.events.slice(eventPage*PAGE,(eventPage+1)*PAGE)??[];
-  return <main className={styles.shell}>
-    <header className={styles.hero}><div><p className={styles.eyebrow}>ARM CARE INTELLIGENCE · {schoolCode}</p><h1>PULSE</h1><p>Daily throwing workload and arm-action metrics in one coaching view.</p></div>{schoolCode==='ARIZONA'?<div className={styles.syncBox}><button type="button" className={styles.syncButton} disabled={syncDisabled} onClick={()=>void syncNewData()}>{syncing||(syncQueued&&cooldownSeconds>0)?'Syncing…':cooldownSeconds>0?`Available in ${Math.ceil(cooldownSeconds/60)} min`:'Sync New Data'}</button><small>{data?.sync.lastCompletedAt?`Last successful sync: ${arizonaDateTime(data.sync.lastCompletedAt)}`:'No automated sync has completed yet.'}</small><span>Requests are limited to once every 10 minutes.</span></div>:<div className={styles.uploadBox}><input ref={inputRef} type="file" accept=".csv,text/csv" multiple onChange={e=>setFiles(Array.from(e.target.files??[]))}/><button type="button" onClick={()=>inputRef.current?.click()}>Upload CSVs</button><button type="button" className={styles.importButton} disabled={!files.length||uploading} onClick={upload}>{uploading?'Importing…':`Import${files.length?` ${files.length}`:''}`}</button><small>{files.length?files.map(f=>f.name).join(' · '):'Workload and events exports can be uploaded together.'}</small></div>}</header>
+  return <main className={styles.shell} data-school-code={schoolCode.trim().toUpperCase()}>
+    <header className={styles.hero}><div><p className={styles.eyebrow}>ARM CARE INTELLIGENCE · {schoolCode}</p><h1>PULSE</h1><p>Daily throwing workload and arm-action metrics in one coaching view.</p></div>{PULSE_SYNC_SCHOOLS.has(schoolCode)?<div className={styles.syncBox}><button type="button" className={styles.syncButton} disabled={syncDisabled} onClick={()=>void syncNewData()}>{syncing||(syncQueued&&cooldownSeconds>0)?'Syncing…':cooldownSeconds>0?`Available in ${Math.ceil(cooldownSeconds/60)} min`:'Sync New Data'}</button><small>{data?.sync.lastCompletedAt?`Last successful sync: ${arizonaDateTime(data.sync.lastCompletedAt)}`:'No automated sync has completed yet.'}</small><span>Requests are limited to once every 10 minutes.</span></div>:<div className={styles.uploadBox}><input ref={inputRef} type="file" accept=".csv,text/csv" multiple onChange={e=>setFiles(Array.from(e.target.files??[]))}/><button type="button" onClick={()=>inputRef.current?.click()}>Upload CSVs</button><button type="button" className={styles.importButton} disabled={!files.length||uploading} onClick={upload}>{uploading?'Importing…':`Import${files.length?` ${files.length}`:''}`}</button><small>{files.length?files.map(f=>f.name).join(' · '):'Workload and events exports can be uploaded together.'}</small></div>}</header>
     {notice&&<div className={styles.success}>{notice}</div>}{error&&<div className={styles.error}>{error}</div>}
     <div className={styles.tabs}><button className={tab==='workload'?styles.activeTab:''} onClick={()=>setTab('workload')}>Workload</button><button className={tab==='events'?styles.activeTab:''} onClick={()=>setTab('events')}>Arm Metrics</button></div>
     <section className={styles.filters}>
@@ -208,7 +220,7 @@ export default function PulseDashboard({ schoolCode,schoolLogoSrc,schoolLogoAlt 
       <label className={styles.sortField}><span>Sort</span><select className={styles.sortSelect} style={{height:46,minHeight:46,padding:'12px',boxSizing:'border-box'}} value={sort} onChange={e=>setSort(e.target.value)}><option value="desc">Newest first</option><option value="asc">Oldest first</option></select></label>
       <button onClick={()=>void load()}>Apply dates</button>
     </section>
-    {loading&&!data?<div className={styles.empty}>Loading PULSE…</div>:!data?.players.length?<div className={styles.empty}><strong>No PULSE data yet.</strong><span>{schoolCode==='ARIZONA'?'Use Sync New Data above to retrieve the latest PULSE exports.':'Upload one or more workload/events CSV exports above.'}</span></div>:
+    {loading&&!data?<div className={styles.empty}>Loading PULSE…</div>:!data?.players.length?<div className={styles.empty}><strong>No PULSE data yet.</strong><span>{PULSE_SYNC_SCHOOLS.has(schoolCode)?'Use Sync New Data above to retrieve the latest PULSE exports.':'Upload one or more workload/events CSV exports above.'}</span></div>:
     <div className={`${styles.workspace}${sidebarOpen?'':` ${styles.sidebarHidden}`}`}>
       {sidebarOpen?<aside className={styles.roster}>
         <div className={styles.rosterHead}><span>Athlete</span><span>A:C Ratio</span><span>Acute WL</span><span>Chronic WL</span><span>Throw Count</span><span>1-Day WL</span></div>
@@ -234,13 +246,13 @@ export default function PulseDashboard({ schoolCode,schoolLogoSrc,schoolLogoAlt 
         <div className={styles.profileTitle}><div><p>ATHLETE PROFILE</p><h2>{selected?.playerName}</h2></div><button type="button" className={styles.exportButton} onClick={()=>void exportPdf()} disabled={exporting}>{exporting?'Exporting…':'Export PDF'}</button></div>
         <div className={styles.cards}><div><small>7-DAY AVG. THROWS / DAY</small><strong>{fmt(data.summary.throws7,1)}</strong></div><div><small>7-DAY AVG. STRESS</small><strong>{fmt(data.summary.avgStress7)}</strong></div><div><small>28-DAY AVG. THROWS / DAY</small><strong>{fmt(data.summary.throws28,1)}</strong></div><div><small>28-DAY AVG. STRESS</small><strong>{fmt(data.summary.avgStress28)}</strong></div></div>
         {tab==='workload'?<>
-          <section className={styles.panel}><h3>A:C Ratio and Daily Workload</h3><LineChart rows={data.workload as unknown as Array<Record<string,unknown>>} bars={{key:'oneDayWorkload',label:'1-day workload',color:'#22b8e6'}} lines={[{key:'acRatio',label:'A:C ratio',color:'#ff9f1c'}]}/></section>
-          <section className={styles.panel}><h3>Chronic Workload</h3><LineChart rows={data.workload as unknown as Array<Record<string,unknown>>} lines={[{key:'chronicWorkload',label:'Chronic workload',color:'#17c3b2'},{key:'acuteWorkload',label:'Acute workload',color:'#8d79ff'}]}/></section>
+          <section className={styles.panel}><h3>A:C Ratio and Daily Workload</h3><LineChart rows={data.workload as unknown as Array<Record<string,unknown>>} bars={{key:'oneDayWorkload',label:'1-day workload',color:chartColors.oneDay}} lines={[{key:'acRatio',label:'A:C ratio',color:chartColors.acRatio}]}/></section>
+          <section className={styles.panel}><h3>Chronic Workload</h3><LineChart rows={data.workload as unknown as Array<Record<string,unknown>>} lines={[{key:'chronicWorkload',label:'Chronic workload',color:chartColors.chronic},{key:'acuteWorkload',label:'Acute workload',color:chartColors.acute}]}/></section>
           <div className={styles.dataTable}><table><thead><tr><th>Date</th><th>A:C Ratio</th><th>Acute</th><th>Chronic</th><th>1-Day</th><th>Throws</th><th>High Effort</th></tr></thead><tbody>{data.workload.map(row=><tr key={row.date}><td>{new Date(`${row.date}T12:00:00`).toLocaleDateString()}</td><td><b className={statusClass(row.acRatio)}>{fmt(row.acRatio)}</b></td><td>{fmt(row.acuteWorkload)}</td><td>{fmt(row.chronicWorkload)}</td><td>{fmt(row.oneDayWorkload)}</td><td>{fmt(row.totalThrowCount,0)}</td><td>{fmt(row.highEffortThrowCount,0)}</td></tr>)}</tbody></table></div>
         </>:<>
           <div className={styles.metricCards}><div><small>AVG ARM SPEED · 7D</small><strong>{fmt(data.summary.avgArmSpeed7)} <i>mph</i></strong></div><div><small>AVG TORQUE · 7D</small><strong>{fmt(data.summary.avgTorque7)} <i>Nm</i></strong></div></div>
-          <section className={styles.panel}><h3>Arm Speed and Torque</h3><LineChart rows={data.dailyEvents as unknown as Array<Record<string,unknown>>} lines={[{key:'armSpeed',label:'Avg arm speed',color:'#22b8e6'},{key:'torque',label:'Avg torque',color:'#ff5a7a'}]}/></section>
-          <section className={styles.panel}><h3>Arm Slot and Shoulder Rotation</h3><LineChart rows={data.dailyEvents as unknown as Array<Record<string,unknown>>} lines={[{key:'armSlot',label:'Arm slot',color:'#f4bd4f'},{key:'shoulderRotation',label:'Shoulder rotation',color:'#8d79ff'}]}/></section>
+          <section className={styles.panel}><h3>Arm Speed and Torque</h3><LineChart rows={data.dailyEvents as unknown as Array<Record<string,unknown>>} lines={[{key:'armSpeed',label:'Avg arm speed',color:chartColors.armSpeed},{key:'torque',label:'Avg torque',color:chartColors.torque}]}/></section>
+          <section className={styles.panel}><h3>Arm Slot and Shoulder Rotation</h3><LineChart rows={data.dailyEvents as unknown as Array<Record<string,unknown>>} lines={[{key:'armSlot',label:'Arm slot',color:chartColors.armSlot},{key:'shoulderRotation',label:'Shoulder rotation',color:chartColors.shoulderRotation}]}/></section>
           <div className={styles.dataTable}><table><thead><tr><th>Date & time</th><th>Tag</th><th>Arm speed</th><th>Torque</th><th>Arm slot</th><th>Shoulder rotation</th><th>Ball</th><th>Effort</th></tr></thead><tbody>{eventSlice.map(row=><tr key={row.id}><td>{fullDate(row.datetime)}</td><td>{row.tag||'—'}</td><td>{fmt(row.armSpeed)}</td><td>{fmt(row.torque)}</td><td>{fmt(row.armSlot)}°</td><td>{fmt(row.shoulderRotation)}°</td><td>{row.ballWeight==null?'—':`${fmt(row.ballWeight)} ${row.ballWeightUnit||''}`}</td><td>{row.highEffort?'High':'Normal'}{row.simulated?' · Sim':''}</td></tr>)}</tbody></table><div className={styles.pager}><span>{data.events.length?`${eventPage*PAGE+1}–${Math.min((eventPage+1)*PAGE,data.events.length)} of ${data.events.length.toLocaleString()}`:'No events'}</span><button disabled={eventPage===0} onClick={()=>setEventPage(v=>v-1)}>Previous</button><button disabled={(eventPage+1)*PAGE>=data.events.length} onClick={()=>setEventPage(v=>v+1)}>Next</button></div></div>
         </>}
       </article>
@@ -260,11 +272,11 @@ export default function PulseDashboard({ schoolCode,schoolLogoSrc,schoolLogoAlt 
       </div>
       <div className={styles.exportCharts}>
         {tab==='workload'?<>
-          <section className={styles.panel}><h3>A:C Ratio and Daily Workload</h3><LineChart rows={data.workload as unknown as Array<Record<string,unknown>>} bars={{key:'oneDayWorkload',label:'1-day workload',color:'#22b8e6'}} lines={[{key:'acRatio',label:'A:C ratio',color:'#ff9f1c'}]}/></section>
-          <section className={styles.panel}><h3>Chronic Workload</h3><LineChart rows={data.workload as unknown as Array<Record<string,unknown>>} lines={[{key:'chronicWorkload',label:'Chronic workload',color:'#17c3b2'},{key:'acuteWorkload',label:'Acute workload',color:'#8d79ff'}]}/></section>
+          <section className={styles.panel}><h3>A:C Ratio and Daily Workload</h3><LineChart rows={data.workload as unknown as Array<Record<string,unknown>>} bars={{key:'oneDayWorkload',label:'1-day workload',color:chartColors.oneDay}} lines={[{key:'acRatio',label:'A:C ratio',color:chartColors.acRatio}]}/></section>
+          <section className={styles.panel}><h3>Chronic Workload</h3><LineChart rows={data.workload as unknown as Array<Record<string,unknown>>} lines={[{key:'chronicWorkload',label:'Chronic workload',color:chartColors.chronic},{key:'acuteWorkload',label:'Acute workload',color:chartColors.acute}]}/></section>
         </>:<>
-          <section className={styles.panel}><h3>Arm Speed and Torque</h3><LineChart rows={data.dailyEvents as unknown as Array<Record<string,unknown>>} lines={[{key:'armSpeed',label:'Avg arm speed',color:'#22b8e6'},{key:'torque',label:'Avg torque',color:'#ff5a7a'}]}/></section>
-          <section className={styles.panel}><h3>Arm Slot and Shoulder Rotation</h3><LineChart rows={data.dailyEvents as unknown as Array<Record<string,unknown>>} lines={[{key:'armSlot',label:'Arm slot',color:'#f4bd4f'},{key:'shoulderRotation',label:'Shoulder rotation',color:'#8d79ff'}]}/></section>
+          <section className={styles.panel}><h3>Arm Speed and Torque</h3><LineChart rows={data.dailyEvents as unknown as Array<Record<string,unknown>>} lines={[{key:'armSpeed',label:'Avg arm speed',color:chartColors.armSpeed},{key:'torque',label:'Avg torque',color:chartColors.torque}]}/></section>
+          <section className={styles.panel}><h3>Arm Slot and Shoulder Rotation</h3><LineChart rows={data.dailyEvents as unknown as Array<Record<string,unknown>>} lines={[{key:'armSlot',label:'Arm slot',color:chartColors.armSlot},{key:'shoulderRotation',label:'Shoulder rotation',color:chartColors.shoulderRotation}]}/></section>
         </>}
       </div>
       <section className={styles.exportData}>

@@ -136,6 +136,7 @@ const RESULT_SHAPES: Record<string, 'circle' | 'ring' | 'triangle' | 'star' | 's
   Undefined: 'ring',
 };
 const LEAGUE_SEASON_START = '2026-02-13';
+const ATLANTIC_LEAGUE_SEASON_START = '2026-04-01';
 
 function toYmdNow(): string {
   const now = new Date();
@@ -563,10 +564,10 @@ export default function CatchingSuite() {
         const minDate = payload.min_date ?? '';
         const payloadSchoolCode = String(payload.school_code ?? '').toUpperCase();
         const isLeagueSchool = payloadSchoolCode === 'LEAGUE';
-        const isIndySchool = payloadSchoolCode === 'INDY';
-        if (isIndySchool) {
-          setDateStart(minDate || nextDate);
-          setDateEnd(nextDate || minDate);
+        const isAtlanticLeagueSchool = ['LI', 'INDY'].includes(payloadSchoolCode);
+        if (isAtlanticLeagueSchool) {
+          setDateStart(ATLANTIC_LEAGUE_SEASON_START);
+          setDateEnd(toYmdNow());
         } else if (isLeagueSchool) {
           const leagueStart = minDate && minDate > LEAGUE_SEASON_START ? minDate : LEAGUE_SEASON_START;
           setDateStart(leagueStart);
@@ -1250,7 +1251,7 @@ export default function CatchingSuite() {
                       options={toOptions(withAll(
                         String(filters?.school_code ?? '').toUpperCase() === 'LI'
                           ? ['Season', 'Pre-Season']
-                          : ['Season', 'Bullpen', 'Live BP']
+                          : (String(filters?.school_code ?? '').toUpperCase() === 'INDY' ? ['Season'] : ['Season', 'Bullpen', 'Live BP'])
                       ))}
                       value={sessionType}
                       onChange={setSessionType}

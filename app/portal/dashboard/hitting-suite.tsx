@@ -286,6 +286,7 @@ const RESULTS_TABLE_COLUMNS_TEMPLATE = [
 ] as const;
 const LEAGUE_SEASON_START = '2026-02-13';
 const LEAGUE_D1_SEASON_END = '2026-06-22';
+const ATLANTIC_LEAGUE_SEASON_START = '2026-04-01';
 const LOWER_IS_BETTER_PERCENTILE_COLUMNS = new Set(
   ['BB%', 'HR%'].map((column) =>
     String(column ?? '')
@@ -484,7 +485,9 @@ function formatDashboardDateLabel(
   const today = toYmdNow();
   if (isProSchool && startDate === PRO_SEASON_START && endDate === today) return '2026 Season';
   const schoolCode = String(schoolCodeRaw ?? '').trim().toUpperCase();
-  const isCollegeSchool = !!schoolCode && schoolCode !== 'PRO' && schoolCode !== 'LEAGUE' && schoolCode !== 'PCU';
+  const isAtlanticLeagueSchool = ['LI', 'INDY'].includes(schoolCode);
+  if (isAtlanticLeagueSchool && startDate === ATLANTIC_LEAGUE_SEASON_START && endDate === today) return '2026 Season';
+  const isCollegeSchool = !!schoolCode && schoolCode !== 'PRO' && schoolCode !== 'LEAGUE' && !isAtlanticLeagueSchool && schoolCode !== 'PCU';
   const collegeSeasonStart = schoolCode === 'CNU' ? '2026-01-30' : '2026-02-13';
   void latestDataDateRaw;
   if (isCollegeSchool && startDate === collegeSeasonStart) return '2026 Season';
@@ -2600,9 +2603,9 @@ export default function HittingSuite({
       const minDate = payload.min_date ?? '';
       const payloadSchoolCode = String(payload.school_code ?? '').toUpperCase();
       const isLeagueSchool = payloadSchoolCode === 'LEAGUE';
-      const isIndySchool = payloadSchoolCode === 'INDY';
+      const isAtlanticLeagueSchool = ['LI', 'INDY'].includes(payloadSchoolCode);
       const isProSchool = String(payload.school_code ?? '').toUpperCase() === 'PRO';
-      if (isPlayerRole && !isLeagueSchool && !isIndySchool && !isProSchool) {
+      if (isPlayerRole && !isLeagueSchool && !isAtlanticLeagueSchool && !isProSchool) {
         const schoolCode = String(payload.school_code ?? '').trim().toUpperCase();
         if (schoolCode === 'PCU') {
           setStartDate(nextDate);
@@ -2613,9 +2616,9 @@ export default function HittingSuite({
         const seasonStart = minDate && minDate > defaultSeasonStart ? minDate : defaultSeasonStart;
         setStartDate(seasonStart);
         setEndDate(nextDate || seasonStart);
-      } else if (isIndySchool) {
-        setStartDate(minDate || nextDate);
-        setEndDate(nextDate || minDate);
+      } else if (isAtlanticLeagueSchool) {
+        setStartDate(ATLANTIC_LEAGUE_SEASON_START);
+        setEndDate(toYmdNow());
       } else if (isLeagueSchool) {
         const leagueStart = minDate && minDate > LEAGUE_SEASON_START ? minDate : LEAGUE_SEASON_START;
         if (level === 'D1') {
@@ -3591,7 +3594,9 @@ export default function HittingSuite({
         controller.abort();
       };
     }
-    const seasonStart = String(filters.min_date ?? '').trim() || (schoolCode === 'CNU' ? '2026-01-30' : '2026-02-13');
+    const seasonStart = ['LI', 'INDY'].includes(schoolCode)
+      ? ATLANTIC_LEAGUE_SEASON_START
+      : String(filters.min_date ?? '').trim() || (schoolCode === 'CNU' ? '2026-01-30' : '2026-02-13');
     const seasonEnd = String(filters.max_date ?? toYmdNow()).trim() || toYmdNow();
     const params = new URLSearchParams();
     params.set('start_date', seasonStart);

@@ -7007,6 +7007,7 @@ _PRO_DAILY_ROLLUP_SYNC_INTERVAL_SECONDS = max(
 _PRO_DAILY_ROLLUP_LAST_AT: float = 0.0
 _PRO_DAILY_ROLLUP_REFRESH_LOCK = threading.Lock()
 _PRO_DAILY_ROLLUP_REFRESH_RUNNING = False
+_PRO_ROLLUP_PENDING_WINDOW: Optional[tuple[date, date]] = None
 _ROLLUP_HEARTBEAT_SECONDS = max(
     30.0, float(os.getenv("DASHBOARD_ROLLUP_HEARTBEAT_SECONDS", "90"))
 )
@@ -9577,10 +9578,14 @@ def _kick_league_rollup_refresh_background() -> None:
 
 
 def _kick_school_rollup_refresh_background(school_code: str, reset_timer: bool = False) -> None:
+    global _LEAGUE_DAILY_ROLLUP_LAST_AT
     school = _validate_school_code(school_code)
     if school == "PRO":
         _kick_pro_rollup_refresh_background(reset_timer=reset_timer)
         return
+
+    if reset_timer:
+        _LEAGUE_DAILY_ROLLUP_LAST_AT[school] = 0.0
 
     with _SCHOOL_ROLLUP_REFRESH_LOCK:
         if school in _SCHOOL_ROLLUP_REFRESH_RUNNING:
@@ -13197,7 +13202,8 @@ def _kick_pro_rollup_refresh_background(reset_timer: bool = False) -> None:
         _PRO_DAILY_ROLLUP_REFRESH_RUNNING = True
 
     def _worker() -> None:
-        global _PRO_DAILY_ROLLUP_REFRESH_RUNNING
+        global _PRO_DAILY_ROLLUP_REFRESH_RUNNING, _PRO_ROLLUP_PENDING_WINDOW
+        pending_window: Optional[tuple[date, date]] = None
         try:
             # Do not force a full refresh on request-path triggers; full rebuilds
             # can hold heavyweight locks and stall PRO overview responses.
@@ -13205,6 +13211,10 @@ def _kick_pro_rollup_refresh_background(reset_timer: bool = False) -> None:
         finally:
             with _PRO_DAILY_ROLLUP_REFRESH_LOCK:
                 _PRO_DAILY_ROLLUP_REFRESH_RUNNING = False
+                pending_window = _PRO_ROLLUP_PENDING_WINDOW
+                _PRO_ROLLUP_PENDING_WINDOW = None
+            if pending_window is not None:
+                _kick_pro_rollup_window_refresh_background(*pending_window)
 
     try:
         thread = threading.Thread(target=_worker, name="pro-rollup-refresh", daemon=True)
@@ -13212,6 +13222,59 @@ def _kick_pro_rollup_refresh_background(reset_timer: bool = False) -> None:
     except Exception:
         with _PRO_DAILY_ROLLUP_REFRESH_LOCK:
             _PRO_DAILY_ROLLUP_REFRESH_RUNNING = False
+
+
+def _kick_pro_rollup_window_refresh_background(window_start: date, window_end: date) -> bool:
+    global _PRO_DAILY_ROLLUP_REFRESH_RUNNING, _PRO_ROLLUP_PENDING_WINDOW
+    if window_start > window_end:
+        window_start, window_end = window_end, window_start
+
+    with _PRO_DAILY_ROLLUP_REFRESH_LOCK:
+        if _PRO_DAILY_ROLLUP_REFRESH_RUNNING:
+            if _PRO_ROLLUP_PENDING_WINDOW is None:
+                _PRO_ROLLUP_PENDING_WINDOW = (window_start, window_end)
+            else:
+                pending_start, pending_end = _PRO_ROLLUP_PENDING_WINDOW
+                _PRO_ROLLUP_PENDING_WINDOW = (
+                    min(pending_start, window_start),
+                    max(pending_end, window_end),
+                )
+            return True
+        _PRO_DAILY_ROLLUP_REFRESH_RUNNING = True
+
+    def _worker() -> None:
+        global _PRO_DAILY_ROLLUP_REFRESH_RUNNING, _PRO_ROLLUP_PENDING_WINDOW
+        pending_window: Optional[tuple[date, date]] = None
+        try:
+            _refresh_pro_daily_rollup(
+                force=True,
+                raise_on_failure=True,
+                refresh_start_override=window_start,
+                refresh_end_override=window_end,
+            )
+        except Exception as exc:
+            logger.warning(
+                "targeted PRO rollup refresh failed for %s through %s: %s",
+                window_start,
+                window_end,
+                exc,
+            )
+        finally:
+            with _PRO_DAILY_ROLLUP_REFRESH_LOCK:
+                _PRO_DAILY_ROLLUP_REFRESH_RUNNING = False
+                pending_window = _PRO_ROLLUP_PENDING_WINDOW
+                _PRO_ROLLUP_PENDING_WINDOW = None
+            if pending_window is not None:
+                _kick_pro_rollup_window_refresh_background(*pending_window)
+
+    try:
+        thread = threading.Thread(target=_worker, name="pro-rollup-window-refresh", daemon=True)
+        thread.start()
+        return True
+    except Exception:
+        with _PRO_DAILY_ROLLUP_REFRESH_LOCK:
+            _PRO_DAILY_ROLLUP_REFRESH_RUNNING = False
+        return False
 
 
 def _start_rollup_scheduler_background() -> None:
@@ -22398,6 +22461,7 @@ def pitching_overview(
     include_row_pitches: bool = Query(default=True),
     include_trend_rows: bool = Query(default=True),
     force_raw: bool = Query(default=False),
+    post_edit_refresh: bool = Query(default=False),
     pro_link_name: Optional[str] = Query(default=None),
 ) -> PitchingOverviewResponse:
     _perf_started = time.perf_counter()
@@ -22520,6 +22584,7 @@ def pitching_overview(
         and not include_chart_points
         and not include_row_pitches
         and not include_trend_rows
+        and not post_edit_refresh
     ):
         force_raw = False
     if (
@@ -22912,6 +22977,7 @@ def pitching_overview(
             "include_row_pitches": include_row_pitches,
             "include_trend_rows": include_trend_rows,
             "force_raw": force_raw,
+            "post_edit_refresh": post_edit_refresh,
             "metrics_version": "correlation-angle-precision-v4",
         },
     )
@@ -26072,7 +26138,7 @@ def hitting_filters(
             )
             pitch_types = [str(row["pitch_type"]) for row in cur.fetchall() if str(row["pitch_type"]) != "Undefined"]
             team_types: List[str]
-            if school_code == "LEAGUE":
+            if school_code in AGGREGATE_TEAM_SCHOOL_CODES:
                 cur.execute(_league_team_codes_sql_expr(), {"school_code": school_code})
                 league_team_codes = [str(row["team_code"]) for row in cur.fetchall() if str(row.get("team_code") or "").strip()]
                 team_types = _league_team_types_from_codes(league_team_codes)
@@ -28821,6 +28887,8 @@ def pitching_pitch_edit(payload: PitchEditRequest) -> PitchEditResponse:
 
     pitch_ids = payload.pitch_event_ids or []
 
+    edited_dates: List[date] = []
+    updated_count = 0
     try:
         with get_conn() as conn, conn.cursor() as cur:
             _ensure_pitch_event_edits_table(cur)
@@ -28832,6 +28900,7 @@ def pitching_pitch_edit(payload: PitchEditRequest) -> PitchEditResponse:
                            pitcher = %(pitcher)s
                      WHERE id = ANY(%(pitch_event_ids)s::int[])
                        AND school_code = %(school_code)s
+                    RETURNING id, session_date
                     """,
                     {
                         "pitch_type": pitch_type,
@@ -28848,6 +28917,7 @@ def pitching_pitch_edit(payload: PitchEditRequest) -> PitchEditResponse:
                            pitcher = %(pitcher)s
                      WHERE id = ANY(%(pitch_event_ids)s::int[])
                        AND school_code = %(school_code)s
+                    RETURNING id, session_date
                     """,
                     {
                         "pitch_type": pitch_type,
@@ -28856,7 +28926,11 @@ def pitching_pitch_edit(payload: PitchEditRequest) -> PitchEditResponse:
                         "school_code": school_code,
                     },
                 )
-            if cur.rowcount <= 0:
+            updated_rows = cur.fetchall()
+            updated_count = len(updated_rows)
+            updated_ids = [int(row["id"]) for row in updated_rows]
+            edited_dates = [row["session_date"] for row in updated_rows if isinstance(row.get("session_date"), date)]
+            if updated_count <= 0:
                 raise HTTPException(status_code=404, detail="Pitch event not found for this school_code.")
             cur.execute(
                 """
@@ -28869,7 +28943,7 @@ def pitching_pitch_edit(payload: PitchEditRequest) -> PitchEditResponse:
                     "school_code": school_code,
                     "pitch_type": pitch_type,
                     "pitcher": pitcher,
-                    "pitch_event_ids": pitch_ids,
+                    "pitch_event_ids": updated_ids,
                 },
             )
     except HTTPException:
@@ -28879,8 +28953,20 @@ def pitching_pitch_edit(payload: PitchEditRequest) -> PitchEditResponse:
 
     _overview_cache_invalidate_school(school_code)
     _filters_cache_invalidate_school(school_code)
-    _kick_school_rollup_refresh_background(school_code, reset_timer=True)
-    return PitchEditResponse(ok=True, updated_count=len(pitch_ids))
+    if school_code == "PRO" and edited_dates:
+        _kick_pro_rollup_window_refresh_background(
+            min(edited_dates),
+            max(edited_dates),
+        )
+    elif edited_dates:
+        _kick_school_rollup_window_refresh_background(
+            school_code,
+            min(edited_dates),
+            max(edited_dates),
+        )
+    else:
+        _kick_school_rollup_refresh_background(school_code, reset_timer=True)
+    return PitchEditResponse(ok=True, updated_count=updated_count)
 
 
 @app.post("/v1/admin/csv-uploads/refresh")

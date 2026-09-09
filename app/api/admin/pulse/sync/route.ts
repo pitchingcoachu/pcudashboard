@@ -11,9 +11,14 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const ARIZONA_SCHOOL_CODE = 'ARIZONA';
-const WORKFLOW_DISPATCH_URL =
-  'https://api.github.com/repos/pitchingcoachu/pcudashboard/actions/workflows/arizona-pulse-sync.yml/dispatches';
+const PULSE_SYNC_WORKFLOWS: Record<string, string> = {
+  ARIZONA: 'arizona-pulse-sync.yml',
+  PCU: 'pcu-pulse-sync.yml',
+};
+
+function workflowDispatchUrl(workflowFile: string): string {
+  return `https://api.github.com/repos/pitchingcoachu/pcudashboard/actions/workflows/${workflowFile}/dispatches`;
+}
 
 async function requireStaff() {
   const session = getSessionFromCookies(await cookies());
@@ -43,7 +48,7 @@ export async function GET() {
     const auth = await requireStaff();
     if ('error' in auth) return auth.error;
     const schoolCode = selectedSchoolCode(auth.session);
-    if (schoolCode !== ARIZONA_SCHOOL_CODE) {
+    if (!PULSE_SYNC_WORKFLOWS[schoolCode]) {
       return NextResponse.json({ configured: false, sync: null });
     }
     return NextResponse.json({ configured: true, sync: await getPulseSyncStatus(schoolCode) });
@@ -59,7 +64,8 @@ export async function POST() {
   const auth = await requireStaff();
   if ('error' in auth) return auth.error;
   const schoolCode = selectedSchoolCode(auth.session);
-  if (schoolCode !== ARIZONA_SCHOOL_CODE) {
+  const workflowFile = PULSE_SYNC_WORKFLOWS[schoolCode];
+  if (!workflowFile) {
     return NextResponse.json({ error: 'Automatic PULSE sync is not configured for this school.' }, { status: 400 });
   }
 
@@ -80,7 +86,7 @@ export async function POST() {
     }
     hasReservation = true;
 
-    const response = await fetch(WORKFLOW_DISPATCH_URL, {
+    const response = await fetch(workflowDispatchUrl(workflowFile), {
       method: 'POST',
       headers: {
         Accept: 'application/vnd.github+json',
@@ -95,7 +101,7 @@ export async function POST() {
       await releasePulseSyncReservation(schoolCode);
       hasReservation = false;
       const detail = await response.text();
-      console.error('Unable to dispatch Arizona PULSE workflow:', response.status, detail.slice(0, 500));
+      console.error(`Unable to dispatch ${schoolCode} PULSE workflow:`, response.status, detail.slice(0, 500));
       return NextResponse.json({ error: 'Unable to start the PULSE sync. Please try again.' }, { status: 502 });
     }
 

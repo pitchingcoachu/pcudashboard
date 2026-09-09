@@ -61,6 +61,40 @@
 }
 
 .controls input { min-height: 42px; padding: 0 11px; }
+.dateField { position: relative; }
+.dateButton {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 11px;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .035);
+  color: #f8fafc;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dateButton:hover { border-color: rgba(var(--portal-accent-rgb, 200, 16, 46), .72); }
+.dateBackdrop { position: fixed; inset: 0; z-index: 999; border: 0; background: transparent; cursor: default; }
+.datePopover {
+  position: fixed;
+  z-index: 1000;
+  width: 272px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 12px;
+  background: #111318;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .48);
+}
+.calendarHeader { display: grid; grid-template-columns: 32px 1fr 32px; align-items: center; margin-bottom: 8px; text-align: center; font-size: .78rem; }
+.calendarHeader button { width: 28px; height: 28px; border: 0; border-radius: 7px; background: transparent; color: #f8fafc; font-size: 1.25rem; cursor: pointer; }
+.calendarHeader button:hover { background: rgba(255, 255, 255, .1); }
+.weekdays, .calendarDays { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.weekdays { margin-bottom: 3px; color: rgba(226, 232, 240, .52); font-size: .62rem; font-weight: 800; text-align: center; }
+.calendarDays button { height: 29px; border: 0; border-radius: 7px; background: transparent; color: #f8fafc; font-size: .74rem; cursor: pointer; }
+.calendarDays button:hover { background: rgba(255, 255, 255, .1); }
+.calendarDays .outsideDay { color: rgba(226, 232, 240, .34); }
+.calendarDays .selectedDay { background: rgb(var(--portal-accent-rgb, 200, 16, 46)); color: #fff; font-weight: 800; }
 .editor { padding: 14px; font-size: .9rem; line-height: 1.6; resize: vertical; }
 .exportText { display: none; }
 
@@ -100,6 +134,9 @@
 :global(body.theme-light) .summary { border-color: rgba(15, 23, 42, .14); background: rgba(248, 250, 252, .84); }
 :global(body.theme-light) .description, :global(body.theme-light) .controls label { color: rgba(15, 23, 42, .6); }
 :global(body.theme-light) .controls input, :global(body.theme-light) .editor { border-color: rgba(15, 23, 42, .14); background: #fff; color: #0f172a; }
+:global(body.theme-light) .dateButton { border-color: rgba(15, 23, 42, .14); background: #fff; color: #0f172a; }
+:global(body.theme-light) .datePopover { border-color: rgba(15, 23, 42, .16); background: #fff; }
+:global(body.theme-light) .calendarHeader button, :global(body.theme-light) .calendarDays button { color: #0f172a; }
 :global(body.theme-light) :global(.portal-custom-reports-canvas--export) .summary { border-top-color: rgba(15, 23, 42, .2); }
 :global(body.theme-light) :global(.portal-custom-reports-canvas--export) .exportText { color: #0f172a; }
 

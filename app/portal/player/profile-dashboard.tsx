@@ -526,7 +526,7 @@ export default function ProfileDashboard({
   const [defaultForceMetricKey, setDefaultForceMetricKey] = useState('');
   const [profileExpanded, setProfileExpanded] = useState(false);
   const [mediaExpanded, setMediaExpanded] = useState(false);
-  const [nutritionExpanded, setNutritionExpanded] = useState(true);
+  const [nutritionExpanded, setNutritionExpanded] = useState(false);
   const [assessmentExpanded, setAssessmentExpanded] = useState(true);
 
   const [selectedItem, setSelectedItem] = useState<ProgramItemRow | null>(null);

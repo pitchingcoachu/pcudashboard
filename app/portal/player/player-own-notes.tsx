@@ -20,6 +20,7 @@ type PlayerPlanNote = {
   category: string;
   noteText: string;
   playerVisible: boolean;
+  isPinned: boolean;
   createdAt: string;
   createdByUserId: number | null;
   attachments?: NoteAttachment[];
@@ -69,7 +70,10 @@ export default function PlayerOwnNotes({ playerId, currentUserId }: { playerId: 
     const query = searchText.trim().toLowerCase();
     return notes
       .filter((note) => !query || `${note.category} ${note.noteText}`.toLowerCase().includes(query))
-      .sort((a, b) => (b.noteDate === a.noteDate ? b.createdAt.localeCompare(a.createdAt) : b.noteDate.localeCompare(a.noteDate)));
+      .sort((a, b) => {
+        if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+        return b.noteDate === a.noteDate ? b.createdAt.localeCompare(a.createdAt) : b.noteDate.localeCompare(a.noteDate);
+      });
   }, [notes, searchText]);
 
   async function saveNote() {
@@ -185,9 +189,16 @@ export default function PlayerOwnNotes({ playerId, currentUserId }: { playerId: 
             {sortedNotes.map((note) => {
               const isOwn = note.createdByUserId !== null && note.createdByUserId === currentUserId;
               return (
-                <article key={note.id} className="portal-admin-card" style={{ padding: 12 }}>
+                <article
+                  key={note.id}
+                  className="portal-admin-card"
+                  style={{ padding: 12, border: note.isPinned ? '1px solid rgba(250, 204, 21, 0.45)' : undefined }}
+                >
                   <div className="portal-row-between">
-                    <small className="portal-muted-text">{note.noteDate}</small>
+                    <small className="portal-muted-text">
+                      {note.isPinned ? <span aria-label="Pinned" title="Pinned by your coach">📌 </span> : null}
+                      {note.noteDate}
+                    </small>
                     <small className="portal-muted-text">{isOwn ? 'You' : 'Coach'}</small>
                   </div>
                   <p style={{ margin: '8px 0', whiteSpace: 'pre-wrap' }}>{note.noteText}</p>

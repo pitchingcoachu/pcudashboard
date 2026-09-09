@@ -8,6 +8,7 @@ import ffmpegPath from '@ffmpeg-installer/ffmpeg';
 import { getSessionFromRequest } from '../../../../../lib/auth';
 import { isDatabaseConfigured } from '../../../../../lib/auth-db';
 import { resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
+import { resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
 import {
   lookupPitchExportMetrics,
   lookupPitchVideoUrls,
@@ -18,11 +19,13 @@ import {
   renderPitchExportOverlayPng,
   renderPitchExportOverlayHorizontalPng,
   PITCH_EXPORT_PANEL_WIDTH,
+  type IntendedTargetExportData,
 } from '../../../../../lib/pitch-export-overlay';
 import { uploadVideoExportToR2 } from '../../../../../lib/biomechanics-storage';
 import {
   createNotificationsForUsers,
   createVideoExportJob,
+  getIntendedZonePitchesByPitchEventsIds,
   markVideoExportJobFailed,
   markVideoExportJobProcessing,
   markVideoExportJobReady,
@@ -277,7 +280,7 @@ async function probeDimensions(url: string): Promise<{ width: number; height: nu
 async function concatCameraGroup(
   workDir: string,
   groupName: string,
-  clips: Array<{ url: string; isEdger: boolean; metrics?: PitchExportMetrics }>,
+  clips: Array<{ url: string; isEdger: boolean; metrics?: PitchExportMetrics; intendedTarget?: { data: IntendedTargetExportData; targetInches: number } | null }>,
   canvasWidth: number,
   canvasHeight: number
 ): Promise<string | null> {
@@ -291,7 +294,7 @@ async function concatCameraGroup(
   const normalizedPaths = await mapWithConcurrency(clips, 4, async (clip, i) => {
     const outPath = path.join(workDir, `${groupName}-${i}.mp4`);
     await normalizeClip(clip.url, outPath, canvasWidth, canvasHeight, clip.isEdger);
-    return clip.metrics ? addMetricsPanel(workDir, `${groupName}-${i}-panel`, outPath, canvasHeight, clip.metrics) : outPath;
+    return clip.metrics ? addMetricsPanel(workDir, `${groupName}-${i}-panel`, outPath, canvasHeight, clip.metrics, clip.intendedTarget) : outPath;
   });
 
   if (normalizedPaths.length === 1) return normalizedPaths[0];
@@ -465,15 +468,17 @@ async function prepareCombinedTile(
  * video's OWN real (already-trimmed-or-not) length, probed directly, rather
  * than a caller-assumed duration -- a clip left untouched because it was
  * already under EXPORT_CLIP_SECONDS must not get force-cut to exactly
- * EXPORT_CLIP_SECONDS just because that's this export's nominal target. */
+ * EXPORT_CLIP_SECONDS just because that's this export's nominal target.
+ * Intended target data replaces the regular zone within the same panel. */
 async function addMetricsPanel(
   workDir: string,
   namePrefix: string,
   videoPath: string,
   videoHeight: number,
-  metrics: PitchExportMetrics
+  metrics: PitchExportMetrics,
+  intendedTarget?: { data: IntendedTargetExportData; targetInches: number } | null
 ): Promise<string> {
-  const panelPng = renderPitchExportOverlayPng(metrics, videoHeight);
+  const panelPng = renderPitchExportOverlayPng(metrics, videoHeight, intendedTarget);
   const panelPath = path.join(workDir, `${namePrefix}.png`);
   await writeFile(panelPath, panelPng);
 
@@ -510,15 +515,22 @@ async function addMetricsPanel(
  * vstack doesn't need extra scaling); panel height is the overlay module's
  * own fixed HORIZONTAL_PANEL_HEIGHT, unlike the side panel where the video
  * dictates the panel's height -- here the video dictates the panel's width
- * instead, the same relationship inverted. */
+ * instead, the same relationship inverted.
+ *
+ * When intendedTarget is provided, renderPitchExportOverlayHorizontalPng
+ * swaps its own right-column zone diagram for the target/miss diagram in
+ * that same slot (replace, not stack) -- there's no second panel here,
+ * unlike addMetricsPanel's side-panel case, since this layout only has room
+ * for one zone diagram to begin with. */
 async function addMetricsPanelBelow(
   workDir: string,
   namePrefix: string,
   videoPath: string,
   videoWidth: number,
-  metrics: PitchExportMetrics
+  metrics: PitchExportMetrics,
+  intendedTarget?: { data: IntendedTargetExportData; targetInches: number } | null
 ): Promise<string> {
-  const panelPng = renderPitchExportOverlayHorizontalPng(metrics, videoWidth);
+  const panelPng = renderPitchExportOverlayHorizontalPng(metrics, videoWidth, intendedTarget);
   const panelPath = path.join(workDir, `${namePrefix}.png`);
   await writeFile(panelPath, panelPng);
 
@@ -560,7 +572,8 @@ async function buildCombinedPitchClip(
   metrics: PitchExportMetrics | undefined,
   twoTileLeftWFrac = 0.5,
   twoTileStacked = false,
-  metricsPanelMode: 'side' | 'below' = 'side'
+  metricsPanelMode: 'side' | 'below' = 'side',
+  intendedTarget?: { data: IntendedTargetExportData; targetInches: number } | null
 ): Promise<string | null> {
   const clips = resolvePitchCombinedClips(pitch, selections);
   if (!clips.some((c) => c !== null)) return null;
@@ -628,9 +641,9 @@ async function buildCombinedPitchClip(
 
   if (!metrics) return videoPath;
   if (metricsPanelMode === 'below') {
-    return addMetricsPanelBelow(workDir, `pitch${pitchIndex}-panel`, videoPath, tileCanvasWidth, metrics);
+    return addMetricsPanelBelow(workDir, `pitch${pitchIndex}-panel`, videoPath, tileCanvasWidth, metrics, intendedTarget);
   }
-  return addMetricsPanel(workDir, `pitch${pitchIndex}-panel`, videoPath, tileCanvasHeight, metrics);
+  return addMetricsPanel(workDir, `pitch${pitchIndex}-panel`, videoPath, tileCanvasHeight, metrics, intendedTarget);
 }
 
 type VideoExportRequestParams = {
@@ -639,6 +652,22 @@ type VideoExportRequestParams = {
   mode: 'sequential' | 'combined';
   showMetrics: boolean;
   schoolCode: string;
+  // Deliberately separate from the job/storage organizationId in the POST
+  // handler below (session.organizationId directly) -- the Intended Target
+  // lookup needs the SAME resolveProgrammingOrganizationId(session) mapping
+  // every other intended-zone route uses (multi-school orgs can differ from
+  // the raw session value), not the raw session org. Using the raw session
+  // org here silently found zero matches for schools where the two differ,
+  // which is why exports weren't showing the panel even with data present.
+  intendedTargetOrganizationId: number;
+  // Burns in a second panel (below the metrics panel) with the target/miss
+  // graphic for whichever pitches have matching intended_zone_pitches data
+  // -- pitches without a match export exactly as they would with this off.
+  // targetInches lets the export use the same coach-selected size as the
+  // on-screen Intended Target view rather than whichever size that pitch's
+  // own session happened to use.
+  includeIntendedTarget: boolean;
+  targetInches: number;
 };
 
 /** Does the actual multi-clip download + ffmpeg render, exactly as this
@@ -649,7 +678,7 @@ type VideoExportRequestParams = {
  * with it. Throws on any failure; caller is responsible for job-status
  * bookkeeping and temp-dir cleanup. */
 async function renderVideoExportFile(params: VideoExportRequestParams): Promise<string> {
-  const { pitchEventIds, camerasToExport, mode, showMetrics, schoolCode } = params;
+  const { pitchEventIds, camerasToExport, mode, showMetrics, includeIntendedTarget, targetInches, schoolCode, intendedTargetOrganizationId } = params;
 
   const pitches = await lookupPitchVideoUrls(pitchEventIds, schoolCode);
   // Preserve the order the caller asked for (e.g. Prev/Next pitch order in
@@ -676,6 +705,36 @@ async function renderVideoExportFile(params: VideoExportRequestParams): Promise<
     }
   }
 
+  // Same best-effort convention as metricsById above -- most pitches won't
+  // have Intended Target data at all (expected, not an error), and a lookup
+  // failure just means no pitch gets the extra panel rather than failing
+  // the whole export.
+  let intendedTargetById = new Map<number, IntendedTargetExportData>();
+  if (includeIntendedTarget && intendedTargetOrganizationId > 0) {
+    try {
+      const izMap = await getIntendedZonePitchesByPitchEventsIds({
+        organizationId: intendedTargetOrganizationId,
+        pitchEventsIds: orderedPitches.map((p) => p.pitch_event_id),
+      });
+      intendedTargetById = new Map(
+        Array.from(izMap.entries()).map(([id, row]) => [
+          id,
+          {
+            intendedSideFt: row.intendedSideFt,
+            intendedHeightFt: row.intendedHeightFt,
+            targetRadiusFt: targetInches / 2 / 12,
+            plateLocSide: row.plateLocSide,
+            plateLocHeight: row.plateLocHeight,
+            missDistanceFt: row.missDistanceFt,
+            pitchType: row.pitchType,
+          },
+        ])
+      );
+    } catch {
+      // Export continues without the Intended Target panel.
+    }
+  }
+
   const clipsByCamera = new Map(
     camerasToExport.map((selection) => [
       selection,
@@ -684,6 +743,9 @@ async function renderVideoExportFile(params: VideoExportRequestParams): Promise<
           url: resolveClipUrl(p, selection),
           isEdger: resolveClipIsEdger(p, selection),
           metrics: metricsById.get(p.pitch_event_id),
+          intendedTarget: intendedTargetById.has(p.pitch_event_id)
+            ? { data: intendedTargetById.get(p.pitch_event_id)!, targetInches }
+            : null,
         }))
         .filter((c) => c.url),
     ])
@@ -814,7 +876,10 @@ async function renderVideoExportFile(params: VideoExportRequestParams): Promise<
             metricsById.get(pitch.pitch_event_id),
             twoTileLeftWFrac,
             twoTileStacked,
-            metricsPanelMode
+            metricsPanelMode,
+            intendedTargetById.has(pitch.pitch_event_id)
+              ? { data: intendedTargetById.get(pitch.pitch_event_id)!, targetInches }
+              : null
           )
       );
       const pitchClipPaths = builtPitchClipPaths.filter((clipPath): clipPath is string => Boolean(clipPath));
@@ -883,13 +948,25 @@ export async function POST(request: Request) {
   if (!isDatabaseConfigured()) return NextResponse.json({ error: 'DATABASE_URL is not configured.' }, { status: 500 });
 
   const body = (await request.json().catch(() => null)) as
-    | { pitchEventIds?: number[]; camera?: string | string[]; mode?: string; showMetrics?: boolean; name?: string }
+    | {
+        pitchEventIds?: number[];
+        camera?: string | string[];
+        mode?: string;
+        showMetrics?: boolean;
+        includeIntendedTarget?: boolean;
+        targetInches?: number;
+        name?: string;
+      }
     | null;
   if (!body) return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
   // Whether to burn the metrics + strike-zone side panel into the exported
   // video -- defaults to true (matches behavior before this option existed)
   // so older callers that don't send this field are unaffected.
   const showMetrics = body.showMetrics !== false;
+  // Off by default -- most video has no Intended Target data at all, so
+  // this only makes sense as an opt-in, unlike showMetrics.
+  const includeIntendedTarget = body.includeIntendedTarget === true;
+  const targetInches = [4, 8, 12, 16, 20].includes(Number(body.targetInches)) ? Number(body.targetInches) : 8;
 
   const pitchEventIds = Array.from(
     new Set((body.pitchEventIds ?? []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))
@@ -924,6 +1001,9 @@ export async function POST(request: Request) {
     .toUpperCase();
 
   const organizationId = Number(session.organizationId ?? 0);
+  // See the comment on VideoExportRequestParams.intendedTargetOrganizationId --
+  // this deliberately does NOT reuse the raw organizationId above.
+  const intendedTargetOrganizationId = includeIntendedTarget ? await resolveProgrammingOrganizationId(session) : 0;
   const userId = Number(session.userId ?? 0);
   const jobName =
     String(body.name ?? '').trim().slice(0, 200) ||
@@ -933,13 +1013,22 @@ export async function POST(request: Request) {
     organizationId,
     requestedByUserId: userId,
     name: jobName,
-    requestParams: { pitchEventIds, camerasToExport, mode, showMetrics, schoolCode },
+    requestParams: { pitchEventIds, camerasToExport, mode, showMetrics, includeIntendedTarget, targetInches, schoolCode },
   });
 
   after(async () => {
     try {
       await markVideoExportJobProcessing(jobId);
-      const finalOutPath = await renderVideoExportFile({ pitchEventIds, camerasToExport, mode, showMetrics, schoolCode });
+      const finalOutPath = await renderVideoExportFile({
+        pitchEventIds,
+        camerasToExport,
+        mode,
+        showMetrics,
+        includeIntendedTarget,
+        targetInches,
+        schoolCode,
+        intendedTargetOrganizationId,
+      });
       try {
         const fileBuffer = await readFile(finalOutPath);
         const fileStat = await stat(finalOutPath);

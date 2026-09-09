@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import pg from 'pg';
 
-const MODEL_VERSION = 'edger-seam-fit-v3';
+const MODEL_VERSION = 'edger-seam-fit-v5';
 const args = new Map();
 for (let index = 2; index < process.argv.length; index += 2) {
   args.set(process.argv[index], process.argv[index + 1]);
@@ -10,6 +10,7 @@ for (let index = 2; index < process.argv.length; index += 2) {
 const pitchEventId = Number(args.get('--pitch-event-id'));
 const reportPath = args.get('--report');
 const sourceUrl = args.get('--source-url') ?? null;
+const manuallyReviewedSeamOrientation = args.get('--reviewed-seam-orientation') === 'true';
 if (!Number.isInteger(pitchEventId) || !reportPath) {
   throw new Error('Usage: node scripts/import-edger-spin-estimate.mjs --pitch-event-id ID --report report.json [--source-url URL]');
 }
@@ -20,26 +21,47 @@ const quality = report.quality;
 if (!fit || !quality) throw new Error('Report must contain camera_fit and quality.');
 const heldOutCost = Number(fit.held_out_cost_px);
 const rpmError = Number(fit.spin_rate_error_at_1000_fps_pct);
+const predictedSupport = Number(fit.held_out_predicted_seam_support_median);
+const observedSupport = Number(fit.held_out_observed_seam_support_median);
+const alignedFrameFraction = Number(fit.held_out_aligned_frame_fraction);
+const temporalOverlapPass = predictedSupport >= 0.60
+  && observedSupport >= 0.40
+  && alignedFrameFraction >= 0.50;
 const lockedAxisPass = fit.axis_prior_locked === true
-  && Number(fit.fit_cost_px) <= 6.5
-  && heldOutCost <= 8.5;
+  && Number(fit.fit_cost_px) <= 5.5
+  && heldOutCost <= 6.5;
 const videoAxisPass = fit.axis_prior_locked === false
-  && Number(fit.fit_cost_px) <= 6.25
-  && heldOutCost <= 8;
+  && Number(fit.movement_axis_alignment) >= 0.15
+  && Number(fit.fit_cost_px) <= 5.5
+  && heldOutCost <= 6.5;
 const accepted = quality.usable_seam_frames >= 12
   && quality.visibility_score >= 0.65
   && Number(fit.held_out_frames) >= 8
   && Number.isFinite(heldOutCost)
+  && temporalOverlapPass
   && (lockedAxisPass || videoAxisPass)
   && Number.isFinite(rpmError)
-  && rpmError <= 3;
+  && rpmError <= 3
+  // A projected curve can overlap visible seam pixels while selecting a
+  // globally wrong baseball-cover symmetry (for example, two-seam-equivalent
+  // motion for a four-seam pitch). Automated overlap is therefore necessary
+  // but not sufficient until that ambiguity is solved reliably.
+  && manuallyReviewedSeamOrientation;
 if (!accepted) throw new Error(`Estimate failed quality gates: ${JSON.stringify({ quality, fit })}`);
 
 const fitScore = Math.max(0, Math.min(1, 1 - ((Number(fit.fit_cost_px) - 3) / 5)));
 const heldOutScore = Math.max(0, Math.min(1, 1 - ((heldOutCost - 4) / 6)));
 const rpmScore = Math.max(0, 1 - (rpmError / 10));
+const flowScore = fit.axis_video_flow_constrained === true
+  ? Math.max(0, Math.min(1, Number(fit.brightness_flow_support_fraction)))
+    * Math.max(0, 1 - (Number(fit.brightness_flow_axis_spread_degrees) / 60))
+  : 0;
+const overlapScore = Math.max(0, Math.min(1,
+  (predictedSupport * 0.4) + (observedSupport * 0.3) + (alignedFrameFraction * 0.3)
+));
 const confidence = Math.max(0, Math.min(1,
-  (quality.visibility_score * 0.25) + (fitScore * 0.25) + (heldOutScore * 0.3) + (rpmScore * 0.2)
+  (quality.visibility_score * 0.15) + (fitScore * 0.2) + (heldOutScore * 0.15)
+    + (rpmScore * 0.1) + (flowScore * 0.15) + (overlapScore * 0.25)
 ));
 
 const connectionString = process.env.DATABASE_URL || process.env.DASHBOARD_DATABASE_URL;
@@ -85,8 +107,8 @@ try {
     INSERT INTO public.video_spin_estimates (
       pitch_event_id, model_version, school_code, play_id, pitch_uid, source_url,
       rotation_x, rotation_y, rotation_z, axis_x, axis_y, axis_z,
-      phase_degrees_per_frame, confidence, diagnostics, updated_at
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,NOW())
+      phase_degrees_per_frame, confidence, diagnostics, status, updated_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,'testing',NOW())
     ON CONFLICT (pitch_event_id, model_version) DO UPDATE SET
       school_code = EXCLUDED.school_code, play_id = EXCLUDED.play_id,
       pitch_uid = EXCLUDED.pitch_uid, source_url = EXCLUDED.source_url,
@@ -95,7 +117,7 @@ try {
       axis_y = EXCLUDED.axis_y, axis_z = EXCLUDED.axis_z,
       phase_degrees_per_frame = EXCLUDED.phase_degrees_per_frame,
       confidence = EXCLUDED.confidence, diagnostics = EXCLUDED.diagnostics,
-      status = 'accepted', updated_at = NOW()
+      status = 'testing', updated_at = NOW()
   `, [
     pitchEventId, MODEL_VERSION, row.school_code, row.play_id, row.pitch_uid, sourceUrl,
     ...fit.initial_seam_euler_xyz_deg,

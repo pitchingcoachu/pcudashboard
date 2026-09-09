@@ -18,6 +18,9 @@ export function getR2Client(): S3Client | null {
   r2Client = new S3Client({
     region: 'auto',
     endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+    // R2 buckets live in the request path. Letting the S3 client use its
+    // default virtual-host style produces a non-existent bucket-prefixed host.
+    forcePathStyle: true,
     credentials: { accessKeyId, secretAccessKey },
   });
   return r2Client;

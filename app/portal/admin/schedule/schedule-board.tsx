@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
+import ExerciseVideoPlayer from '../../../../components/exercise-video-player';
 import type { ProgramItemRow, ProgramPlanSection, ThrowingFieldDef } from '../../../../lib/training-db';
 import {
   DEFAULT_DRILL_ROW_COUNT,
@@ -2564,29 +2565,6 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     minWidth: 0,
   };
 
-  const embedVideoUrl = (raw: string): string => {
-    try {
-      const parsed = new URL(raw);
-      if (parsed.hostname.includes('youtube.com')) {
-        const videoId = parsed.searchParams.get('v');
-        if (videoId) return `https://www.youtube.com/embed/${videoId}`;
-        const shortMatch = parsed.pathname.match(/^\/shorts\/([^/?#]+)/i);
-        if (shortMatch?.[1]) return `https://www.youtube.com/embed/${shortMatch[1]}`;
-      }
-      if (parsed.hostname.includes('youtu.be')) {
-        const videoId = parsed.pathname.replace('/', '').trim();
-        if (videoId) return `https://www.youtube.com/embed/${videoId}`;
-      }
-      if (parsed.hostname.includes('vimeo.com')) {
-        const id = parsed.pathname.split('/').filter(Boolean)[0];
-        if (id) return `https://player.vimeo.com/video/${id}`;
-      }
-      return raw;
-    } catch {
-      return raw;
-    }
-  };
-
   const parseIntensityValue = (raw: string): number | null => {
     const match = String(raw ?? '').match(/(\d+(?:\.\d+)?)/);
     if (!match) return null;
@@ -3994,7 +3972,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                               <button
                                 type="button"
                                 className="btn btn-ghost"
-                                onClick={() => setDrillVideoPreview({ title: selected?.name ?? 'Drill Video', url: embedVideoUrl(videoUrl) })}
+                                onClick={() => setDrillVideoPreview({ title: selected?.name ?? 'Drill Video', url: videoUrl })}
                               >
                                 Video
                               </button>
@@ -4104,7 +4082,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                             <button
                               type="button"
                               className="btn btn-ghost"
-                              onClick={() => setDrillVideoPreview({ title: selected?.name ?? 'Drill Video', url: embedVideoUrl(videoUrl) })}
+                              onClick={() => setDrillVideoPreview({ title: selected?.name ?? 'Drill Video', url: videoUrl })}
                             >
                               Video
                             </button>
@@ -6721,14 +6699,8 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                 Close
               </button>
             </div>
-            <div style={{ marginTop: 10, position: 'relative', width: '100%', paddingTop: '56.25%' }}>
-              <iframe
-                src={drillVideoPreview.url}
-                title={drillVideoPreview.title}
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                allowFullScreen
-                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, borderRadius: 8 }}
-              />
+            <div style={{ marginTop: 10 }}>
+              <ExerciseVideoPlayer url={drillVideoPreview.url} title={drillVideoPreview.title} />
             </div>
           </article>
         </div>

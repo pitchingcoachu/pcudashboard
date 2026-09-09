@@ -229,9 +229,9 @@ type StatRow = { label: string; value: string };
  * (confirmed: produced visibly stretched-looking text), so this avoids
  * that entirely; the panel's pixel width never changes (always
  * PANEL_WIDTH), only the vertical scale of the content varies. */
-export function renderPitchExportOverlayPng(pitch: PitchExportMetrics, panelHeight: number): Buffer {
+export function renderPitchExportOverlayPng(pitch: PitchExportMetrics, panelHeight: number, intendedTarget?: { data: IntendedTargetExportData; targetInches: number } | null): Buffer {
   const BASE_HEIGHT = 1120;
-  const scale = panelHeight / BASE_HEIGHT;
+  const scale = Math.min(1, panelHeight / BASE_HEIGHT);
   const s = (n: number) => n * scale;
 
   const headerName = formatNameFirstLast(pitch.pitcher);
@@ -323,22 +323,32 @@ export function renderPitchExportOverlayPng(pitch: PitchExportMetrics, panelHeig
   parts.push(`<line x1="${PAD_X}" y1="${y}" x2="${PANEL_WIDTH - PAD_X}" y2="${y}" stroke="${DIVIDER}" stroke-width="${s(1.5)}" />`);
   y += s(56);
 
-  // Zone diagram centered on the panel's true midline (PANEL_WIDTH / 2, not
-  // offset by the diagram's own internal left-padding) so it reads as
-  // centered within the panel column, not just within its own bounding box.
-  // Only the zone's SIZE (zoneScaleToFit) grows with panelHeight; its
-  // horizontal center position does not, since PANEL_WIDTH is fixed.
-  const zoneScaleToFit = Math.min(1, (PANEL_WIDTH - PAD_X * 2) / ZONE_W) * 1.35 * scale;
-  const zoneX = PANEL_WIDTH / 2 - (ZONE_W * zoneScaleToFit) / 2;
-  const zoneY = y;
-  parts.push(`<g transform="translate(${zoneX}, ${zoneY}) scale(${zoneScaleToFit})">${buildZoneSvg(pitch)}</g>`);
-  y += ZONE_H * zoneScaleToFit + s(44);
+  // Both modes share one zone slot below the metrics and above the logo.
+  // Cap the uniform scale by the panel width so tall videos cannot stretch it.
+  const zoneScaleToFit = Math.min((PANEL_WIDTH - PAD_X * 2) / ZONE_W, 1.35 * scale);
+  const zoneX = (PANEL_WIDTH - ZONE_W * zoneScaleToFit) / 2;
+  if (intendedTarget) {
+    parts.push(`<text x="${PANEL_WIDTH / 2}" y="${y - s(16)}" text-anchor="middle" font-family="Manrope" font-size="${s(18)}" font-weight="700" fill="${TEXT_STRONG}">Intended Target · ${intendedTarget.targetInches}&quot;</text>`);
+  }
+  parts.push(`<g transform="translate(${zoneX}, ${y}) scale(${zoneScaleToFit})">${intendedTarget ? buildIntendedTargetZoneSvg(intendedTarget.data) : buildZoneSvg(pitch)}</g>`);
+  y += ZONE_H * zoneScaleToFit;
+  if (intendedTarget) {
+    const { data } = intendedTarget;
+    const hasDistance = data.missDistanceFt !== null && Number.isFinite(data.missDistanceFt);
+    const targetHit = hasDistance && data.missDistanceFt! <= data.targetRadiusFt;
+    y += s(20);
+    parts.push(`<text x="${PANEL_WIDTH / 2}" y="${y}" text-anchor="middle" font-family="Manrope" font-size="${s(19)}" font-weight="700" fill="${hasDistance ? (targetHit ? '#4ade80' : '#f87171') : TEXT_MUTED}">${hasDistance ? (targetHit ? 'TARGET HIT' : 'MISS') : 'NO LOCATION'}</text>`);
+    y += s(26);
+    parts.push(`<text x="${PANEL_WIDTH / 2}" y="${y}" text-anchor="middle" font-family="Manrope" font-size="${s(16)}" font-weight="500" fill="${TEXT_MUTED}">Miss distance: ${hasDistance ? (data.missDistanceFt! * 12).toFixed(1) + '&quot;' : '—'}</text>`);
+  }
+  y += s(30);
 
   const logoDataUri = getLogoDataUri();
   if (logoDataUri) {
     const logoSize = s(88);
     const logoX = PANEL_WIDTH / 2 - logoSize / 2;
-    parts.push(`<image href="${logoDataUri}" x="${logoX}" y="${y}" width="${logoSize}" height="${logoSize}" preserveAspectRatio="xMidYMid meet" />`);
+    const logoY = Math.max(y, panelHeight - logoSize - s(28));
+    parts.push(`<image href="${logoDataUri}" x="${logoX}" y="${logoY}" width="${logoSize}" height="${logoSize}" preserveAspectRatio="xMidYMid meet" />`);
   }
 
   const svg = `
@@ -373,7 +383,11 @@ export function renderPitchExportOverlayPng(pitch: PitchExportMetrics, panelHeig
  * panel (fixed width, varying height) -- so here a single `scale` factor
  * derived from panelWidth/BASE_WIDTH is applied to every font-size/position/
  * stroke-width number, and all Y-coordinates/heights are left unscaled. */
-export function renderPitchExportOverlayHorizontalPng(pitch: PitchExportMetrics, panelWidth: number): Buffer {
+export function renderPitchExportOverlayHorizontalPng(
+  pitch: PitchExportMetrics,
+  panelWidth: number,
+  intendedTarget?: { data: IntendedTargetExportData; targetInches: number } | null
+): Buffer {
   const BASE_WIDTH = 1400;
   const scale = panelWidth / BASE_WIDTH;
   const s = (n: number) => n * scale;
@@ -441,7 +455,7 @@ export function renderPitchExportOverlayHorizontalPng(pitch: PitchExportMetrics,
 
   // Middle section: all 10 stats as a single 5-wide x 2-row grid (denser
   // than the vertical panel's 2x5 -- this section is wide, not tall).
-  const zoneColWidth = s(230);
+  const zoneColWidth = s(320);
   const midX = leftColWidth + s(28);
   const midWidth = BASE_WIDTH * scale - zoneColWidth - midX - s(20);
   const statCols = 5;
@@ -476,29 +490,37 @@ export function renderPitchExportOverlayHorizontalPng(pitch: PitchExportMetrics,
   const zoneColX = BASE_WIDTH * scale - zoneColWidth;
   parts.push(`<line x1="${zoneColX}" y1="${PAD_Y}" x2="${zoneColX}" y2="${HORIZONTAL_PANEL_HEIGHT - PAD_Y}" stroke="${DIVIDER}" stroke-width="1.5" />`);
 
-  // Right section: strike-zone diagram + logo side by side. zoneScaleToFit
-  // is capped by BOTH available height (like before) AND available width
-  // once the logo + gap are reserved -- the previous version only capped by
-  // height, so on a narrow panelWidth the zone+logo pair could exceed
-  // zoneColWidth entirely, pushing the logo off the right edge past the
-  // panel boundary (confirmed via a real export screenshot: logo was cut
-  // off). rightStartX is also clamped to never go negative/overflow.
-  const logoSize = s(56);
-  const zoneGap = s(18);
-  const maxZoneWidthForLogo = zoneColWidth - s(24) * 2 - zoneGap - logoSize;
+  // Give the zone nearly the full strip height, with the logo anchored
+  // at the right edge. Center the zone in the space remaining to its left.
+  const rightZoneW = intendedTarget ? IZ_ZONE_W : ZONE_W;
+  const rightZoneH = intendedTarget ? IZ_ZONE_H : ZONE_H;
+  const logoSize = s(48);
+  const zoneGap = s(12);
+  const logoX = panelWidth - s(12) - logoSize;
+  const zoneStartX = zoneColX + s(12);
+  const availableZoneWidth = logoX - zoneGap - zoneStartX;
   const zoneScaleToFit = Math.max(
     0.1,
-    Math.min((HORIZONTAL_PANEL_HEIGHT - PAD_Y * 2) / ZONE_H, 0.72 * scale, maxZoneWidthForLogo / ZONE_W)
+    Math.min((HORIZONTAL_PANEL_HEIGHT - 16) / rightZoneH, availableZoneWidth / rightZoneW)
   );
-  const zoneDrawnW = ZONE_W * zoneScaleToFit;
-  const rightContentWidth = zoneDrawnW + zoneGap + logoSize;
-  const rightStartX = Math.max(zoneColX + s(12), zoneColX + (zoneColWidth - rightContentWidth) / 2);
-  const zoneY = midY - (ZONE_H * zoneScaleToFit) / 2;
-  parts.push(`<g transform="translate(${rightStartX}, ${zoneY}) scale(${zoneScaleToFit})">${buildZoneSvg(pitch)}</g>`);
+  const zoneDrawnW = rightZoneW * zoneScaleToFit;
+  const rightStartX = zoneStartX + (availableZoneWidth - zoneDrawnW) / 2;
+  const zoneY = midY - (rightZoneH * zoneScaleToFit) / 2;
+  const zoneSvgMarkup = intendedTarget ? buildIntendedTargetZoneSvg(intendedTarget.data) : buildZoneSvg(pitch);
+  parts.push(`<g transform="translate(${rightStartX}, ${zoneY}) scale(${zoneScaleToFit})">${zoneSvgMarkup}</g>`);
+
+  if (intendedTarget) {
+    const distance = intendedTarget.data.missDistanceFt;
+    const distanceLabel = distance !== null && Number.isFinite(distance)
+      ? `${(distance * 12).toFixed(1)}"`
+      : '—';
+    const label = `Miss distance: ${distanceLabel}`;
+    const fontSize = fitFontSize(label, Math.min(24, s(16)), availableZoneWidth);
+    parts.push(`<text x="${rightStartX + zoneDrawnW / 2}" y="${HORIZONTAL_PANEL_HEIGHT - 14}" text-anchor="middle" font-family="Manrope" font-size="${fontSize}" font-weight="600" fill="${TEXT_MUTED}">${escapeXml(label)}</text>`);
+  }
 
   const logoDataUri = getLogoDataUri();
   if (logoDataUri) {
-    const logoX = Math.min(rightStartX + zoneDrawnW + zoneGap, panelWidth - s(12) - logoSize);
     const logoY = midY - logoSize / 2;
     parts.push(`<image href="${logoDataUri}" x="${logoX}" y="${logoY}" width="${logoSize}" height="${logoSize}" preserveAspectRatio="xMidYMid meet" />`);
   }
@@ -519,6 +541,73 @@ export function renderPitchExportOverlayHorizontalPng(pitch: PitchExportMetrics,
     },
   });
   return resvg.render().asPng();
+}
+
+export type IntendedTargetExportData = {
+  intendedSideFt: number;
+  intendedHeightFt: number;
+  targetRadiusFt: number;
+  plateLocSide: number | null;
+  plateLocHeight: number | null;
+  missDistanceFt: number | null;
+  pitchType: string | null;
+};
+
+// Match the web target diagram’s field coordinates, grid, and numbered
+// pockets, using the regular export zone’s viewport so both modes fit alike.
+const IZ_ZONE_W = ZONE_W;
+const IZ_ZONE_H = ZONE_H;
+const IZ_X_MIN = -2.5;
+const IZ_X_MAX = 2.5;
+const IZ_Y_MIN = 0;
+const IZ_Y_MAX = 4.5;
+const IZ_PAD = 10;
+const IZ_SCALE = Math.min((IZ_ZONE_W - IZ_PAD * 2) / (IZ_X_MAX - IZ_X_MIN), (IZ_ZONE_H - IZ_PAD * 2) / (IZ_Y_MAX - IZ_Y_MIN));
+const IZ_DRAWN_W = (IZ_X_MAX - IZ_X_MIN) * IZ_SCALE;
+const IZ_DRAWN_H = (IZ_Y_MAX - IZ_Y_MIN) * IZ_SCALE;
+const IZ_LEFT_PAD = (IZ_ZONE_W - IZ_DRAWN_W) / 2;
+const IZ_TOP_PAD = (IZ_ZONE_H - IZ_DRAWN_H) / 2;
+const izPx = (x: number) => IZ_LEFT_PAD + (x - IZ_X_MIN) * IZ_SCALE;
+const izPy = (y: number) => IZ_TOP_PAD + (IZ_Y_MAX - y) * IZ_SCALE;
+const IZ_STRIKE_LEFT = -0.88;
+const IZ_STRIKE_RIGHT = 0.88;
+const IZ_STRIKE_BOTTOM = 1.5;
+const IZ_STRIKE_TOP = 3.6;
+const IZ_STRIKE_CENTER_Y = (IZ_STRIKE_BOTTOM + IZ_STRIKE_TOP) / 2;
+
+function buildIntendedTargetZoneSvg(pitch: IntendedTargetExportData): string {
+  const targetX = izPx(pitch.intendedSideFt);
+  const targetY = izPy(pitch.intendedHeightFt);
+  const actualX = izPx(pitch.plateLocSide ?? 0);
+  const actualY = izPy(pitch.plateLocHeight ?? 0);
+  const dotColor = PITCH_COLORS[pitch.pitchType ?? 'Undefined'] ?? PITCH_COLORS.Undefined;
+
+  const hasActual = pitch.plateLocSide !== null && Number.isFinite(pitch.plateLocSide)
+    && pitch.plateLocHeight !== null && Number.isFinite(pitch.plateLocHeight);
+  const grid = [1, 2].map((third) => `
+    <line x1="${izPx(IZ_STRIKE_LEFT + (IZ_STRIKE_RIGHT - IZ_STRIKE_LEFT) * third / 3)}" y1="${izPy(IZ_STRIKE_TOP)}" x2="${izPx(IZ_STRIKE_LEFT + (IZ_STRIKE_RIGHT - IZ_STRIKE_LEFT) * third / 3)}" y2="${izPy(IZ_STRIKE_BOTTOM)}" stroke="#94a3b8" stroke-opacity="0.55" stroke-width="1" />
+    <line x1="${izPx(IZ_STRIKE_LEFT)}" y1="${izPy(IZ_STRIKE_TOP - (IZ_STRIKE_TOP - IZ_STRIKE_BOTTOM) * third / 3)}" x2="${izPx(IZ_STRIKE_RIGHT)}" y2="${izPy(IZ_STRIKE_TOP - (IZ_STRIKE_TOP - IZ_STRIKE_BOTTOM) * third / 3)}" stroke="#94a3b8" stroke-opacity="0.55" stroke-width="1" />`).join('');
+  const pockets = Array.from({ length: 9 }, (_, i) => ({
+    number: i + 1,
+    x: IZ_STRIKE_LEFT + (IZ_STRIKE_RIGHT - IZ_STRIKE_LEFT) * ((i % 3) + 0.5) / 3,
+    y: IZ_STRIKE_TOP - (IZ_STRIKE_TOP - IZ_STRIKE_BOTTOM) * (Math.floor(i / 3) + 0.5) / 3,
+  })).concat([
+    { number: 10, x: -1.19, y: 3.825 }, { number: 11, x: 1.19, y: 3.825 },
+    { number: 12, x: -1.19, y: 1.275 }, { number: 13, x: 1.19, y: 1.275 },
+  ]).map(({ number, x, y }) => `<text x="${izPx(x)}" y="${izPy(y) + 3}" text-anchor="middle" font-family="Manrope" font-size="8" font-weight="700" fill="#94a3b8" fill-opacity="0.6">${number}</text>`).join('');
+
+  return `
+    <polygon points="${izPx(-0.75)},${izPy(0.55)} ${izPx(0.75)},${izPy(0.55)} ${izPx(0.75)},${izPy(0.65)} ${izPx(0)},${izPy(0.75)} ${izPx(-0.75)},${izPy(0.65)}" fill="none" stroke="#e2e8f0" stroke-width="3" stroke-opacity="0.75" />
+    <rect x="${izPx(-1.5)}" y="${izPy(IZ_STRIKE_CENTER_Y + 1.5)}" width="${3 * IZ_SCALE}" height="${3 * IZ_SCALE}" fill="none" stroke="#94a3b8" stroke-opacity="0.28" stroke-width="2" />
+    <rect x="${izPx(IZ_STRIKE_LEFT)}" y="${izPy(IZ_STRIKE_TOP)}" width="${izPx(IZ_STRIKE_RIGHT) - izPx(IZ_STRIKE_LEFT)}" height="${izPy(IZ_STRIKE_BOTTOM) - izPy(IZ_STRIKE_TOP)}" fill="rgba(15,23,42,0.28)" stroke="${ZONE_STROKE}" stroke-width="3" />
+    <line x1="${izPx(-1.5)}" y1="${izPy(IZ_STRIKE_CENTER_Y)}" x2="${izPx(1.5)}" y2="${izPy(IZ_STRIKE_CENTER_Y)}" stroke="rgba(148,163,184,0.2)" />
+    <line x1="${izPx(0)}" y1="${izPy(IZ_STRIKE_CENTER_Y - 1.5)}" x2="${izPx(0)}" y2="${izPy(IZ_STRIKE_CENTER_Y + 1.5)}" stroke="rgba(148,163,184,0.2)" />
+    ${grid}${pockets}
+    ${hasActual ? `<line x1="${targetX}" y1="${targetY}" x2="${actualX}" y2="${actualY}" stroke="rgba(226,232,240,0.55)" stroke-width="1.5" stroke-dasharray="5 4" />` : ''}
+    <circle cx="${targetX}" cy="${targetY}" r="${Math.max(5, pitch.targetRadiusFt * IZ_SCALE)}" fill="rgba(74,222,128,0.17)" stroke="#4ade80" stroke-width="2.3" stroke-dasharray="5 4" />
+    <circle cx="${targetX}" cy="${targetY}" r="3" fill="#86efac" />
+    ${hasActual ? `<circle cx="${actualX}" cy="${actualY}" r="8" fill="${dotColor}" stroke="${ZONE_STROKE}" stroke-width="2" />` : ''}
+  `;
 }
 
 export { PANEL_WIDTH as PITCH_EXPORT_PANEL_WIDTH, HORIZONTAL_PANEL_HEIGHT as PITCH_EXPORT_HORIZONTAL_PANEL_HEIGHT };

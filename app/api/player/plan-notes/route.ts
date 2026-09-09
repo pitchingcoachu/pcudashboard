@@ -23,6 +23,7 @@ import {
   notifyPlayerForStaffActivity,
   notifyStaffForPlayerActivity,
   recordPortalActivityEvent,
+  setPlayerPlanNotePinned,
   updateDashboardPlayerNote,
   updatePlayerPlanNote,
   type PlayerPlanNoteRow,
@@ -409,6 +410,22 @@ export async function PATCH(request: Request) {
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
   const noteId = Number(body.noteId ?? 0);
   const playerId = Number(body.playerId ?? 0);
+
+  // Pinning is its own lightweight action, separate from the full note-edit
+  // payload below -- a pin click shouldn't need to resend (and risk
+  // clobbering with a stale client copy of) the note's date/category/text.
+  // Coach/admin only: players can't pin notes.
+  if (body.action === 'setPinned') {
+    if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    if (!Number.isFinite(playerId) || playerId <= 0) return NextResponse.json({ error: 'Valid playerId is required.' }, { status: 400 });
+    const isPinned = Boolean(body.isPinned);
+    const allowed = await resolveAllowedPlayerId(session, playerId, organizationId);
+    if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
+    const pinned = await setPlayerPlanNotePinned({ organizationId, playerId: allowed.playerId, noteId, isPinned });
+    if (!pinned.ok) return NextResponse.json({ error: pinned.error }, { status: 400 });
+    return NextResponse.json({ ok: true });
+  }
+
   const noteDate = String(body.noteDate ?? '');
   const category = String(body.category ?? '').trim();
   const noteText = String(body.noteText ?? '');

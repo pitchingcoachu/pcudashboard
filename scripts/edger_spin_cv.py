@@ -21,6 +21,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 from scipy import ndimage
 from scipy.optimize import minimize
+from scipy.spatial import cKDTree
 from scipy.spatial.transform import Rotation
 
 
@@ -193,13 +194,21 @@ def refine_ball_circle(gray: np.ndarray, detection: Candidate) -> tuple[float, f
     return best[1], best[2], best[3]
 
 
-def normalized_crop(gray: np.ndarray, detection: Candidate, output_size: int = 128) -> np.ndarray:
-    center_x, center_y, radius = refine_ball_circle(gray, detection)
+def normalized_crop_from_circle(
+    gray: np.ndarray,
+    circle: tuple[float, float, float],
+    output_size: int = 128,
+) -> np.ndarray:
+    center_x, center_y, radius = circle
     yy, xx = np.mgrid[:output_size, :output_size]
     scale = radius / NORMALIZED_BALL_RADIUS
     source_x = center_x + ((xx - output_size / 2) * scale)
     source_y = center_y + ((yy - output_size / 2) * scale)
     return ndimage.map_coordinates(gray, [source_y, source_x], order=3, mode="nearest").astype(np.float32)
+
+
+def normalized_crop(gray: np.ndarray, detection: Candidate, output_size: int = 128) -> np.ndarray:
+    return normalized_crop_from_circle(gray, refine_ball_circle(gray, detection), output_size)
 
 
 def seam_evidence(crop: np.ndarray) -> tuple[np.ndarray, float, float]:
@@ -236,6 +245,160 @@ def baseball_seam_points(count: int = 720) -> np.ndarray:
     ))
 
 
+def spherical_temporal_seam_pose(
+    observations: list[tuple[int, np.ndarray, np.ndarray]],
+    axis: np.ndarray,
+    phase_step: float,
+    seam_points: np.ndarray,
+) -> tuple[np.ndarray, float, float, int]:
+    """Fuse seam evidence from many frames onto one spherical surface.
+
+    The angular-velocity solve supplies the relative rigid rotation between
+    frames. Back-projecting each interior seam pixel to the near hemisphere and
+    undoing that rotation produces a single reference-space point cloud. This
+    makes the ball-cover orientation compete against the complete temporal seam
+    pattern instead of a collection of unrelated 2-D dark-pixel masks.
+    """
+    if len(observations) < 10:
+        raise RuntimeError("Not enough observations for spherical seam fusion.")
+    size = observations[0][2].shape[0]
+    center = size / 2
+    first_frame = observations[0][0]
+    fused: list[np.ndarray] = []
+    for frame_index, seam, _ in observations:
+        pixel_y, pixel_x = np.nonzero(seam)
+        x = (pixel_x - center) / NORMALIZED_BALL_RADIUS
+        y = (center - pixel_y) / NORMALIZED_BALL_RADIUS
+        radial_squared = (x * x) + (y * y)
+        usable = radial_squared <= 0.74 ** 2
+        if int(usable.sum()) < 12:
+            continue
+        x = x[usable]
+        y = y[usable]
+        z = np.sqrt(np.maximum(0, 1 - radial_squared[usable]))
+        camera_points = np.column_stack((x, y, z))
+        motion = Rotation.from_rotvec(axis * phase_step * (frame_index - first_frame)).as_matrix()
+        # Row vectors: camera = reference @ motion.T, hence reference = camera @ motion.
+        fused.append(camera_points @ motion)
+    if not fused:
+        raise RuntimeError("No seam pixels survived spherical back-projection.")
+    evidence = np.concatenate(fused)
+    # Quantization prevents a handful of long, over-segmented frames from
+    # dominating simply because they contributed duplicate neighboring pixels.
+    quantized = np.round(evidence / 0.025).astype(np.int16)
+    _, unique_indices = np.unique(quantized, axis=0, return_index=True)
+    evidence = evidence[np.sort(unique_indices)]
+    if len(evidence) > 18000:
+        sample_indices = np.linspace(0, len(evidence) - 1, 18000).round().astype(int)
+        evidence = evidence[sample_indices]
+    evidence_tree = cKDTree(evidence)
+    reverse_evidence = evidence
+    if len(reverse_evidence) > 3500:
+        sample_indices = np.linspace(0, len(reverse_evidence) - 1, 3500).round().astype(int)
+        reverse_evidence = reverse_evidence[sample_indices]
+
+    def spherical_cost(euler: np.ndarray) -> float:
+        orientation = Rotation.from_euler("xyz", euler).as_matrix()
+        predicted = seam_points @ orientation.T
+        forward_distance, _ = evidence_tree.query(predicted, k=1)
+        forward_cost = float(np.mean(np.minimum(forward_distance, 0.18)))
+        forward_support = float(np.mean(forward_distance <= 0.075))
+        predicted_tree = cKDTree(predicted)
+        reverse_distance, _ = predicted_tree.query(reverse_evidence, k=1)
+        reverse_distance.sort()
+        reverse_supported = reverse_distance[:max(80, int(len(reverse_distance) * 0.58))]
+        reverse_cost = float(np.mean(np.minimum(reverse_supported, 0.18)))
+        return forward_cost + (0.45 * reverse_cost) + (0.08 * (1 - forward_support))
+
+    grid = np.linspace(-math.pi, math.pi, 9, endpoint=False)
+    seeds = np.array(np.meshgrid(grid, grid, grid)).T.reshape(-1, 3)
+    scored = sorted((spherical_cost(seed), seed) for seed in seeds)
+    best: tuple[float, np.ndarray] | None = None
+    for _, seed in scored[:10]:
+        refined = minimize(
+            spherical_cost,
+            seed,
+            method="Nelder-Mead",
+            options={"xatol": 5e-4, "fatol": 2e-5, "maxiter": 450, "adaptive": True},
+        )
+        cost = spherical_cost(refined.x)
+        if best is None or cost < best[0]:
+            best = (cost, refined.x)
+    assert best is not None
+    best_cost, best_euler = best
+    orientation = Rotation.from_euler("xyz", best_euler).as_matrix()
+    predicted = seam_points @ orientation.T
+    distance, _ = evidence_tree.query(predicted, k=1)
+    support = float(np.mean(distance <= 0.075))
+    return orientation, float(best_cost), support, int(len(evidence))
+
+
+def brightness_flow_axis(observations: list[tuple[int, np.ndarray, np.ndarray]]) -> tuple[np.ndarray, float, float, float] | None:
+    """Estimate the 3D angular-velocity direction directly from Edger pixels.
+
+    For an orthographic sphere, image velocity is the projection of omega x r.
+    Substituting that field into the brightness-constancy equation gives a
+    linear solve for all three angular components. This is independent of
+    TrackMan release tilt and spin efficiency; the seam model fit can then
+    refine the pixel-derived axis instead of blindly searching the sphere.
+    """
+    if len(observations) < 8:
+        return None
+    size = observations[0][2].shape[0]
+    yy, xx = np.mgrid[:size, :size]
+    x = (xx - size / 2) / NORMALIZED_BALL_RADIUS
+    y = (size / 2 - yy) / NORMALIZED_BALL_RADIUS
+    radial_squared = (x * x) + (y * y)
+    disk = radial_squared <= 0.68 ** 2
+    z = np.sqrt(np.maximum(0, 1 - radial_squared))
+    pair_solutions: list[np.ndarray] = []
+    for (frame_a, _, crop_a), (frame_b, _, crop_b) in zip(observations, observations[1:]):
+        frame_gap = frame_b - frame_a
+        if frame_gap < 1 or frame_gap > 2:
+            continue
+        detail_a = crop_a - ndimage.gaussian_filter(crop_a, sigma=3.2)
+        detail_b = crop_b - ndimage.gaussian_filter(crop_b, sigma=3.2)
+        average = (detail_a + detail_b) * 0.5
+        gradient_down, gradient_x = np.gradient(average)
+        gradient_y = -gradient_down
+        temporal = (detail_b - detail_a) / frame_gap
+        strength = np.hypot(gradient_x, gradient_y)
+        cutoff = float(np.percentile(strength[disk], 72))
+        usable = disk & (strength >= max(cutoff, 0.8))
+        # Pixel displacement = normalized spherical velocity * crop radius.
+        design = np.column_stack((
+            (-gradient_y[usable] * z[usable]) * NORMALIZED_BALL_RADIUS,
+            (gradient_x[usable] * z[usable]) * NORMALIZED_BALL_RADIUS,
+            ((-gradient_x[usable] * y[usable]) + (gradient_y[usable] * x[usable])) * NORMALIZED_BALL_RADIUS,
+        ))
+        target = -temporal[usable]
+        finite = np.all(np.isfinite(design), axis=1) & np.isfinite(target)
+        design = design[finite]
+        target = target[finite]
+        if len(target) < 80:
+            continue
+        solution, *_ = np.linalg.lstsq(design, target, rcond=None)
+        magnitude = float(np.linalg.norm(solution))
+        if math.radians(1) <= magnitude <= math.radians(35):
+            pair_solutions.append(solution)
+    if len(pair_solutions) < 5:
+        return None
+    solutions = np.asarray(pair_solutions)
+    magnitudes = np.linalg.norm(solutions, axis=1)
+    axes = solutions / magnitudes[:, None]
+    cosine_gate = math.cos(math.radians(42))
+    support = np.asarray([(axes @ candidate >= cosine_gate).sum() for candidate in axes])
+    seed = axes[int(np.argmax(support))]
+    inliers = (axes @ seed) >= cosine_gate
+    if int(inliers.sum()) < 4:
+        return None
+    axis = np.average(axes[inliers], axis=0, weights=magnitudes[inliers])
+    axis /= np.linalg.norm(axis)
+    phase = float(np.median(solutions[inliers] @ axis))
+    angular_residuals = np.degrees(np.arccos(np.clip(axes[inliers] @ axis, -1, 1)))
+    return axis, abs(phase), float(inliers.mean()), float(np.median(angular_residuals))
+
+
 @dataclass
 class _FitResult:
     x: np.ndarray
@@ -248,7 +411,8 @@ def _grid_search_and_refine(
     objective,
     bounds: list[tuple[float, float]],
     lock_axis_prior: bool,
-    grid_size: int = 9,
+    coarse_objective=None,
+    grid_size: int = 7,
     top_k: int = 6,
 ) -> _FitResult:
     """Coarse grid search over the free rotation parameters, then refine the
@@ -277,8 +441,9 @@ def _grid_search_and_refine(
         axis_phi = sum(bounds[4]) / 2
         axis_candidates = [(axis_theta, axis_phi)]
     else:
-        axis_theta_grid = np.linspace(bounds[3][0], bounds[3][1], 5)
-        axis_phi_grid = np.linspace(bounds[4][0], bounds[4][1], 8, endpoint=False)
+        locally_seeded = (bounds[3][1] - bounds[3][0]) < math.radians(30)
+        axis_theta_grid = np.linspace(bounds[3][0], bounds[3][1], 3 if locally_seeded else 5)
+        axis_phi_grid = np.linspace(bounds[4][0], bounds[4][1], 3 if locally_seeded else 8, endpoint=locally_seeded)
         axis_candidates = [(theta, phi) for theta in axis_theta_grid for phi in axis_phi_grid]
 
     scored: list[tuple[float, np.ndarray]] = []
@@ -286,7 +451,8 @@ def _grid_search_and_refine(
         for phase_step in phase_candidates:
             for euler in grid_points:
                 parameters = np.array([*euler, axis_theta, axis_phi, phase_step])
-                scored.append((objective(parameters), parameters))
+                scorer = coarse_objective or objective
+                scored.append((scorer(parameters), parameters))
     scored.sort(key=lambda item: item[0])
 
     best: _FitResult | None = None
@@ -298,8 +464,18 @@ def _grid_search_and_refine(
             options={"xatol": 1e-3, "fatol": 1e-3, "maxiter": 300, "adaptive": True},
         )
         # Clamp back into the caller's bounds (Nelder-Mead is unconstrained;
-        # the locked-axis window in particular must not drift).
-        clamped = np.array([min(max(value, low), high) for value, (low, high) in zip(refined.x, bounds)])
+        # the locked-axis window in particular must not drift). Phase bounds
+        # describe a magnitude; preserve the fitted sign because it is the
+        # observed rotation direction. The previous generic clamp silently
+        # turned every negative phase candidate into a positive one.
+        clamped_values = [
+            min(max(value, low), high)
+            for value, (low, high) in zip(refined.x[:5], bounds[:5])
+        ]
+        phase_low, phase_high = bounds[5]
+        phase_sign = -1 if refined.x[5] < 0 else 1
+        clamped_values.append(phase_sign * min(max(abs(refined.x[5]), phase_low), phase_high))
+        clamped = np.asarray(clamped_values)
         clamped_cost = objective(clamped)
         if best is None or clamped_cost < best.fun:
             best = _FitResult(x=clamped, fun=clamped_cost, success=bool(refined.success), message=str(refined.message))
@@ -322,7 +498,7 @@ def fit_seam_motion(
     sample_count: int = 18,
 ) -> dict[str, float | list[float] | str]:
     detection_by_frame = {candidate.frame: candidate for candidate in track}
-    observations: list[tuple[int, np.ndarray, np.ndarray]] = []
+    tracked_circles: list[tuple[int, np.ndarray, tuple[float, float, float]]] = []
     for frame_index, frame in enumerate(frames):
         frame_number = frame_index + 1
         if fit_start_frame is not None and frame_number < fit_start_frame:
@@ -330,14 +506,58 @@ def fit_seam_motion(
         if fit_end_frame is not None and frame_number > fit_end_frame:
             continue
         detection = detection_by_frame.get(frame_index)
-        if detection is None:
+        if detection is not None:
+            tracked_circles.append((frame_index, frame, refine_ball_circle(frame, detection)))
+
+    # The ball is only 15-26 native pixels across in these clips. Independent
+    # circle fits can therefore jitter by one or two source pixels, which turns
+    # into a 3-6 pixel false seam displacement after normalization. Center and
+    # radius must follow a smooth flight path before any seam motion is judged.
+    raw_circles = np.asarray([item[2] for item in tracked_circles], dtype=float)
+    if len(raw_circles) >= 5:
+        smooth_circles = np.column_stack([
+            ndimage.gaussian_filter1d(
+                ndimage.median_filter(raw_circles[:, column], size=5, mode="nearest"),
+                sigma=1.0,
+                mode="nearest",
+            )
+            for column in range(3)
+        ])
+    else:
+        smooth_circles = raw_circles
+
+    preliminary: list[tuple[int, np.ndarray, np.ndarray, tuple[float, float, float]]] = []
+    for (frame_index, frame, raw_circle), smooth_circle_array in zip(tracked_circles, smooth_circles):
+        circle = tuple(float(value) for value in smooth_circle_array)
+        # A severe raw-radius excursion signals a hand/foreground merge. Do not
+        # let smoothing make that bad detection look trustworthy.
+        if circle[2] <= 0 or abs(math.log(raw_circle[2] / circle[2])) > math.log(1.16):
             continue
-        crop = normalized_crop(frame, detection)
+        crop = normalized_crop_from_circle(frame, circle)
         seam, fraction, sharpness = seam_evidence(crop)
         if 0.025 <= fraction <= 0.21 and sharpness >= 7:
-            observations.append((frame_index, seam, crop))
+            preliminary.append((frame_index, seam, crop, circle))
+    # A foreground component can briefly merge with a sleeve or background
+    # edge and make the fitted ball radius jump by 30-50% for a few frames.
+    # Those crops look superficially sharp but corrupt the 3D seam solution.
+    # Compare against a robust local radius trend and reject impossible jumps.
+    observations: list[tuple[int, np.ndarray, np.ndarray]] = []
+    if preliminary:
+        radii = np.asarray([item[3][2] for item in preliminary], dtype=float)
+        window = min(11, len(radii) if len(radii) % 2 else len(radii) - 1)
+        radius_trend = ndimage.median_filter(radii, size=max(window, 1), mode="nearest")
+        for item, expected_radius in zip(preliminary, radius_trend):
+            radius = item[3][2]
+            if expected_radius > 0 and abs(math.log(radius / expected_radius)) <= math.log(1.16):
+                observations.append((item[0], item[1], item[2]))
     if len(observations) < 10:
         raise RuntimeError("Not enough clean seam frames to fit rotational motion.")
+
+    flow_estimate = brightness_flow_axis(observations)
+    flow_axis = flow_estimate[0] if flow_estimate is not None else None
+    flow_phase = math.degrees(flow_estimate[1]) if flow_estimate is not None else None
+    flow_support = flow_estimate[2] if flow_estimate is not None else None
+    flow_spread = flow_estimate[3] if flow_estimate is not None else None
 
     chosen = np.linspace(0, len(observations) - 1, min(sample_count, len(observations))).round().astype(int)
     sampled = [observations[int(index)] for index in chosen]
@@ -358,7 +578,7 @@ def fit_seam_motion(
         valid = (x >= 0) & (x < 128) & (y >= 0) & (y < 128)
         return x[valid], y[valid]
 
-    DISTANCE_CLIP = 5.0
+    DISTANCE_CLIP = 9.0
 
     def alignment_cost(rotation: np.ndarray, observed: np.ndarray, distance_map: np.ndarray) -> float:
         x, y = projected_pixels(rotation)
@@ -366,7 +586,7 @@ def fit_seam_motion(
             return 100.0
         distances = np.minimum(distance_map[y, x], DISTANCE_CLIP)
         distances.sort()
-        supported = distances[: max(24, int(distances.size * 0.68))]
+        supported = distances[: max(24, int(distances.size * 0.86))]
         forward_cost = float(np.mean(supported)) + (float(np.median(distances)) * 0.18)
 
         projected_mask = np.zeros((128, 128), dtype=bool)
@@ -376,9 +596,36 @@ def fit_seam_motion(
         observed_y, observed_x = np.nonzero(observed)
         reverse_distances = np.minimum(projected_distance[observed_y, observed_x], DISTANCE_CLIP)
         reverse_distances.sort()
-        reverse_supported = reverse_distances[: max(12, int(reverse_distances.size * 0.72))]
+        reverse_supported = reverse_distances[: max(12, int(reverse_distances.size * 0.82))]
         reverse_cost = float(np.mean(reverse_supported)) if reverse_supported.size else DISTANCE_CLIP
         return forward_cost + (reverse_cost * 0.42)
+
+    # The reverse-distance mask construction dominates the exhaustive grid.
+    # Use a forward-only score on six temporal checkpoints to find promising
+    # basins, then evaluate and refine those candidates with the full symmetric
+    # objective. This keeps video-only axis solving practical without changing
+    # the final objective.
+    coarse_indices = np.linspace(0, len(sampled) - 1, min(6, len(sampled))).round().astype(int)
+    coarse_samples = [sampled[int(index)] for index in coarse_indices]
+    coarse_maps = [distance_maps[int(index)] for index in coarse_indices]
+
+    def coarse_objective(parameters: np.ndarray) -> float:
+        initial = Rotation.from_euler("xyz", parameters[:3]).as_matrix()
+        axis = np.array([
+            math.sin(parameters[3]) * math.cos(parameters[4]),
+            math.sin(parameters[3]) * math.sin(parameters[4]),
+            math.cos(parameters[3]),
+        ])
+        costs: list[float] = []
+        for (frame_index, _, _), distance_map in zip(coarse_samples, coarse_maps):
+            phase = parameters[5] * (frame_index - first_frame)
+            rotated = Rotation.from_rotvec(axis * phase).as_matrix() @ initial
+            x, y = projected_pixels(rotated)
+            distances = np.minimum(distance_map[y, x], DISTANCE_CLIP)
+            distances.sort()
+            supported = distances[: max(24, int(distances.size * 0.86))]
+            costs.append(float(np.mean(supported)))
+        return float(np.mean(costs))
 
     def objective(parameters: np.ndarray) -> float:
         initial = Rotation.from_euler("xyz", parameters[:3]).as_matrix()
@@ -399,7 +646,7 @@ def fit_seam_motion(
         # efficiency, use them only as weak priors to select between those
         # video-equivalent solutions; pixels remain the dominant fit signal.
         if axis_tilt_degrees is not None and math.hypot(axis[0], axis[1]) > 0.04:
-            fitted_tilt = (math.degrees(math.atan2(-axis[0], axis[1])) + 180) % 360
+            fitted_tilt = (math.degrees(math.atan2(-axis[1], axis[0])) + 180) % 360
             tilt_delta = abs((fitted_tilt - axis_tilt_degrees + 180) % 360 - 180)
             cost += 0.7 * (tilt_delta / 45) ** 2
         if spin_efficiency is not None:
@@ -423,8 +670,11 @@ def fit_seam_motion(
             raise RuntimeError("--lock-axis-prior requires tilt and spin efficiency.")
         efficiency = min(max(spin_efficiency, 0), 1)
         active_angle = math.radians(axis_tilt_degrees - 180)
-        scene_x = math.sin(active_angle) * efficiency
-        scene_z = math.cos(active_angle) * efficiency
+        # Release tilt is the transverse Magnus/movement direction, not the
+        # physical rotation axis. The two are perpendicular. This matches
+        # spinAxisFromInputs() in lib/pitch-spin-simulator.ts.
+        scene_x = -math.cos(active_angle) * efficiency
+        scene_z = -math.sin(active_angle) * efficiency
         scene_y = (1 if gyro_sign >= 0 else -1) * math.sqrt(max(0.0, 1 - efficiency * efficiency))
         raw_axis = np.array([-scene_x, scene_z, scene_y])
         raw_axis /= np.linalg.norm(raw_axis)
@@ -434,11 +684,83 @@ def fit_seam_motion(
             (max(0, locked_theta - 0.004), min(math.pi, locked_theta + 0.004)),
             (max(-math.pi, locked_phi - 0.004), min(math.pi, locked_phi + 0.004)),
         ]
+    elif flow_axis is not None and flow_support is not None and flow_spread is not None \
+            and flow_support >= 0.30 and flow_spread <= 30:
+        # The direction comes entirely from Edger pixel motion. Let the seam
+        # reprojection refine it locally, but do not allow a distant symmetric
+        # seam minimum to replace the observed motion axis.
+        flow_theta = math.acos(float(np.clip(flow_axis[2], -1, 1)))
+        flow_phi = math.atan2(float(flow_axis[1]), float(flow_axis[0]))
+        axis_window = math.radians(12)
+        axis_bounds = [
+            (max(0, flow_theta - axis_window), min(math.pi, flow_theta + axis_window)),
+            (flow_phi - axis_window, flow_phi + axis_window),
+        ]
     bounds = [
         (-math.pi, math.pi), (-math.pi, math.pi), (-math.pi, math.pi),
         *axis_bounds, phase_bounds,
     ]
-    result = _grid_search_and_refine(objective, bounds, lock_axis_prior)
+    spherical_fit: tuple[np.ndarray, float, float, int] | None = None
+    if not lock_axis_prior and flow_axis is not None and flow_support is not None and flow_spread is not None \
+            and flow_support >= 0.30 and flow_spread <= 30:
+        fusion_axis = flow_axis.copy()
+        fusion_phase = sum(phase_bounds) / 2
+        result: _FitResult | None = None
+        # Alternate spherical fusion with image-space refinement. Re-unwrapping
+        # with the refined motion prevents a small brightness-flow axis error
+        # from smearing the fused seam and selecting the wrong cover pose.
+        for pass_index in range(2):
+            spherical_fit = spherical_temporal_seam_pose(
+                observations,
+                fusion_axis,
+                fusion_phase,
+                seam_points,
+            )
+            spherical_orientation, _, _, _ = spherical_fit
+            spherical_euler = Rotation.from_matrix(spherical_orientation).as_euler("xyz")
+            fusion_theta = math.acos(float(np.clip(fusion_axis[2], -1, 1)))
+            fusion_phi = math.atan2(float(fusion_axis[1]), float(fusion_axis[0]))
+            seed = np.asarray([*spherical_euler, fusion_theta, fusion_phi, fusion_phase])
+            pose_window = math.radians(14 if pass_index == 0 else 10)
+            local_bounds = [
+                (value - pose_window, value + pose_window) for value in spherical_euler
+            ] + [*axis_bounds, phase_bounds]
+            refined = minimize(
+                objective,
+                seed,
+                method="Powell",
+                bounds=local_bounds,
+                options={"xtol": 5e-4, "ftol": 2e-4, "maxiter": 180},
+            )
+            result = _FitResult(
+                x=np.asarray(refined.x),
+                fun=float(objective(refined.x)),
+                success=bool(refined.success),
+                message=f"spherical-temporal pass {pass_index + 1}; {refined.message}",
+            )
+            fusion_axis = np.array([
+                math.sin(result.x[3]) * math.cos(result.x[4]),
+                math.sin(result.x[3]) * math.sin(result.x[4]),
+                math.cos(result.x[3]),
+            ])
+            fusion_phase = abs(float(result.x[5]))
+        assert result is not None
+        if result.fun > 5.25:
+            global_result = _grid_search_and_refine(
+                objective,
+                bounds,
+                lock_axis_prior,
+                coarse_objective,
+                grid_size=7,
+                top_k=8,
+            )
+            if global_result.fun < result.fun:
+                global_result.message = (
+                    f"full temporal search beat {result.message}; {global_result.message}"
+                )
+                result = global_result
+    else:
+        result = _grid_search_and_refine(objective, bounds, lock_axis_prior, coarse_objective)
     parameters = result.x
     axis = np.array([
         math.sin(parameters[3]) * math.cos(parameters[4]),
@@ -447,6 +769,13 @@ def fit_seam_motion(
     ])
     euler = np.degrees(parameters[:3])
     phase_degrees = math.degrees(parameters[5])
+    # Canonicalize the physical angular-velocity vector: the stored axis owns
+    # the observed direction and the stored phase is a positive magnitude.
+    # This removes the need for a global UI sign guess.
+    if phase_degrees < 0:
+        axis *= -1
+        phase_degrees *= -1
+        parameters[5] *= -1
     initial = Rotation.from_euler("xyz", parameters[:3]).as_matrix()
     sampled_frame_ids = {item[0] for item in sampled}
     held_out = [item for item in observations if item[0] not in sampled_frame_ids]
@@ -459,6 +788,27 @@ def fit_seam_motion(
         motion = Rotation.from_rotvec(axis * phase).as_matrix()
         distance_map = ndimage.distance_transform_edt(~observed)
         held_out_costs.append(alignment_cost(motion @ initial, observed, distance_map))
+
+    def overlap_metrics(frame_index: int, observed: np.ndarray) -> tuple[float, float]:
+        phase = parameters[5] * (frame_index - first_frame)
+        motion = Rotation.from_rotvec(axis * phase).as_matrix()
+        x, y = projected_pixels(motion @ initial)
+        observed_distance = ndimage.distance_transform_edt(~observed)
+        predicted_support = float(np.mean(observed_distance[y, x] <= 3.0)) if x.size else 0.0
+        predicted_mask = np.zeros((128, 128), dtype=bool)
+        predicted_mask[y, x] = True
+        predicted_distance = ndimage.distance_transform_edt(~predicted_mask)
+        observed_y, observed_x = np.nonzero(observed)
+        observed_support = float(np.mean(predicted_distance[observed_y, observed_x] <= 3.0)) \
+            if observed_x.size else 0.0
+        return predicted_support, observed_support
+
+    validation_observations = held_out if held_out else sampled
+    overlap = np.asarray([
+        overlap_metrics(frame_index, observed)
+        for frame_index, observed, _ in validation_observations
+    ])
+    overlap_pass = (overlap[:, 0] >= 0.35) & (overlap[:, 1] >= 0.45)
     overlay_tiles: list[Image.Image] = []
     for frame_index, observed, crop in sampled:
         phase = parameters[5] * (frame_index - first_frame)
@@ -495,18 +845,39 @@ def fit_seam_motion(
         "fit_cost_px": round(float(result.fun), 4),
         "held_out_frames": len(held_out_costs),
         "held_out_cost_px": round(float(np.mean(held_out_costs)), 4) if held_out_costs else None,
+        "held_out_predicted_seam_support_median": round(float(np.median(overlap[:, 0])), 4),
+        "held_out_observed_seam_support_median": round(float(np.median(overlap[:, 1])), 4),
+        "held_out_aligned_frame_fraction": round(float(np.mean(overlap_pass)), 4),
         "optimizer_success": bool(result.success),
         "optimizer_message": str(result.message),
         "overlay_image": str(overlay_destination),
         "ambiguity": "Baseball seam symmetry and uncalibrated single-camera depth remain unresolved.",
+        # Invert the same physical-axis construction above. Camera XYZ maps
+        # to scene (-X, Z, Y), so active movement angle is atan2(-scene Z,
+        # -scene X) = atan2(-camera Y, camera X).
         "video_release_tilt_degrees": round(
-            (math.degrees(math.atan2(-axis[0], axis[1])) + 180) % 360,
+            (math.degrees(math.atan2(-axis[1], axis[0])) + 180) % 360,
             3,
         ),
         "video_active_spin_fraction": round(float(math.hypot(axis[0], axis[1])), 5),
         "axis_prior_locked": lock_axis_prior,
         "gyro_sign": 1 if gyro_sign >= 0 else -1,
     }
+    if flow_axis is not None and flow_phase is not None:
+        report["brightness_flow_axis_camera_xyz"] = [round(float(value), 5) for value in flow_axis]
+        report["brightness_flow_phase_degrees_per_frame"] = round(float(flow_phase), 4)
+        report["brightness_flow_support_fraction"] = round(float(flow_support or 0), 4)
+        report["brightness_flow_axis_spread_degrees"] = round(float(flow_spread or 0), 3)
+        report["axis_video_flow_constrained"] = bool(
+            flow_support is not None and flow_spread is not None
+            and flow_support >= 0.30 and flow_spread <= 30
+        )
+    if spherical_fit is not None:
+        _, spherical_cost, spherical_support, spherical_points = spherical_fit
+        report["spherical_temporal_pose"] = True
+        report["spherical_temporal_cost"] = round(float(spherical_cost), 5)
+        report["spherical_temporal_seam_support"] = round(float(spherical_support), 4)
+        report["spherical_temporal_evidence_points"] = spherical_points
     if axis_tilt_degrees is not None:
         report["axis_tilt_prior_degrees"] = round(axis_tilt_degrees, 3)
     if spin_efficiency is not None:
@@ -605,6 +976,8 @@ def main() -> None:
     parser.add_argument("--fit", action="store_true", help="Fit seam phase and spin axis in Edger camera coordinates.")
     parser.add_argument("--spin-rate-rpm", type=float, help="Measured RPM used only as an independent temporal check.")
     parser.add_argument("--capture-fps", type=float, help="Known Edger capture rate; constrains measured-RPM phase progression.")
+    parser.add_argument("--observed-ivb", type=float, help="Optional measured IVB used only to reject an impossible spin-axis hemisphere.")
+    parser.add_argument("--observed-hb", type=float, help="Optional measured HB used only to reject an impossible spin-axis hemisphere.")
     parser.add_argument("--axis-tilt-degrees", type=float, help="Optional weak TrackMan tilt prior used to resolve video seam symmetry.")
     parser.add_argument("--spin-efficiency", type=float, help="Optional weak TrackMan spin-efficiency prior, expressed from 0 to 1.")
     parser.add_argument("--fit-start-frame", type=int, help="First 1-based post-release frame eligible for the seam fit.")
@@ -644,7 +1017,7 @@ def main() -> None:
                 for item in track
             ]
         if args.fit:
-            report["camera_fit"] = fit_seam_motion(
+            camera_fit = fit_seam_motion(
                 frames,
                 track,
                 args.output / "seam-fit-overlay.jpg",
@@ -656,6 +1029,27 @@ def main() -> None:
                 fit_end_frame=args.fit_end_frame,
                 lock_axis_prior=args.lock_axis_prior,
                 gyro_sign=args.gyro_sign,
+            )
+            if args.observed_ivb is not None and args.observed_hb is not None:
+                tilt = math.radians(float(camera_fit["video_release_tilt_degrees"]) - 180)
+                predicted = np.asarray([math.sin(tilt), math.cos(tilt)])
+                observed = np.asarray([args.observed_hb, args.observed_ivb], dtype=float)
+                observed_size = float(np.linalg.norm(observed))
+                if observed_size > 1e-6:
+                    camera_fit["movement_axis_alignment"] = round(
+                        float(np.dot(predicted, observed / observed_size)), 4
+                    )
+            report["camera_fit"] = camera_fit
+            overlap_validated = (
+                float(camera_fit["held_out_predicted_seam_support_median"]) >= 0.60
+                and float(camera_fit["held_out_observed_seam_support_median"]) >= 0.40
+                and float(camera_fit["held_out_aligned_frame_fraction"]) >= 0.50
+            )
+            report["status"] = "seam_fit_validated" if overlap_validated else "review_required"
+            report["warning"] = (
+                "Held-out temporal seam overlap passed. Import quality gates still apply."
+                if overlap_validated
+                else "Held-out temporal seam overlap failed; do not display or import this orientation."
             )
         (args.output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
         if args.keep_frames:

@@ -54,7 +54,7 @@ const TRIAL_FAKE_LAST_NAMES = [
   'Brooks',
 ];
 
-const TRAINING_DB_VERSION = '2026-09-05-dated-player-groups';
+const TRAINING_DB_VERSION = '2026-09-09-pinned-notes';
 
 declare global {
   var __pcuTrainingDbReady: boolean | string | undefined;
@@ -225,6 +225,7 @@ export type PlayerPlanNoteRow = {
   attachmentMimeType: string | null;
   attachmentDataUrl: string | null;
   playerVisible: boolean;
+  isPinned: boolean;
   createdAt: string;
   createdByUserId: number | null;
 };
@@ -690,6 +691,7 @@ export async function ensureTrainingDbReady(): Promise<void> {
     await pool.query(`ALTER TABLE player_plan_notes ADD COLUMN IF NOT EXISTS source_type TEXT;`);
     await pool.query(`ALTER TABLE player_plan_notes ADD COLUMN IF NOT EXISTS source_id TEXT;`);
     await pool.query(`ALTER TABLE player_plan_notes ADD COLUMN IF NOT EXISTS player_visible BOOLEAN NOT NULL DEFAULT FALSE;`);
+    await pool.query(`ALTER TABLE player_plan_notes ADD COLUMN IF NOT EXISTS is_pinned BOOLEAN NOT NULL DEFAULT FALSE;`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_plan_notes_player_date ON player_plan_notes (player_id, note_date DESC, created_at DESC);`);
     await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_player_plan_notes_source ON player_plan_notes (player_id, source_type, source_id);`);
     await pool.query(`
@@ -1868,6 +1870,85 @@ export async function listIntendedZonePitchLog(input: {
   });
 }
 
+/** Looks up Intended Target data for a specific set of pitch_events rows --
+ * the join the pitch video modal (Edger) needs to show a target/miss
+ * graphic next to a video, keyed by the same pitch_events_id it already
+ * uses for video lookup. Unlike listIntendedZonePitchLog (which lists a
+ * pitcher/date range), this is a direct id lookup with no date/pitcher
+ * filtering, since the caller already knows exactly which pitches it's
+ * showing video for. Returns a Map so callers can do an O(1) "does this
+ * pitch have Intended Target data" check per pitch_events_id; pitches with
+ * no matching row are simply absent from the map (not an error -- most
+ * historical video won't have Intended Target data, by design). */
+export async function getIntendedZonePitchesByPitchEventsIds(input: {
+  organizationId: number;
+  pitchEventsIds: number[];
+}): Promise<Map<number, IntendedZonePitchLogRow>> {
+  const result = new Map<number, IntendedZonePitchLogRow>();
+  const ids = Array.from(new Set(input.pitchEventsIds.filter((id) => Number.isFinite(id) && id > 0)));
+  if (!isDatabaseConfigured() || !ids.length) return result;
+  await ensureIntendedZoneSchema();
+  const pool = getDbPool();
+
+  const rows = await pool.query(
+    `SELECT izp.id, izp.session_id, izp.pitch_index, izp.trackman_play_id,
+            izp.intended_side_ft, izp.intended_height_ft, izp.target_radius_ft,
+            izp.plate_loc_side, izp.plate_loc_height, izp.miss_distance_ft,
+            izp.miss_direction, COALESCE(izp.pitch_type, 'Undefined') AS pitch_type,
+            izp.rel_speed, izp.induced_vert_break, izp.horz_break,
+            izp.pitch_events_id, izp.thrown_at, izp.tagged_pitcher_name,
+            COALESCE(izp.tagged_pitcher_name, s.pitcher_name) AS pitcher_name,
+            COALESCE(NULLIF(TRIM(pe.customlabel), ''), 'Baseball') AS ball_type,
+            pe.pitcherthrows, s.mode, s.started_at
+     FROM intended_zone_pitches izp
+     JOIN intended_zone_sessions s ON s.id = izp.session_id
+     LEFT JOIN pitch_events pe ON pe.id = izp.pitch_events_id
+     WHERE izp.organization_id = $1
+       AND izp.pitch_events_id = ANY($2::bigint[])
+       AND izp.plate_loc_side IS NOT NULL
+       AND izp.plate_loc_height IS NOT NULL`,
+    [input.organizationId, ids]
+  );
+
+  for (const row of rows.rows) {
+    const targetRadiusFt = Number(row.target_radius_ft);
+    const missDistanceFt = row.miss_distance_ft !== null ? Number(row.miss_distance_ft) : null;
+    const intendedSideFt = Number(row.intended_side_ft);
+    const intendedHeightFt = Number(row.intended_height_ft);
+    const pitchEventsId = row.pitch_events_id !== null ? Number(row.pitch_events_id) : null;
+    if (!pitchEventsId) continue;
+    result.set(pitchEventsId, {
+      id: Number(row.id),
+      sessionId: Number(row.session_id),
+      pitchIndex: Number(row.pitch_index),
+      trackmanPlayId: row.trackman_play_id,
+      intendedSideFt,
+      intendedHeightFt,
+      targetRadiusFt,
+      plateLocSide: Number(row.plate_loc_side),
+      plateLocHeight: Number(row.plate_loc_height),
+      missDistanceFt,
+      missDirection: row.miss_direction,
+      pitchType: row.pitch_type,
+      relSpeed: row.rel_speed !== null ? Number(row.rel_speed) : null,
+      inducedVertBreak: row.induced_vert_break !== null ? Number(row.induced_vert_break) : null,
+      horzBreak: row.horz_break !== null ? Number(row.horz_break) : null,
+      pitchEventsId,
+      thrownAt: row.thrown_at,
+      taggedPitcherName: row.tagged_pitcher_name,
+      pitcherThrows: row.pitcherthrows,
+      pitcherName: String(row.pitcher_name ?? ''),
+      ballType: String(row.ball_type),
+      sessionMode: row.mode as IntendedZoneSessionMode,
+      sessionStartedAt: row.started_at,
+      targetLocation: intendedTargetLocation(intendedSideFt, intendedHeightFt),
+      targetHit: missDistanceFt !== null && missDistanceFt <= targetRadiusFt,
+    });
+  }
+
+  return result;
+}
+
 /** Best-effort link from an intended-zone pitch to the corresponding
  * pitch_events row once the FTP/CSV sync has ingested that same session --
  * matched on TrackMan's own playid, which both pipelines carry verbatim.
@@ -1897,13 +1978,13 @@ export async function linkIntendedZonePitchesToPitchEvents(input: { organization
  * pitch_events rows -- typically the next time the daily sync job runs.
  *
  * There's no shared playId to join on here (that's the whole reason this
- * path exists), so pitches are matched in throw order: the session's still-
- * unmatched targets, oldest first, are paired one-for-one against that same
- * pitcher's pitch_events rows in the session's date window, oldest first.
- * This assumes the coach queued targets in the same order the pitches were
- * actually thrown, which holds as long as they tap "next target" promptly
- * for each pitch during the bullpen -- the same assumption live matching
- * makes implicitly by matching against the next unmatched target. */
+ * path exists), so each still-unmatched tap is paired with the same
+ * pitcher's *closest-in-time* unclaimed pitch_events row (comparing the
+ * coach's tap timestamp against TrackMan's own release timestamp), taps
+ * oldest first, greedily consuming the nearest candidate so no pitch is
+ * used twice. This self-corrects when a coach skips tapping a target for
+ * some pitches -- unlike pure position-in-sequence pairing, a single
+ * skipped tap no longer shifts every later pairing by one. */
 export async function matchIntendedZoneSessionByPitcherAndTime(input: {
   organizationId: number;
   sessionId: number;
@@ -1912,25 +1993,29 @@ export async function matchIntendedZoneSessionByPitcherAndTime(input: {
   await ensureIntendedZoneSchema();
   const pool = getDbPool();
 
-  const sessionResult = await pool.query<{ pitcher_name: string | null; started_at: string }>(
-    `SELECT pitcher_name, started_at FROM intended_zone_sessions WHERE id = $1 AND organization_id = $2`,
+  const sessionResult = await pool.query<{ pitcher_name: string | null; started_at: string; ended_at: string | null }>(
+    `SELECT pitcher_name, started_at, ended_at FROM intended_zone_sessions WHERE id = $1 AND organization_id = $2`,
     [input.sessionId, input.organizationId]
   );
   const session = sessionResult.rows[0];
   if (!session) return { ok: false, error: 'Session not found.' };
   if (!session.pitcher_name) return { ok: false, error: 'Session has no pitcher name to match against.' };
 
-  const pendingResult = await pool.query<{ id: number; target_radius_ft: string }>(
-    `SELECT id, target_radius_ft FROM intended_zone_pitches
+  const pendingResult = await pool.query<{ id: number; target_radius_ft: string; created_at: string }>(
+    `SELECT id, target_radius_ft, created_at FROM intended_zone_pitches
      WHERE session_id = $1 AND organization_id = $2 AND trackman_play_id IS NULL
      ORDER BY pitch_index ASC`,
     [input.sessionId, input.organizationId]
   );
   if (!pendingResult.rows.length) return { ok: true, matched: 0 };
 
-  // Candidate pitches: same pitcher, thrown within a day of the session
-  // start on either side (FTP sync can lag), not already claimed by
-  // another intended-zone pitch, oldest first.
+  // Candidate pitches: same pitcher, thrown within the session's real time
+  // span (plus a pad for clock skew between the coach's device and TrackMan).
+  // A session with no ended_at yet (still open, or the coach never explicitly
+  // ended it) is capped at 4 hours after started_at rather than falling back
+  // to NOW() -- otherwise "Check for Matches" run days later on a
+  // never-closed session would widen the window to that same pitcher's
+  // pitches from the whole intervening span, not just this bullpen.
   const candidatesResult = await pool.query<{
     id: number;
     playid: string | null;
@@ -1943,37 +2028,50 @@ export async function matchIntendedZoneSessionByPitcherAndTime(input: {
     pitcherthrows: string | null;
     date: string | null;
     time: string | null;
+    thrown_at: string | null;
   }>(
     `SELECT pe.id, pe.playid, pe.platelocside, pe.platelocheight, pe.taggedpitchtype, pe.relspeed,
-            pe.inducedvertbreak, pe.horzbreak, pe.pitcherthrows, pe.date, pe.time
+            pe.inducedvertbreak, pe.horzbreak, pe.pitcherthrows, pe.date, pe.time,
+            (pe.date::text || ' ' || pe.time::text)::timestamptz AS thrown_at
      FROM pitch_events pe
      WHERE TRIM(pe.pitcher) = ANY($1)
-       AND pe.date::date BETWEEN ($2::timestamptz - INTERVAL '1 day')::date AND ($2::timestamptz + INTERVAL '1 day')::date
+       AND (pe.date::text || ' ' || pe.time::text)::timestamptz
+         BETWEEN $2::timestamptz - INTERVAL '15 minutes'
+             AND LEAST(COALESCE($3::timestamptz, $2::timestamptz + INTERVAL '4 hours'), $2::timestamptz + INTERVAL '4 hours') + INTERVAL '15 minutes'
        AND NOT EXISTS (SELECT 1 FROM intended_zone_pitches izp2 WHERE izp2.pitch_events_id = pe.id)
-     ORDER BY pe.date ASC, pe.time ASC`,
+     ORDER BY thrown_at ASC`,
     // TrackMan's FTP feed tags pitchers "Last, First" (e.g. "Bates, Tyler"),
     // but an Intended Target session's pitcher_name is stored however the
     // coach's roster picker shows it -- often "First Last" ("Tyler Bates").
     // An exact-string match here silently matched zero pitches for every
     // FTP-deferred session, since the two orderings never equal each other.
-    //
-    // Deliberately NOT filtering out NULL platelocside/platelocheight here
-    // (a pitch TrackMan tracked but couldn't compute a plate location for,
-    // e.g. it left the radar's field of view) -- excluding those rows from
-    // this list would shift every later pitch's position up by one, pairing
-    // a coach's Nth queued target with the pitcher's (N+1)th real throw
-    // instead of their actual Nth throw. Pairing against the FULL sequence
-    // (including no-location throws) keeps position aligned with real throw
-    // order; a no-location candidate is still consumed below, just recorded
-    // as "no data" instead of a real miss.
-    [nameOrderingVariants(session.pitcher_name), session.started_at]
+    [nameOrderingVariants(session.pitcher_name), session.started_at, session.ended_at]
   );
 
-  const pairCount = Math.min(pendingResult.rows.length, candidatesResult.rows.length);
+  // Greedy nearest-timestamp pairing: each pending tap (oldest first) claims
+  // whichever remaining candidate's actual thrown_at is closest to its own
+  // created_at, in either direction. A candidate with no parseable thrown_at
+  // (bad date/time text) is skipped rather than treated as infinitely close.
+  const available = candidatesResult.rows.map((candidate) => ({
+    candidate,
+    thrownAtMs: candidate.thrown_at ? new Date(candidate.thrown_at).getTime() : NaN,
+  })).filter((entry) => Number.isFinite(entry.thrownAtMs));
+
   let matched = 0;
-  for (let i = 0; i < pairCount; i++) {
-    const pending = pendingResult.rows[i];
-    const candidate = candidatesResult.rows[i];
+  for (const pending of pendingResult.rows) {
+    if (!available.length) break;
+    const tapAtMs = new Date(pending.created_at).getTime();
+    let bestIndex = 0;
+    let bestDeltaMs = Math.abs(available[0].thrownAtMs - tapAtMs);
+    for (let i = 1; i < available.length; i++) {
+      const deltaMs = Math.abs(available[i].thrownAtMs - tapAtMs);
+      if (deltaMs < bestDeltaMs) {
+        bestDeltaMs = deltaMs;
+        bestIndex = i;
+      }
+    }
+    const [{ candidate }] = available.splice(bestIndex, 1);
+
     // Number(null) is 0, not NaN -- checking Number.isFinite() on the
     // already-coerced value can't tell "no location" apart from a real
     // pitch that happened to land exactly at (0, 0). Check the raw
@@ -2152,29 +2250,32 @@ export type IntendedZonePitcherStat = {
   throwsLeft: boolean;
 };
 
-/** Buckets rows by target size, rounded to the nearest whole inch (radius
- * doubled to a diameter, matching how coaches think of target size --
- * "8 inch target" -- not the raw feet-radius stored in the DB), and
- * computes hit% (pitches landing within that pitch's own target radius)
- * per bucket. Sorted smallest target first. Only sizes actually used
- * appear as columns -- there's no fixed preset list to fill in blindly. */
-function computeTargetHitRates(rows: { targetRadiusFt: number; targetHit: boolean }[]): IntendedZoneTargetHitRate[] {
-  const byInches = new Map<number, { hit: number; total: number }>();
-  for (const row of rows) {
-    const inches = Math.round(row.targetRadiusFt * 2 * 12);
-    if (!byInches.has(inches)) byInches.set(inches, { hit: 0, total: 0 });
-    const bucket = byInches.get(inches)!;
-    bucket.total += 1;
-    if (row.targetHit) bucket.hit += 1;
-  }
-  return Array.from(byInches.entries())
-    .map(([targetInches, bucket]) => ({
+// Same fixed target-size options offered on both web (intended-zone-panel.tsx's
+// TARGET_SIZE_PRESETS) and mobile (intended-zones.tsx's TARGET_SIZE_PRESETS) --
+// kept in sync manually since every miss distance is measured from the same
+// center point regardless of which size a coach happened to pick for that
+// session, so hit rate for every size can be recomputed from any pitch's
+// stored miss distance, not just the one size that session used.
+const INTENDED_ZONE_TARGET_SIZE_PRESET_INCHES = [4, 8, 12, 16, 20];
+
+/** Computes hit% for every standard target size (4"/8"/12"/16"/20") from
+ * each pitch's own miss distance -- not grouped by whichever size that
+ * pitch's session happened to use. Every pitch has the same center target;
+ * only the "did it land inside the circle" radius changes per size, so a
+ * pitch thrown in an 8" session still tells you whether it would have hit a
+ * 16" target. Always returns all five sizes (even with 0 pitches) so the
+ * columns are stable regardless of which sizes were actually selected. */
+function computeTargetHitRates(rows: { missDistanceFt: number }[]): IntendedZoneTargetHitRate[] {
+  return INTENDED_ZONE_TARGET_SIZE_PRESET_INCHES.map((targetInches) => {
+    const radiusFt = targetInches / 2 / 12;
+    const hitCount = rows.filter((row) => row.missDistanceFt <= radiusFt).length;
+    return {
       targetInches,
-      hitCount: bucket.hit,
-      totalCount: bucket.total,
-      hitPct: (bucket.hit / bucket.total) * 100,
-    }))
-    .sort((a, b) => a.targetInches - b.targetInches);
+      hitCount,
+      totalCount: rows.length,
+      hitPct: rows.length ? (hitCount / rows.length) * 100 : 0,
+    };
+  });
 }
 
 function emptyDirectionBreakdown(): IntendedZoneDirectionBreakdown {
@@ -2419,7 +2520,7 @@ export async function getIntendedZonePitchTypeStats(input: {
 
   const byType = new Map<
     string,
-    { distances: number[]; breakdown: IntendedZoneDirectionBreakdown; inZoneN: number; competitiveN: number; targetRows: { targetRadiusFt: number; targetHit: boolean }[]; throwsLeftN: number }
+    { distances: number[]; breakdown: IntendedZoneDirectionBreakdown; inZoneN: number; competitiveN: number; targetRows: { missDistanceFt: number }[]; throwsLeftN: number }
   >();
   if (splitBy === 'targetLocation') {
     for (let location = 1; location <= 13; location += 1) {
@@ -2434,7 +2535,7 @@ export async function getIntendedZonePitchTypeStats(input: {
     if (row.missDirection) bucket.breakdown[row.missDirection] += 1;
     if (row.inZone) bucket.inZoneN += 1;
     if (row.competitive) bucket.competitiveN += 1;
-    bucket.targetRows.push({ targetRadiusFt: row.targetRadiusFt, targetHit: row.targetHit });
+    bucket.targetRows.push({ missDistanceFt: row.missDistanceFt });
     if (row.throwsLeft) bucket.throwsLeftN += 1;
   }
 
@@ -2497,7 +2598,7 @@ export async function getIntendedZonePitcherLeaderboard(input: {
       byType: Map<string, number[]>;
       inZoneN: number;
       competitiveN: number;
-      targetRows: { targetRadiusFt: number; targetHit: boolean }[];
+      targetRows: { missDistanceFt: number }[];
       throwsLeftN: number;
     }
   >();
@@ -2510,7 +2611,7 @@ export async function getIntendedZonePitcherLeaderboard(input: {
     if (row.missDirection) bucket.breakdown[row.missDirection] += 1;
     if (row.inZone) bucket.inZoneN += 1;
     if (row.competitive) bucket.competitiveN += 1;
-    bucket.targetRows.push({ targetRadiusFt: row.targetRadiusFt, targetHit: row.targetHit });
+    bucket.targetRows.push({ missDistanceFt: row.missDistanceFt });
     if (!bucket.byType.has(row.pitchType)) bucket.byType.set(row.pitchType, []);
     bucket.byType.get(row.pitchType)!.push(row.missDistanceFt);
     if (row.throwsLeft) bucket.throwsLeftN += 1;
@@ -10738,7 +10839,7 @@ export async function getPlayerProLink(input: { organizationId: number; playerId
  * school data), but a players.full_name isn't guaranteed to be stored in
  * that order (e.g. a manually-added placeholder roster entry may just be
  * "First Last"). Returns both orderings so a lookup can match either. */
-function nameOrderingVariants(value: string): string[] {
+export function nameOrderingVariants(value: string): string[] {
   const trimmed = value.trim();
   if (!trimmed) return [];
   const variants = new Set<string>([trimmed]);
@@ -11232,6 +11333,7 @@ export async function listPlayerPlanNotesForPlayer(input: {
     attachment_mime_type: string | null;
     attachment_data_url: string | null;
     player_visible: boolean;
+    is_pinned: boolean;
     created_at: string;
     created_by_user_id: number | null;
   }>(
@@ -11247,6 +11349,7 @@ export async function listPlayerPlanNotesForPlayer(input: {
         n.attachment_mime_type,
         n.attachment_data_url,
         n.player_visible,
+        n.is_pinned,
         n.created_at::text,
         n.created_by_user_id
       FROM player_plan_notes n
@@ -11254,7 +11357,7 @@ export async function listPlayerPlanNotesForPlayer(input: {
       WHERE n.player_id = $1
         AND p.organization_id = $2
         AND ($3::text IS NULL OR n.domain = $3::text)
-      ORDER BY n.note_date DESC, n.created_at DESC
+      ORDER BY n.is_pinned DESC, n.note_date DESC, n.created_at DESC
       LIMIT $4
     `,
     [input.playerId, input.organizationId, filteredDomain, limit]
@@ -11277,6 +11380,7 @@ export async function listPlayerPlanNotesForPlayer(input: {
         attachmentMimeType: row.attachment_mime_type,
         attachmentDataUrl: row.attachment_data_url,
         playerVisible: row.player_visible,
+        isPinned: row.is_pinned,
         createdAt: row.created_at,
         createdByUserId: row.created_by_user_id,
       } satisfies PlayerPlanNoteRow;
@@ -11303,6 +11407,7 @@ export async function getPlayerPlanNoteById(input: {
     attachment_mime_type: string | null;
     attachment_data_url: string | null;
     player_visible: boolean;
+    is_pinned: boolean;
     created_at: string;
     created_by_user_id: number | null;
   }>(
@@ -11310,7 +11415,7 @@ export async function getPlayerPlanNoteById(input: {
       SELECT
         n.id, n.player_id, n.domain, n.note_date::text, n.category, n.note_text,
         n.attachment_name, n.attachment_mime_type, n.attachment_data_url,
-        n.player_visible, n.created_at::text, n.created_by_user_id
+        n.player_visible, n.is_pinned, n.created_at::text, n.created_by_user_id
       FROM player_plan_notes n
       JOIN players p ON p.id = n.player_id
       WHERE n.id = $1 AND n.player_id = $2 AND p.organization_id = $3
@@ -11334,6 +11439,7 @@ export async function getPlayerPlanNoteById(input: {
     attachmentMimeType: row.attachment_mime_type,
     attachmentDataUrl: row.attachment_data_url,
     playerVisible: row.player_visible,
+    isPinned: row.is_pinned,
     createdAt: row.created_at,
     createdByUserId: row.created_by_user_id,
   };
@@ -11556,6 +11662,38 @@ export async function updatePlayerPlanNote(input: {
       input.playerId,
       input.organizationId,
     ]
+  );
+  if ((result.rowCount ?? 0) < 1) return { ok: false, error: 'Note not found.' };
+  return { ok: true };
+}
+
+/** Coach/admin-only pin toggle -- lighter than updatePlayerPlanNote since a
+ * pin click shouldn't need to resend (and risk clobbering with a stale
+ * client copy of) the note's date/category/text/attachments. No unlimited
+ * cap: pinned notes just sort above unpinned ones (see
+ * listPlayerPlanNotesForPlayer's ORDER BY is_pinned DESC). */
+export async function setPlayerPlanNotePinned(input: {
+  organizationId: number;
+  playerId: number;
+  noteId: number;
+  isPinned: boolean;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  if (!Number.isFinite(input.playerId) || input.playerId <= 0) return { ok: false, error: 'Valid playerId is required.' };
+  if (!Number.isFinite(input.noteId) || input.noteId <= 0) return { ok: false, error: 'Valid noteId is required.' };
+  const result = await pool.query(
+    `
+      UPDATE player_plan_notes AS n
+      SET is_pinned = $1, updated_at = NOW()
+      FROM players p
+      WHERE n.id = $2
+        AND n.player_id = $3
+        AND p.id = n.player_id
+        AND p.organization_id = $4
+    `,
+    [input.isPinned, input.noteId, input.playerId, input.organizationId]
   );
   if ((result.rowCount ?? 0) < 1) return { ok: false, error: 'Note not found.' };
   return { ok: true };

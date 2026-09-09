@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import ExerciseVideoPlayer from '../../../components/exercise-video-player';
 import { uploadPlayerMediaFile } from '../../../lib/upload-player-media';
 import { createPortal } from 'react-dom';
 import type { ExerciseLoadHistoryEntry, ExerciseLogHistoryItemEntry, ProgramItemRow } from '../../../lib/training-db';
@@ -443,29 +444,6 @@ export default function WorkoutLogModal({
     }
   };
 
-  const embedVideoUrl = (raw: string): string => {
-    try {
-      const parsed = new URL(raw);
-      if (parsed.hostname.includes('youtube.com')) {
-        const videoId = parsed.searchParams.get('v');
-        if (videoId) return `https://www.youtube.com/embed/${videoId}`;
-        const shortMatch = parsed.pathname.match(/^\/shorts\/([^/?#]+)/i);
-        if (shortMatch?.[1]) return `https://www.youtube.com/embed/${shortMatch[1]}`;
-      }
-      if (parsed.hostname.includes('youtu.be')) {
-        const videoId = parsed.pathname.replace('/', '').trim();
-        if (videoId) return `https://www.youtube.com/embed/${videoId}`;
-      }
-      if (parsed.hostname.includes('vimeo.com')) {
-        const id = parsed.pathname.split('/').filter(Boolean)[0];
-        if (id) return `https://player.vimeo.com/video/${id}`;
-      }
-      return raw;
-    } catch {
-      return raw;
-    }
-  };
-
   const uploadExerciseMedia = async (exerciseName: string, files: File[]) => {
     if (!files.length) return;
     setMediaUploadMessage('');
@@ -828,7 +806,7 @@ export default function WorkoutLogModal({
                             setError('');
                             setVideoPreview({
                               title: exercise.name,
-                              url: embedVideoUrl(exercise.instructionVideoUrl),
+                              url: exercise.instructionVideoUrl,
                             });
                           }}
                         >
@@ -958,7 +936,7 @@ export default function WorkoutLogModal({
                     setError('');
                     setVideoPreview({
                       title: item.itemName,
-                      url: embedVideoUrl(item.instructionVideoUrl),
+                      url: item.instructionVideoUrl,
                     });
                   }}
                 >
@@ -1135,15 +1113,7 @@ export default function WorkoutLogModal({
                 Close Video
               </button>
             </div>
-            <div className="tutorial-video-frame-wrap">
-              <iframe
-                src={videoPreview.url}
-                title={`${videoPreview.title} video`}
-                className="tutorial-video-frame"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                allowFullScreen
-              />
-            </div>
+            <ExerciseVideoPlayer url={videoPreview.url} title={videoPreview.title} />
           </article>
         </div>
       )}

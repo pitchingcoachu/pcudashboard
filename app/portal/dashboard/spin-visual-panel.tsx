@@ -39,13 +39,15 @@ export type SpinSample = {
   confidence?: number | null;
   sourceUrl?: string | null;
   coordinateFrame?: string | null;
+  modelVersion?: string | null;
+  phaseDegreesPerFrame?: number | null;
 };
 
 const ROTATION_ORDERS: RotationOrder[] = ['XYZ', 'XZY', 'YXZ', 'YZX', 'ZXY', 'ZYX'];
 const CONVENTIONS: Convention[] = [true, false].flatMap((intrinsic) => ROTATION_ORDERS.map((order) => ({ order, intrinsic })));
 const DEFAULT_CONVENTION: Convention = { order: 'XYZ', intrinsic: true };
 const VIDEO_CONVENTION: Convention = { order: 'XYZ', intrinsic: false };
-const SPEEDS = [0.01, 0.025, 0.05, 0.1];
+const SPEEDS = [0.01, 0.025, 0.03, 0.05, 0.1];
 const DEG = Math.PI / 180;
 const CAMERA_YAW: Record<SpinCameraPreset, number> = { pitcher: Math.PI / 2, catcher: -Math.PI / 2 };
 const PITCH_COLORS: Record<string, string> = {
@@ -113,6 +115,11 @@ function edgerEulerQuaternion(rotation: Vec3): Quaternion {
   return result;
 }
 
+function usesVideoSolvedAxis(sample: SpinSample): boolean {
+  return sample.source === 'edger_video'
+    && (sample.modelVersion === 'edger-seam-fit-v4' || sample.modelVersion === 'edger-seam-fit-v5');
+}
+
 function sceneAxisFor(sample: SpinSample): Vec3 {
   if (sample.source === 'edger_video') {
     return normalize({ x: -sample.spinAxis.x, y: sample.spinAxis.z, z: sample.spinAxis.y });
@@ -120,19 +127,18 @@ function sceneAxisFor(sample: SpinSample): Vec3 {
   return trackManSpinVectorToScene(sample.spinAxis);
 }
 
-function orientationFor(sample: SpinSample, convention: Convention, elapsed: number, direction: 1 | -1): Quaternion {
+function orientationFor(sample: SpinSample, convention: Convention, elapsed: number, speedScale: number, direction: 1 | -1): Quaternion {
   const initial = sample.source === 'edger_video'
     ? edgerEulerQuaternion(sample.seamRotation)
     : eulerQuaternion(sample.seamRotation, convention);
-  // Verified against every current video-derived sample's own measured IVB
-  // sign (backspin vs. topspin): the Edger camera's raw frames read out with
-  // the opposite rotational sense from the field-scene convention TrackMan
-  // data already uses, so video-derived spin runs backwards without this
-  // correction. This is an empirical camera-orientation fix, not a
-  // coordinate-math derivation -- revisit if the Edger rig or export pipeline
-  // changes.
-  const videoDirectionSign = sample.source === 'edger_video' ? -1 : 1;
-  const spinRadians = videoDirectionSign * direction * elapsed * sample.spinRate * Math.PI * 2 / 60;
+  const legacyVideoDirection = sample.source === 'edger_video' && !usesVideoSolvedAxis(sample) ? -1 : 1;
+  const fittedPhase = sample.source === 'edger_video' ? sample.phaseDegreesPerFrame : null;
+  // Edger exports contain sequential 1,000-fps capture frames played at 30
+  // fps. At 0.03x, use the signed video-fit phase itself so the dashboard and
+  // source clip advance by the same amount per displayed frame.
+  const spinRadians = fittedPhase !== null && fittedPhase !== undefined
+    ? legacyVideoDirection * direction * elapsed * fittedPhase * 30 * (speedScale / 0.03) * DEG
+    : direction * elapsed * speedScale * sample.spinRate * Math.PI * 2 / 60;
   return multiply(axisAngle(sceneAxisFor(sample), spinRadians), initial);
 }
 
@@ -148,6 +154,10 @@ function movement(value: number | null): string {
 }
 
 function spinEfficiencyPercent(sample: SpinSample): number | null {
+  if (usesVideoSolvedAxis(sample)) {
+    const axis = sceneAxisFor(sample);
+    return clamp(Math.hypot(axis.x, axis.z) * 100, 0, 100);
+  }
   if (sample.activeSpinRate !== null && sample.spinRate > 0) return clamp((sample.activeSpinRate / sample.spinRate) * 100, 0, 100);
   if (sample.spinEfficiency !== null) return clamp(sample.spinEfficiency <= 1.25 ? sample.spinEfficiency * 100 : sample.spinEfficiency, 0, 100);
   if (sample.source === 'edger_video') {
@@ -165,23 +175,19 @@ function degreesToClock(degrees: number): string {
 }
 
 function releaseTilt(sample: SpinSample): string | null {
-  if (sample.measuredTilt) return sample.measuredTilt;
-  if (sample.source !== 'edger_video') return null;
+  if (sample.source !== 'edger_video') return sample.measuredTilt;
   const axis = sceneAxisFor(sample);
-  const degrees = ((Math.atan2(axis.x, axis.z) * 180 / Math.PI) + 180 + 360) % 360;
+  const degrees = ((Math.atan2(-axis.z, -axis.x) * 180 / Math.PI) + 180 + 360) % 360;
   return degreesToClock(degrees);
 }
 
 function visualReleaseTilt(sample: SpinSample, cameraMode: SpinCameraMode): string {
   const axis = sceneAxisFor(sample);
-  // releaseTilt()'s atan2(axis.x, axis.z) convention (no flip) is the
-  // pitcher-view reference and matches TrackMan's own measured tilt for
-  // video-derived samples. The catcher camera looks from the opposite field-Y
-  // direction, so its screen-right is mirrored (+X instead of -X in the
-  // pitcher's frame) and needs the sign flip; custom orbit keeps the
-  // pitcher-reference label and convention.
-  const screenRight = cameraMode === 'catcher' ? -axis.x : axis.x;
-  const degrees = ((Math.atan2(screenRight, axis.z) * 180 / Math.PI) + 180 + 360) % 360;
+  // Release tilt is the movement direction perpendicular to the physical spin
+  // axis. Catcher view mirrors the horizontal movement component.
+  const movementRight = cameraMode === 'catcher' ? axis.z : -axis.z;
+  const movementUp = -axis.x;
+  const degrees = ((Math.atan2(movementRight, movementUp) * 180 / Math.PI) + 180 + 360) % 360;
   return degreesToClock(degrees);
 }
 
@@ -190,7 +196,10 @@ function movementBreakdown(sample: SpinSample): MovementBreakdown {
   const tilt = releaseTilt(sample);
   if (sample.velocity === null || !tilt || efficiency === null) return { magnus: null, residual: null };
   const model = calculateExpectedMovement({
-    velocityMph: sample.velocity, spinRateRpm: sample.spinRate, activeSpinRpm: sample.activeSpinRate,
+    velocityMph: sample.velocity, spinRateRpm: sample.spinRate,
+    activeSpinRpm: usesVideoSolvedAxis(sample)
+      ? sample.spinRate * (efficiency / 100)
+      : sample.activeSpinRate,
     spinEfficiency: efficiency / 100, measuredTilt: tilt, extensionFeet: sample.extension ?? 6,
   });
   if (!model) return { magnus: null, residual: null };
@@ -228,7 +237,7 @@ export default function SpinVisualPanel({ samples, loading, schoolCode }: { samp
   const renderFrameRef = useRef(0);
   const [selectedConventionId, setSelectedConventionId] = useState(conventionId(DEFAULT_CONVENTION));
   const [playing, setPlaying] = useState(true);
-  const [speedScale, setSpeedScale] = useState(0.025);
+  const [speedScale, setSpeedScale] = useState(0.03);
   const [direction, setDirection] = useState<1 | -1>(1);
   const [cameraMode, setCameraMode] = useState<SpinCameraMode>('pitcher');
   const [axisVisible, setAxisVisible] = useState(true);
@@ -288,7 +297,7 @@ export default function SpinVisualPanel({ samples, loading, schoolCode }: { samp
     let frameId = 0;
     const render = (timestamp: number) => {
       const previous = lastFrameRef.current ?? timestamp;
-      if (playing) elapsedRef.current += ((timestamp - previous) / 1000) * speedScale;
+      if (playing) elapsedRef.current += (timestamp - previous) / 1000;
       lastFrameRef.current = timestamp;
       if ((timestamp - renderFrameRef.current) >= (1000 / 30)) {
         renderFrameRef.current = timestamp;
@@ -296,7 +305,7 @@ export default function SpinVisualPanel({ samples, loading, schoolCode }: { samp
         if (renderer) displayedSamples.forEach((sample, index) => {
           const canvas = canvasRefs.current[index];
           const sceneAxis = sceneAxisFor(sample);
-          if (canvas) renderer.render(canvas, orientationFor(sample, selectedConvention, elapsedRef.current, direction), cameraRef.current, {
+          if (canvas) renderer.render(canvas, orientationFor(sample, selectedConvention, elapsedRef.current, speedScale, direction), cameraRef.current, {
             axis: { visible: axisVisible, ...sceneAxis },
           });
         });
@@ -370,7 +379,7 @@ export default function SpinVisualPanel({ samples, loading, schoolCode }: { samp
         <button type="button" onClick={reset}>Reset</button>
         <button type="button" onClick={() => setDirection((current) => current === 1 ? -1 : 1)}>{direction === 1 ? 'Observed direction' : 'Reverse test'}</button>
         <button type="button" className={axisVisible ? styles.axisActive : ''} aria-pressed={axisVisible} onClick={() => setAxisVisible((current) => !current)}>Axis rod {axisVisible ? 'on' : 'off'}</button>
-        <label>Visual speed<select value={speedScale} onChange={(event) => setSpeedScale(Number(event.target.value))}>{SPEEDS.map((value) => <option key={value} value={value}>{value}×</option>)}</select></label>
+        <label>Visual speed<select value={speedScale} onChange={(event) => setSpeedScale(Number(event.target.value))}>{SPEEDS.map((value) => <option key={value} value={value}>{value}×{value === 0.03 ? ' · Edger' : ''}</option>)}</select></label>
       </div>
     </div>
 
@@ -398,7 +407,7 @@ export default function SpinVisualPanel({ samples, loading, schoolCode }: { samp
           ) : null}
           <canvas ref={(node) => { canvasRefs.current[index] = node; }} className={styles.ballCanvas} role="img" tabIndex={0} aria-label={`${sample.pitchType} baseball using ${selectedConvention.intrinsic ? 'intrinsic' : 'extrinsic'} ${selectedConvention.order}`} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerEnd} onPointerCancel={handlePointerEnd} onWheel={handleWheel} onKeyDown={handleCameraKey} />
           <div className={styles.pitchFacts}>
-            <span>Velo <b>{sample.velocity?.toFixed(1) ?? '—'} mph</b></span><span>Spin <b>{Math.round(sample.spinRate).toLocaleString()} rpm</b></span><span>Efficiency <b>{efficiency?.toFixed(1) ?? '—'}%</b></span><span title={`${cameraMode === 'catcher' ? 'Catcher' : 'Pitcher'}-view release tilt`}>rTilt <b>{visualReleaseTilt(sample, cameraMode)}</b></span><span>bTilt <b>{displayTilt(sample.breakTilt)}</b></span>
+            <span>Velo <b>{sample.velocity?.toFixed(1) ?? '—'} mph</b></span><span>Spin <b>{Math.round(sample.spinRate).toLocaleString()} rpm</b></span><span title={usesVideoSolvedAxis(sample) ? 'Efficiency inferred from the Edger rotation axis' : 'TrackMan spin efficiency'}>{usesVideoSolvedAxis(sample) ? 'vEff' : 'Efficiency'} <b>{efficiency?.toFixed(1) ?? '—'}%</b></span><span title={`${sample.source === 'edger_video' ? 'Edger-inferred' : 'TrackMan-measured'} ${cameraMode === 'catcher' ? 'catcher' : 'pitcher'}-view release tilt`}>{sample.source === 'edger_video' ? 'vTilt' : 'rTilt'} <b>{visualReleaseTilt(sample, cameraMode)}</b></span><span>bTilt <b>{displayTilt(sample.breakTilt)}</b></span>
           </div>
           <div className={styles.forceGrid}>
             <div><span>Magnus model</span><b>{movement(breakdown.magnus?.ivb ?? null)} IVB</b><b>{movement(breakdown.magnus?.hb ?? null)} HB</b></div>
@@ -409,6 +418,6 @@ export default function SpinVisualPanel({ samples, loading, schoolCode }: { samp
         </article>;
       })}
     </div>
-    <p className={styles.note}>* The residual is measured total movement minus a standard-air Magnus model. It is an SSW candidate, not a pure SSW measurement. “Video-derived” means the seam pose was fitted from the linked Edger sequence. The rotation axis is video-fitted when identifiable; otherwise measured TrackMan tilt and efficiency constrain it and held-out video frames select the gyro direction. The initial pitcher view matches the Edger camera reference and can then be orbited in 3D. TrackMan-measured seam coordinates still take precedence when both sources exist.</p>
+    <p className={styles.note}>* The residual is measured total movement minus a standard-air Magnus model. It is an SSW candidate, not a pure SSW measurement. “Video-derived” means the seam pose, rotation axis, release tilt (vTilt), and efficiency (vEff) were inferred from the linked Edger sequence without substituting break tilt. The initial pitcher view matches the Edger camera reference and can then be orbited in 3D. TrackMan-measured seam coordinates still take precedence when both sources exist.</p>
   </section>;
 }

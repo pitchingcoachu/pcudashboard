@@ -5,7 +5,7 @@ import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../..
 import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, shouldScopeDashboardPlayer } from '../../../../../lib/dashboard-player-scope';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 import { ensureAuthDbReady, getDbPool, isDatabaseConfigured } from '../../../../../lib/auth-db';
-import { getPlayerProLinkByPlayerName } from '../../../../../lib/training-db';
+import { getIntendedZonePitcherLeaderboard, getPlayerProLinkByPlayerName, nameOrderingVariants } from '../../../../../lib/training-db';
 import { isCrossSchoolPlayerSelection } from '../../../../../lib/cross-school-player-data';
 import { fetchDashboardGroupSplit } from '../../../../../lib/dashboard-group-split';
 import { resolveSchoolScopedOrganizationId } from '../../../../../lib/programming-scope';
@@ -183,6 +183,110 @@ function withAdvancedAllRowBackfill(payload: unknown): unknown {
 function applyOverviewBackfills(payload: unknown): unknown {
   // Do not mutate ERA/FIP/xFIP in the gateway. Use upstream values as source-of-truth.
   return payload;
+}
+
+// Intended Target columns selectable in the Custom table-mode column picker
+// (app/portal/dashboard/pitching-suite.tsx's FALLBACK_AVAILABLE_CUSTOM_COLUMNS),
+// alongside every other stat like K%/Whiff%. These aren't produced by the
+// upstream dashboard API at all -- they're sourced from this repo's own
+// intended_zone_pitches table (see lib/training-db.ts's
+// getIntendedZonePitcherLeaderboard) and merged into table_rows here by
+// pitcher name, keyed the same way the upstream's own "Custom" rows are
+// keyed (table_columns[0], almost always "Pitcher").
+const INTENDED_TARGET_TABLE_COLUMNS = [
+  'ITMissAvg',
+  'ITMissMed',
+  'ITHit4%',
+  'ITHit8%',
+  'ITHit12%',
+  'ITHit16%',
+  'ITHit20%',
+  'ITMissDir',
+] as const;
+
+const INTENDED_TARGET_MISS_DIRECTION_LABELS: Record<string, string> = {
+  'up-arm': 'Up, Arm Side',
+  'up-middle': 'Up, Middle',
+  'up-glove': 'Up, Glove Side',
+  'middle-arm': 'Middle, Arm Side',
+  'on-target': 'On Target',
+  'middle-glove': 'Middle, Glove Side',
+  'down-arm': 'Down, Arm Side',
+  'down-middle': 'Down, Middle',
+  'down-glove': 'Down, Glove Side',
+};
+
+/** Merges Intended Target stats (miss distance, hit% by target size, most
+ * common miss direction) into a Custom table-mode response's table_rows,
+ * matched to each row by pitcher name. Only runs when the request actually
+ * selected at least one of these columns, since the lookup is a real DB
+ * query the upstream response doesn't need otherwise. Silently leaves rows
+ * unchanged for any pitcher with no Intended Target history in range --
+ * these columns are opt-in extras, not something every table needs data for. */
+async function withIntendedTargetTableColumns(
+  payload: unknown,
+  input: { organizationId: number; startDate: string; endDate: string; requestedColumns: string[] }
+): Promise<unknown> {
+  if (!payload || typeof payload !== 'object') return payload;
+  const requested = new Set(input.requestedColumns);
+  if (!INTENDED_TARGET_TABLE_COLUMNS.some((column) => requested.has(column))) return payload;
+  const data = payload as { table_rows?: unknown[]; table_columns?: unknown[] };
+  if (!Array.isArray(data.table_rows) || !Array.isArray(data.table_columns)) return payload;
+  const splitColumn = String(data.table_columns[0] ?? '').trim();
+  if (!splitColumn || input.organizationId <= 0) return payload;
+
+  let stats: Awaited<ReturnType<typeof getIntendedZonePitcherLeaderboard>>;
+  try {
+    stats = await getIntendedZonePitcherLeaderboard({
+      organizationId: input.organizationId,
+      startDate: input.startDate || null,
+      endDate: input.endDate || null,
+    });
+  } catch (error) {
+    console.error('[overview] Intended Target column merge failed:', error);
+    return payload;
+  }
+  if (!stats.length) return payload;
+
+  // Index every name-ordering variant ("First Last" and "Last, First") so a
+  // pitcher's row matches regardless of which convention the upstream table
+  // happens to use for that pitcher's name.
+  const statsByNameVariant = new Map<string, (typeof stats)[number]>();
+  for (const stat of stats) {
+    for (const variant of nameOrderingVariants(stat.pitcherName)) {
+      statsByNameVariant.set(variant.toLowerCase(), stat);
+    }
+  }
+
+  const hitRateColumn: Record<string, number> = { 'ITHit4%': 4, 'ITHit8%': 8, 'ITHit12%': 12, 'ITHit16%': 16, 'ITHit20%': 20 };
+
+  const nextRows = data.table_rows.map((row) => {
+    if (!row || typeof row !== 'object') return row;
+    const rowObj = row as Record<string, unknown>;
+    const rowName = String(rowObj[splitColumn] ?? '').trim();
+    if (!rowName || rowName.toLowerCase() === 'all') return row;
+    const stat = statsByNameVariant.get(rowName.toLowerCase());
+    if (!stat) return row;
+
+    const next: Record<string, unknown> = { ...rowObj };
+    if (requested.has('ITMissAvg')) next.ITMissAvg = stat.avgMissDistanceFt !== null ? Number(stat.avgMissDistanceFt.toFixed(2)) : null;
+    if (requested.has('ITMissMed')) next.ITMissMed = stat.medianMissDistanceFt !== null ? Number(stat.medianMissDistanceFt.toFixed(2)) : null;
+    if (requested.has('ITMissDir')) {
+      next.ITMissDir = stat.topMissDirection ? INTENDED_TARGET_MISS_DIRECTION_LABELS[stat.topMissDirection] ?? stat.topMissDirection : null;
+    }
+    for (const [column, targetInches] of Object.entries(hitRateColumn)) {
+      if (!requested.has(column)) continue;
+      const rate = stat.targetHitRates.find((entry) => entry.targetInches === targetInches);
+      next[column] = rate ? Number(rate.hitPct.toFixed(1)) : null;
+    }
+    return next;
+  });
+
+  const existingColumns = new Set(data.table_columns.map((column) => String(column ?? '').trim()));
+  const columnsToAppend = INTENDED_TARGET_TABLE_COLUMNS.filter((column) => requested.has(column) && !existingColumns.has(column));
+  const nextColumns = columnsToAppend.length ? [...data.table_columns, ...columnsToAppend] : data.table_columns;
+
+  return { ...(payload as Record<string, unknown>), table_rows: nextRows, table_columns: nextColumns };
 }
 
 function resolveOverviewTimeoutMs(schoolCode: string, hasProLinkMerge = false): number {
@@ -965,7 +1069,8 @@ export async function GET(request: Request) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const inputUrl = new URL(request.url);
-  // Strip client-side post-edit cache buster — not forwarded to the backend.
+  // Keep the cache buster local, but tell the backend this is a post-edit read
+  // so PRO table-only requests may temporarily bypass their rollup fast path.
   const postEditCacheBust = inputUrl.searchParams.get('_cb')?.trim() ?? '';
   inputUrl.searchParams.delete('_cb');
   const startDate = inputUrl.searchParams.get('start_date')?.trim() ?? '';
@@ -1284,6 +1389,7 @@ export async function GET(request: Request) {
   if (chartPointsLimit) url.searchParams.set('chart_points_limit', chartPointsLimit);
   if (chartOnly) url.searchParams.set('chart_only', chartOnly);
   if (forceRaw) url.searchParams.set('force_raw', forceRaw);
+  if (postEditCacheBust) url.searchParams.set('post_edit_refresh', '1');
   if (percentileBaseline) url.searchParams.set('percentile_baseline', '1');
   if (includeRowPitches) url.searchParams.set('include_row_pitches', includeRowPitches);
   if (includeTrendRows) url.searchParams.set('include_trend_rows', includeTrendRows);
@@ -1795,9 +1901,15 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: message }, { status: result.status });
     }
     const payloadWithBackfills = applyOverviewBackfills(result.payload);
+    const payloadWithIntendedTarget = await withIntendedTargetTableColumns(payloadWithBackfills, {
+      organizationId: resolveSchoolScopedOrganizationId(session),
+      startDate,
+      endDate,
+      requestedColumns: customColumns ? customColumns.split(',').map((column) => column.trim()) : [],
+    });
     const payloadWithRollupHeatmaps = await maybeAttachPitchingHeatmapRollup({
       request,
-      payload: payloadWithBackfills,
+      payload: payloadWithIntendedTarget,
       schoolCode,
       startDate,
       endDate,

@@ -15,6 +15,7 @@ const contactHref =
 
 const sharedFeatures = [
   'Player logins',
+  'PULSE Throwing Data',
   'Edgertronic camera integration',
   'Motion capture data integration',
   'Pro data access',
@@ -56,33 +57,6 @@ const programmingFeatures = [
 const programmingPlatformFeatures = [
   ...platformFeatures.slice(0, 1),
   ...programmingFeatures,
-];
-
-const platformDevelopmentFeatures = [
-  {
-    title: 'Dashboard Platform',
-    items: [
-      'Comprehensive ball flight and batted ball data',
-      'Custom table and report builder',
-      'Leaderboards and trend charts',
-      'Player plan goal center',
-      'Player notes and performance tracking',
-      'Access to MLB and AAA data',
-    ],
-  },
-  {
-    title: 'Program and Schedule Builder',
-    items: programmingItems,
-  },
-  {
-    title: 'Player Development Consulting',
-    subtitle: 'Pitching and hitting',
-    items: [
-      'x5, 1-hour zoom calls',
-      'Done-for-you postgame reports',
-      'Weekly advance reports on opposing pitchers and hitters',
-    ],
-  },
 ];
 
 const addOns = [
@@ -170,13 +144,13 @@ export default function CollegePricingPage() {
         <section className={styles.intro}>
           <p>College program pricing</p>
           <h1>Choose the level of support your program needs.</h1>
-          <span>Four annual options, plus specialized services available à la carte.</span>
+          <span>Three annual options, plus specialized services available à la carte.</span>
         </section>
 
         <section className={styles.shared} aria-labelledby="shared-title">
           <div className={styles.sharedHeading}>
-            <span>Included with dashboard plans</span>
-            <h2 id="shared-title">Every Dashboard plan includes</h2>
+            <span>Included with every plan</span>
+            <h2 id="shared-title">Every plan includes</h2>
           </div>
           <ul>
             {sharedFeatures.map((feature) => (
@@ -261,32 +235,6 @@ export default function CollegePricingPage() {
             </div>
             <div className={styles.buttonSlot}>
               <a href={contactHref} className={styles.primaryButton}>Ask about Programming and Dashboard</a>
-            </div>
-          </article>
-
-          <article className={styles.planCard}>
-            <div className={styles.cardHeader}>
-              <div>
-                <h2>Programming and Dashboard + Consulting</h2>
-              </div>
-              <div className={styles.price}>$15,000<small>/ year</small></div>
-            </div>
-            <p className={styles.planDescription}>
-              Dashboard access plus programming and ongoing pitching and hitting development support.
-            </p>
-            <div className={styles.featureGroups}>
-              {platformDevelopmentFeatures.map((group) => (
-                <div className={styles.featureGroup} key={group.title}>
-                  <h3>{group.title}</h3>
-                  {'subtitle' in group && group.subtitle ? <p>{group.subtitle}</p> : null}
-                  <ul>
-                    {group.items.map((item) => <li key={item}><CheckIcon />{item}</li>)}
-                  </ul>
-                </div>
-              ))}
-            </div>
-            <div className={styles.buttonSlot}>
-              <a href={contactHref} className={styles.secondaryButton}>Ask about Programming and Dashboard + Consulting</a>
             </div>
           </article>
 

@@ -11,6 +11,8 @@ import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 import { calcPitchValue } from './pitch-value';
 import NativeDateInput from '../components/native-date-input';
 import AiReportSummary from './ai-report-summary';
+import { DirectionHeatmap, type DirectionBreakdown } from './intended-zone-stats';
+import { IntendedTargetMapMini } from './intended-target-map-mini';
 
 type OptionItem = { value: string; label: string };
 type ReportType = 'Pitching' | 'Hitting' | 'Catching';
@@ -23,6 +25,8 @@ type PanelType =
   | 'Release Plot'
   | 'Location Plot'
   | 'Heatmap'
+  | 'Intended Target Miss'
+  | 'Intended Target Map'
   | 'Velocity Chart'
   | 'Pitch Usage Pie Chart'
   | 'Pitch Usage Bar Chart'
@@ -194,10 +198,30 @@ type OverviewLitePayload = {
 };
 
 const LEAGUE_SEASON_START = '2026-02-13';
+const ATLANTIC_LEAGUE_SEASON_START = '2026-04-01';
 
 type CellLoadState = {
   status: 'idle' | 'loading' | 'ready' | 'error';
   message?: string;
+};
+
+// Per-cell result for the "Intended Target Miss" panel type -- kept in its
+// own state map (parallel to cellsData/cellLoadStates) rather than folded
+// into the shared OverviewLitePayload plumbing, since it comes from a
+// completely different data source (Intended Target direction-breakdown
+// stats, not chart_points) and must stay fully isolated from the existing
+// Heatmap panel's fetch path.
+type IntendedTargetMissCellData = {
+  status: 'idle' | 'loading' | 'ready' | 'error';
+  message?: string;
+  breakdown: DirectionBreakdown | null;
+  throwsLeft: boolean;
+  pitchCount: number;
+  /** "All", or the comma-joined selected pitch types (e.g. "Fastball, Slider") --
+   * whatever filter the panel actually queried with, shown above the grid the
+   * same way the Intended Target page labels its own per-type heatmaps
+   * ("{pitchType} ({pitchCount})"). */
+  pitchTypeLabel: string;
 };
 
 type ExternalPlayerMeta = {
@@ -348,6 +372,8 @@ const PITCHING_PANEL_TYPES: PanelType[] = [
   'Release Plot',
   'Location Plot',
   'Heatmap',
+  'Intended Target Miss',
+  'Intended Target Map',
   'Velocity Chart',
   'Pitch Usage Pie Chart',
   'Pitch Usage Bar Chart',
@@ -2361,6 +2387,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     Record<string, Array<Record<string, string | number | null>>>
   >({});
   const [cellLoadStates, setCellLoadStates] = useState<Record<string, CellLoadState>>({});
+  const [intendedTargetMissData, setIntendedTargetMissData] = useState<Record<string, IntendedTargetMissCellData>>({});
   const [tableSorts, setTableSorts] = useState<Record<string, { column: string; direction: SortDirection }>>({});
   const cellsCacheRef = useRef<Map<string, { at: number; payload: OverviewLitePayload }>>(new Map());
   const inflightRef = useRef<Map<string, Promise<OverviewLitePayload>>>(new Map());
@@ -3092,10 +3119,12 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           setHittingTableModes(HITTING_TABLES);
           const min = toYmd(typed.min_date);
           const max = toYmd(typed.max_date);
-          const isLeagueSchool = String(typed.school_code ?? '').toUpperCase() === 'LEAGUE';
+          const schoolCode = String(typed.school_code ?? '').toUpperCase();
+          const isLeagueSchool = schoolCode === 'LEAGUE';
+          const isAtlanticLeagueSchool = ['LI', 'INDY'].includes(schoolCode);
           const leagueStart = min && min > LEAGUE_SEASON_START ? min : LEAGUE_SEASON_START;
-          setGlobalStartDate(isLeagueSchool ? leagueStart : (max || min || ''));
-          setGlobalEndDate(max || min || '');
+          setGlobalStartDate(isAtlanticLeagueSchool ? ATLANTIC_LEAGUE_SEASON_START : (isLeagueSchool ? leagueStart : (max || min || '')));
+          setGlobalEndDate(isAtlanticLeagueSchool ? toYmd(new Date().toISOString()) : (max || min || ''));
         } else if (reportType === 'Hitting') {
           const typed = payload as unknown as HittingFiltersPayload;
           const hitters = Array.from(new Set((typed.hitters ?? []).filter((entry) => entry && entry.trim())));
@@ -3119,10 +3148,12 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           setHittingTableModes(dynamicTableModes.length ? dynamicTableModes : HITTING_TABLES);
           const min = toYmd(typed.min_date);
           const max = toYmd(typed.max_date);
-          const isLeagueSchool = String(typed.school_code ?? '').toUpperCase() === 'LEAGUE';
+          const schoolCode = String(typed.school_code ?? '').toUpperCase();
+          const isLeagueSchool = schoolCode === 'LEAGUE';
+          const isAtlanticLeagueSchool = ['LI', 'INDY'].includes(schoolCode);
           const leagueStart = min && min > LEAGUE_SEASON_START ? min : LEAGUE_SEASON_START;
-          setGlobalStartDate(isLeagueSchool ? leagueStart : (max || min || ''));
-          setGlobalEndDate(max || min || '');
+          setGlobalStartDate(isAtlanticLeagueSchool ? ATLANTIC_LEAGUE_SEASON_START : (isLeagueSchool ? leagueStart : (max || min || '')));
+          setGlobalEndDate(isAtlanticLeagueSchool ? toYmd(new Date().toISOString()) : (max || min || ''));
         } else {
           const typed = payload as unknown as CatchingFiltersPayload;
           const catchers = Array.from(new Set((typed.catchers ?? []).filter((entry) => entry && entry.trim())));
@@ -3145,10 +3176,12 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           setHittingTableModes(HITTING_TABLES);
           const min = toYmd(typed.min_date);
           const max = toYmd(typed.max_date);
-          const isLeagueSchool = String(typed.school_code ?? '').toUpperCase() === 'LEAGUE';
+          const schoolCode = String(typed.school_code ?? '').toUpperCase();
+          const isLeagueSchool = schoolCode === 'LEAGUE';
+          const isAtlanticLeagueSchool = ['LI', 'INDY'].includes(schoolCode);
           const leagueStart = min && min > LEAGUE_SEASON_START ? min : LEAGUE_SEASON_START;
-          setGlobalStartDate(isLeagueSchool ? leagueStart : (max || min || ''));
-          setGlobalEndDate(max || min || '');
+          setGlobalStartDate(isAtlanticLeagueSchool ? ATLANTIC_LEAGUE_SEASON_START : (isLeagueSchool ? leagueStart : (max || min || '')));
+          setGlobalEndDate(isAtlanticLeagueSchool ? toYmd(new Date().toISOString()) : (max || min || ''));
         }
       } catch (err) {
         if (!active) return;
@@ -4083,6 +4116,144 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     showCellPercentiles,
     customTables,
     defaultTableMode,
+  ]);
+
+  // Fetches "Intended Target Miss" panel data. Kept as its own small,
+  // independent effect (parallel to the loadCellsData effect above) rather
+  // than folded into that shared chart_points/OverviewLitePayload pipeline
+  // -- this panel's data (direction-breakdown miss stats) comes from a
+  // separate endpoint/data source entirely, and this stays fully additive
+  // so it can never affect the existing Heatmap panel's fetch behavior.
+  useEffect(() => {
+    if (reportType !== 'Pitching') return;
+    let active = true;
+    const controller = new AbortController();
+    async function loadIntendedTargetMissData() {
+      const requests = visibleCellKeys
+        .map((cellId) => {
+          const config =
+            reportScope === 'Team'
+              ? normalizeCellConfig(cellConfigs[sourceCellIdForTeamScope(cellId, reportRows)])
+              : effectiveCellConfigForScope(cellId, reportScope, cellConfigs);
+          return { cellId, config };
+        })
+        .filter(({ config }) => normalizePanelType(config.panelType) === 'Intended Target Miss');
+      if (!requests.length) return;
+
+      const nextStates: Record<string, IntendedTargetMissCellData> = {};
+      for (const { cellId } of requests) {
+        nextStates[cellId] = { status: 'loading', breakdown: null, throwsLeft: false, pitchCount: 0, pitchTypeLabel: 'All' };
+      }
+      if (active) {
+        setIntendedTargetMissData((current) => ({ ...current, ...nextStates }));
+      }
+
+      await Promise.all(
+        requests.map(async ({ cellId, config }) => {
+          try {
+            const rowNum = Number(cellId.match(/^r(\d+)c/)?.[1] ?? '1');
+            const singleScopePlayer =
+              config.player && config.player !== 'All' ? config.player : reportPlayers[0] || 'All';
+            const scopePlayer =
+              reportScope === 'Single Player'
+                ? singleScopePlayer
+                : reportScope === 'Team'
+                  ? teamScopePlayers[Math.floor((rowNum - 1) / Math.max(1, reportRows))] ?? ''
+                  : rowPlayers[rowNum - 1] ?? 'All';
+            // A single-pitcher-filtered request, not the org-wide ?leaderboard=1
+            // path -- that endpoint runs two unfiltered, all-pitchers queries in
+            // parallel (getIntendedZonePitcherLeaderboard AND
+            // getIntendedZonePitchTypeStats) to build a full leaderboard, which
+            // is far more work than one cell's single-pitcher breakdown needs
+            // and was timing out ("The database took too long to respond").
+            // ?pitcherName= runs one query pre-filtered to this pitcher in SQL.
+            const pitcherName = toFirstLast(normalizeNameForApi(scopePlayer));
+            if (!pitcherName) {
+              if (active) {
+                setIntendedTargetMissData((current) => ({
+                  ...current,
+                  [cellId]: { status: 'ready', breakdown: null, throwsLeft: false, pitchCount: 0, pitchTypeLabel: 'All' },
+                }));
+              }
+              return;
+            }
+            const startDate = useGlobalDates ? globalStartDate : config.dateStart || globalStartDate;
+            const endDate = useGlobalDates ? globalEndDate : config.dateEnd || globalEndDate;
+            const cellFilters = config.filterSelect ?? ['Dates', 'Session Type', 'Pitch Types'];
+            const params = new URLSearchParams();
+            params.set('pitcherName', pitcherName);
+            if (startDate) params.set('startDate', startDate);
+            if (endDate) params.set('endDate', endDate);
+            let requestedPitchTypes: string[] = [];
+            if (useGlobalPitchTypes) {
+              requestedPitchTypes = selectedValues(globalPitchTypes);
+              if (requestedPitchTypes.length) params.set('pitchTypes', requestedPitchTypes.join(','));
+            } else if (cellFilters.includes('Pitch Types')) {
+              requestedPitchTypes = selectedValues(config.pitchTypes);
+              if (requestedPitchTypes.length) params.set('pitchTypes', requestedPitchTypes.join(','));
+            }
+            const pitchTypeLabel = requestedPitchTypes.length ? requestedPitchTypes.join(', ') : 'All';
+            if (cellFilters.includes('Ball Type')) {
+              const ballTypes = selectedValues(config.ballTypes).filter((value) => value.toLowerCase() !== 'all');
+              if (ballTypes.length) params.set('ballTypes', ballTypes.join(','));
+            }
+            const response = await fetch(`/api/dashboard/pitching/intended-zone/stats?${params.toString()}`, {
+              signal: controller.signal,
+            });
+            const payload = (await response.json().catch(() => ({}))) as {
+              stats?: Array<{ pitchType: string; pitchCount: number; directionBreakdown: DirectionBreakdown; throwsLeft: boolean }>;
+              error?: string;
+            };
+            if (!response.ok) throw new Error(payload.error ?? 'Failed to load Intended Target data.');
+            // stats[0] is always the "All" aggregate entry across every pitch
+            // type (getIntendedZonePitchTypeStats unshifts it to the front),
+            // which is the whole-pitcher breakdown this heatmap wants.
+            const allStats = (payload.stats ?? []).find((entry) => entry.pitchType === 'All');
+            if (!active) return;
+            setIntendedTargetMissData((current) => ({
+              ...current,
+              [cellId]: allStats
+                ? { status: 'ready', breakdown: allStats.directionBreakdown, throwsLeft: allStats.throwsLeft, pitchCount: allStats.pitchCount, pitchTypeLabel }
+                : { status: 'ready', breakdown: null, throwsLeft: false, pitchCount: 0, pitchTypeLabel },
+            }));
+          } catch (error) {
+            if (isAbortLikeError(error)) return;
+            if (!active) return;
+            setIntendedTargetMissData((current) => ({
+              ...current,
+              [cellId]: {
+                status: 'error',
+                message: error instanceof Error ? error.message : 'Failed to load Intended Target data.',
+                breakdown: null,
+                throwsLeft: false,
+                pitchCount: 0,
+                pitchTypeLabel: 'All',
+              },
+            }));
+          }
+        })
+      );
+    }
+    const timer = window.setTimeout(loadIntendedTargetMissData, 60);
+    return () => {
+      active = false;
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [
+    reportType,
+    visibleCellKeys,
+    cellConfigs,
+    reportScope,
+    reportRows,
+    rowPlayers,
+    teamScopePlayers,
+    reportPlayers,
+    useGlobalDates,
+    globalStartDate,
+    globalEndDate,
+    useGlobalPitchTypes,
+    globalPitchTypes,
   ]);
 
   const applyPayload = (payload: ReportPayload) => {
@@ -5404,6 +5575,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   const isSummaryTable = contentType === 'Summary Table';
                   const isLocation = contentType === 'Location Plot';
                   const isHeatMap = contentType === 'Heatmap';
+                  const isIntendedTargetHeatmap = contentType === 'Intended Target Miss';
+                  const intendedTargetMissCell = intendedTargetMissData[cellId];
+                  const isIntendedTargetMap = contentType === 'Intended Target Map';
                   const isVelocityLike = contentType === 'Velocity Chart' || contentType === 'Velocity Bar Chart' || contentType === 'Velocity Distribution';
                   const pitchTypeCounts = chartPoints.reduce<Record<string, number>>((acc, point) => {
                     const key = (point.pitch_type ?? '').trim() || 'Undefined';
@@ -6516,6 +6690,41 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                               );
                             })()}
                           </svg>
+                        </div>
+                      ) : isIntendedTargetHeatmap ? (
+                        <div
+                          className="portal-custom-reports-heatmap"
+                          style={{ alignItems: 'center', justifyContent: 'center' }}
+                        >
+                          {!intendedTargetMissCell || intendedTargetMissCell.status === 'loading' ? (
+                            <p className="portal-muted-text">Loading Intended Target data...</p>
+                          ) : intendedTargetMissCell.status === 'error' ? (
+                            <p className="portal-error-text">{intendedTargetMissCell.message || 'Failed to load Intended Target data.'}</p>
+                          ) : !intendedTargetMissCell.breakdown || !intendedTargetMissCell.pitchCount ? (
+                            <p className="portal-muted-text">No Intended Target data for this pitcher/date range.</p>
+                          ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                              <p style={{ margin: 0, fontWeight: 700, color: '#f8fafc' }}>
+                                {intendedTargetMissCell.pitchTypeLabel} ({intendedTargetMissCell.pitchCount})
+                              </p>
+                              <DirectionHeatmap breakdown={intendedTargetMissCell.breakdown} throwsLeft={intendedTargetMissCell.throwsLeft} />
+                            </div>
+                          )}
+                        </div>
+                      ) : isIntendedTargetMap ? (
+                        <div
+                          className="portal-custom-reports-heatmap"
+                          style={{ alignItems: 'center', justifyContent: 'center' }}
+                        >
+                          <div style={{ display: 'flex', width: '100%', height: '100%' }}>
+                            <IntendedTargetMapMini
+                              pitcherName={resolvedInheritedName || inheritedPlayer || null}
+                              startDate={useGlobalDates ? globalStartDate : config.dateStart || globalStartDate}
+                              endDate={useGlobalDates ? globalEndDate : config.dateEnd || globalEndDate}
+                              selectedPitchTypes={selectedValues(config.pitchTypes).filter((value) => value.toLowerCase() !== 'all')}
+                              selectedBallTypes={selectedValues(config.ballTypes).filter((value) => value.toLowerCase() !== 'all')}
+                            />
+                          </div>
                         </div>
                       ) : contentType === 'Movement Plot' ? (
                         <div className="portal-custom-reports-velocity">
@@ -7733,6 +7942,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                 <AiReportSummary
                   reportType={`${reportType} custom report`}
                   title={reportHeaderTitle}
+                  playerName={
+                    reportScope === 'Single Player' && selectedValues(reportPlayers).length === 1
+                      ? (selectedValues(reportPlayers)[0] ?? '')
+                      : ''
+                  }
                   reportStart={globalStartDate}
                   reportEnd={globalEndDate}
                   panels={Object.entries(cellsData).map(([cellId, payload]) => {

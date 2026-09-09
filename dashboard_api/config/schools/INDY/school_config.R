@@ -24,4 +24,3 @@ school_config <- list(
     team_label = "Atlantic League"
   )
 )
-

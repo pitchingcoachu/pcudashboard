@@ -79,31 +79,45 @@ camera fit.
 ## Pilot behavior and quality gate
 
 The current PCU pilot uses the Edger camera view as its pitcher-view reference.
-When measured TrackMan release tilt and spin efficiency exist, the fitter locks
-the transverse component of the physical axis and tests both possible gyro
-directions. Held-out Edger frames choose the sign that actually reproduces the
-recorded rotation. When those measurements are unavailable, the video fit solves
-the axis directly. The dashboard derives release tilt from the accepted video
-axis and uses it for the Magnus estimate; stored TrackMan release tilt still wins
-when present.
+Version 5 estimates use brightness motion as one axis candidate, fuse seam
+evidence on a sphere, and compare that result with a full continuous temporal
+search. They do not classify a pitch as four-seam or two-seam; the stored cover
+pose and angular-velocity axis remain continuous.
+TrackMan break tilt is never substituted for release tilt, and TrackMan spin
+efficiency does not constrain the video solution. Measured IVB/HB is used only
+as a hemisphere sanity check so a visually ambiguous solution cannot promote an
+obvious topspin fastball. The dashboard labels video-inferred release tilt and
+efficiency as `vTilt` and `vEff`.
 
 Only estimates that pass all of these gates should be promoted:
 
 - at least 12 usable seam frames;
 - adequate ball size and sharpness;
 - stable temporal fit on at least 8 held-out frames;
-- fit cost at or below 6.5 and held-out cost at or below 8.5 for a
-  TrackMan-constrained axis;
-- fit cost at or below 6.25 and held-out cost at or below 8.0 for a video-solved
-  axis;
+- at least 60% median support for the projected seam and 40% median support for
+  detected seam pixels, with both thresholds met on at least half of held-out
+  frames;
+- brightness-motion support and directional spread are retained as diagnostics,
+  while the full seam sequence can supersede an unreliable flow estimate;
+- agreement between the inferred Magnus hemisphere and measured movement;
+- fit cost at or below 5.5 and held-out cost at or below 6.5;
 - rotation rate within 3% of measured RPM using the original 1,000 fps Edger
   capture rate (the Cloudinary file is a 30 fps playback export of sequential
   high-speed frames);
 - explicit `video_estimated` source and confidence label in the UI.
+- explicit human confirmation that the complete rotating seam pattern—not just
+  individual projected arcs—matches the source Edger clip. Automated imports
+  remain disabled without `--reviewed-seam-orientation true` because baseball
+  cover symmetries can otherwise produce a convincing but globally wrong pose.
 
 The confidence score measures seam visibility and reprojection fit. It is not a
 ground-truth angular-accuracy percentage. A future physical camera calibration
 against held-out pitches would still improve absolute pitcher-frame accuracy.
+
+Passing v5 fits are stored with `testing` status. Local and preview testing only
+include v5 review rows; the older permissive v4 testing fits are hidden.
+Production only includes estimates explicitly promoted to `accepted` after
+comparison with the Edger source.
 
 TrackMan-measured seam XYZ must continue to take precedence over video-derived
 estimates.
