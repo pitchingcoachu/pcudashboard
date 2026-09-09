@@ -18,23 +18,28 @@ const RESPONSE_CACHE_HEADERS = {
 } as const;
 const SLOW_ROUTE_MS = 5000;
 const TAGGED_PITCH_TYPE_TOKEN_SQL = "regexp_replace(lower(COALESCE(TRIM(pe.taggedpitchtype), '')), '[^a-z0-9]', '', 'g')";
+const AUTO_PITCH_TYPE_TOKEN_SQL = "regexp_replace(lower(COALESCE(TRIM(pe.autopitchtype), '')), '[^a-z0-9]', '', 'g')";
+const EFFECTIVE_PITCH_TYPE_TOKEN_SQL = `CASE
+  WHEN ${TAGGED_PITCH_TYPE_TOKEN_SQL} NOT IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null') THEN ${TAGGED_PITCH_TYPE_TOKEN_SQL}
+  ELSE ${AUTO_PITCH_TYPE_TOKEN_SQL}
+END`;
 const PITCHER_NAME_NORM_SQL = "regexp_replace(lower(COALESCE(NULLIF(TRIM(pe.pitcher), ''), '')), '[^a-z0-9]', '', 'g')";
 const VELO_NUMBER_SQL = "(regexp_match(COALESCE(pe.relspeed, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision";
 const IVB_NUMBER_SQL = "(regexp_match(COALESCE(pe.inducedvertbreak, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision";
 const HB_NUMBER_SQL = "(regexp_match(COALESCE(pe.horzbreak, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision";
 const PITCH_TYPE_SQL = `
 CASE
-  WHEN ${TAGGED_PITCH_TYPE_TOKEN_SQL} IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null') THEN 'Undefined'
-  WHEN ${TAGGED_PITCH_TYPE_TOKEN_SQL} IN ('fastball', 'fourseam', 'fourseamfastball', 'ff', 'fa') THEN 'Fastball'
-  WHEN ${TAGGED_PITCH_TYPE_TOKEN_SQL} IN ('sinker', 'oneseamfastball', 'twoseam', 'twoseamfastball', 'twoseamfasball', 'si', 'ft') THEN 'Sinker'
-  WHEN ${TAGGED_PITCH_TYPE_TOKEN_SQL} IN ('changeup', 'ch') THEN 'ChangeUp'
-  WHEN ${TAGGED_PITCH_TYPE_TOKEN_SQL} IN ('sweeper', 'st') THEN 'Sweeper'
-  WHEN ${TAGGED_PITCH_TYPE_TOKEN_SQL} IN ('splitter', 'splitfinger', 'splitfingerfastball', 'sp', 'fs') THEN 'Splitter'
-  WHEN ${TAGGED_PITCH_TYPE_TOKEN_SQL} IN ('curveball', 'cu', 'knucklecurve', 'kc') THEN 'Curveball'
-  WHEN ${TAGGED_PITCH_TYPE_TOKEN_SQL} IN ('cutter', 'fc') THEN 'Cutter'
-  WHEN ${TAGGED_PITCH_TYPE_TOKEN_SQL} IN ('slider', 'sl') THEN 'Slider'
-  WHEN ${TAGGED_PITCH_TYPE_TOKEN_SQL} IN ('knuckleball', 'kn') THEN 'Knuckleball'
-  ELSE COALESCE(NULLIF(TRIM(pe.taggedpitchtype), ''), 'Undefined')
+  WHEN ${EFFECTIVE_PITCH_TYPE_TOKEN_SQL} IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null') THEN 'Undefined'
+  WHEN ${EFFECTIVE_PITCH_TYPE_TOKEN_SQL} IN ('fastball', 'fourseam', 'fourseamfastball', '4seamfastball', 'ff', 'fa') THEN 'Fastball'
+  WHEN ${EFFECTIVE_PITCH_TYPE_TOKEN_SQL} IN ('sinker', 'oneseamfastball', 'twoseam', 'twoseamfastball', 'twoseamfasball', 'si', 'ft') THEN 'Sinker'
+  WHEN ${EFFECTIVE_PITCH_TYPE_TOKEN_SQL} IN ('changeup', 'ch') THEN 'ChangeUp'
+  WHEN ${EFFECTIVE_PITCH_TYPE_TOKEN_SQL} IN ('sweeper', 'st') THEN 'Sweeper'
+  WHEN ${EFFECTIVE_PITCH_TYPE_TOKEN_SQL} IN ('splitter', 'splitfinger', 'splitfingerfastball', 'sp', 'fs') THEN 'Splitter'
+  WHEN ${EFFECTIVE_PITCH_TYPE_TOKEN_SQL} IN ('curveball', 'cu', 'knucklecurve', 'kc') THEN 'Curveball'
+  WHEN ${EFFECTIVE_PITCH_TYPE_TOKEN_SQL} IN ('cutter', 'fc') THEN 'Cutter'
+  WHEN ${EFFECTIVE_PITCH_TYPE_TOKEN_SQL} IN ('slider', 'sl') THEN 'Slider'
+  WHEN ${EFFECTIVE_PITCH_TYPE_TOKEN_SQL} IN ('knuckleball', 'kn') THEN 'Knuckleball'
+  ELSE 'Undefined'
 END`;
 
 function parseSortableNumber(value: unknown): number | null {
