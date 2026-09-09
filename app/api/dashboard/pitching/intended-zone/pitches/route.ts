@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { getSessionFromRequest } from '../../../../../../lib/auth';
 import { resolveProgrammingOrganizationId } from '../../../../../../lib/programming-scope';
 import {
+  confirmIntendedZoneTarget,
   deleteIntendedZonePitch,
   getPendingIntendedZoneTargetCursor,
   getIntendedZoneSession,
@@ -335,6 +336,31 @@ export async function PUT(request: Request) {
     }
   }
   return NextResponse.json(result);
+}
+
+// PATCH -> locks in the session's current pending target (FTP-deferred
+// mode's "Confirm Target" button). Only a confirmed target is eligible for
+// the FTP reconciliation job to match against an incoming pitch_events row,
+// and the next tap after confirming starts a new target instead of moving
+// this one -- see confirmIntendedZoneTarget for the full rationale.
+export async function PATCH(request: Request) {
+  const cookieStore = await cookies();
+  const session = getSessionFromRequest(request, cookieStore);
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
+  const organizationId = await resolveProgrammingOrganizationId(session);
+  if (organizationId <= 0) return NextResponse.json({ error: 'Session context missing.' }, { status: 400 });
+
+  const body = (await request.json().catch(() => null)) as { sessionId?: number } | null;
+  const sessionId = Number(body?.sessionId ?? 0);
+  if (!Number.isFinite(sessionId) || sessionId <= 0) {
+    return NextResponse.json({ error: 'sessionId is required.' }, { status: 400 });
+  }
+
+  const result = await confirmIntendedZoneTarget({ organizationId, sessionId });
+  if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
+  return NextResponse.json({ ok: true, pitchId: result.pitchId });
 }
 
 // DELETE ?pitchId= -> remove a single pitch (used for the manual mode's

@@ -54,7 +54,7 @@ const TRIAL_FAKE_LAST_NAMES = [
   'Brooks',
 ];
 
-const TRAINING_DB_VERSION = '2026-09-09-pinned-notes';
+const TRAINING_DB_VERSION = '2026-09-09-confirm-target';
 
 declare global {
   var __pcuTrainingDbReady: boolean | string | undefined;
@@ -1108,6 +1108,7 @@ export async function ensureIntendedZoneSchema(): Promise<void> {
 
       ALTER TABLE intended_zone_pitches ADD COLUMN IF NOT EXISTS tagged_pitcher_name TEXT;
       ALTER TABLE intended_zone_pitches ADD COLUMN IF NOT EXISTS trackman_ball_count_at_target INTEGER;
+      ALTER TABLE intended_zone_pitches ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMPTZ;
 
       CREATE INDEX IF NOT EXISTS idx_intended_zone_pitches_session ON intended_zone_pitches (session_id, pitch_index);
       CREATE INDEX IF NOT EXISTS idx_intended_zone_pitches_play_id ON intended_zone_pitches (trackman_play_id) WHERE trackman_play_id IS NOT NULL;
@@ -1177,6 +1178,9 @@ export type IntendedZonePitchRow = {
    * join fetchIntendedZoneStatRows uses); null when unlinked (e.g. no
    * TrackMan match yet, or manual-mode sessions). */
   pitcherThrows: string | null;
+  /** Set once the coach presses "Confirm Target" (FTP-deferred mode only) --
+   * null means still just a placed-but-adjustable preview. */
+  confirmedAt: string | null;
 };
 
 /** Classifies a miss into a 3x3 grid (vertical x horizontal) relative to the
@@ -1335,7 +1339,10 @@ export async function queueIntendedZoneTarget(input: {
 /** Atomically creates the next pending target or moves the existing pending
  * target. Locking the session row prevents rapid projector taps from creating
  * two targets before either request can observe the other. Once TrackMan has
- * matched the row, the next tap naturally creates the next pitch target. */
+ * matched the row, the next tap naturally creates the next pitch target.
+ * A confirmed target (see confirmIntendedZoneTarget) is also excluded from
+ * being moved -- the next tap after a Confirm Target press starts a new
+ * target instead of editing the one the coach just locked in. */
 export async function placeOrMoveIntendedZoneTarget(input: {
   organizationId: number;
   sessionId: number;
@@ -1368,6 +1375,7 @@ export async function placeOrMoveIntendedZoneTarget(input: {
          AND pitch_events_id IS NULL
          AND plate_loc_side IS NULL
          AND plate_loc_height IS NULL
+         AND confirmed_at IS NULL
        ORDER BY pitch_index ASC, id ASC
        LIMIT 1
        FOR UPDATE`,
@@ -1414,6 +1422,43 @@ export async function placeOrMoveIntendedZoneTarget(input: {
   } finally {
     client.release();
   }
+}
+
+/** Locks in the session's current pending (unconfirmed, unmatched) target so
+ * the FTP-deferred reconciliation (matchIntendedZoneSessionByPitcherAndTime)
+ * treats it as a real "this is the target for the next pitch" moment rather
+ * than the timestamp of whichever tap happened to create the row first. A
+ * confirmed target is also excluded from placeOrMoveIntendedZoneTarget's
+ * move path, so the next tap starts a fresh target instead of editing this
+ * one. Errors if there's no pending target to confirm (nothing was tapped
+ * yet, or the current one is already confirmed). */
+export async function confirmIntendedZoneTarget(input: {
+  organizationId: number;
+  sessionId: number;
+}): Promise<{ ok: true; pitchId: number } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureIntendedZoneSchema();
+  const pool = getDbPool();
+  const result = await pool.query<{ id: number }>(
+    `UPDATE intended_zone_pitches
+     SET confirmed_at = NOW()
+     WHERE id = (
+       SELECT id FROM intended_zone_pitches
+       WHERE session_id = $1
+         AND organization_id = $2
+         AND trackman_play_id IS NULL
+         AND pitch_events_id IS NULL
+         AND plate_loc_side IS NULL
+         AND plate_loc_height IS NULL
+         AND confirmed_at IS NULL
+       ORDER BY pitch_index ASC, id ASC
+       LIMIT 1
+     )
+     RETURNING id`,
+    [input.sessionId, input.organizationId],
+  );
+  if (!result.rows[0]) return { ok: false, error: 'No pending target to confirm.' };
+  return { ok: true, pitchId: Number(result.rows[0].id) };
 }
 
 /** Fills in actual location/miss data for the oldest still-unmatched queued
@@ -1525,7 +1570,7 @@ export async function matchIntendedZonePitch(input: {
        AND (trackman_play_id IS NULL OR trackman_play_id = $1)
      RETURNING id, session_id, pitch_index, trackman_play_id, intended_side_ft, intended_height_ft, target_radius_ft,
        plate_loc_side, plate_loc_height, miss_distance_ft, miss_direction, pitch_type, rel_speed, induced_vert_break,
-       horz_break, pitch_events_id, thrown_at, tagged_pitcher_name`,
+       horz_break, pitch_events_id, thrown_at, tagged_pitcher_name, confirmed_at`,
     [
       input.trackmanPlayId,
       plateLocSide,
@@ -1567,6 +1612,7 @@ export async function matchIntendedZonePitch(input: {
       thrownAt: row.thrown_at,
       taggedPitcherName: row.tagged_pitcher_name,
       pitcherThrows: input.pitcherThrows,
+      confirmedAt: row.confirmed_at,
     },
   };
 }
@@ -1683,7 +1729,7 @@ export async function listIntendedZonePitches(input: { organizationId: number; s
   const result = await pool.query(
     `SELECT izp.id, izp.session_id, izp.pitch_index, izp.trackman_play_id, izp.intended_side_ft, izp.intended_height_ft, izp.target_radius_ft,
        izp.plate_loc_side, izp.plate_loc_height, izp.miss_distance_ft, izp.miss_direction, izp.pitch_type, izp.rel_speed, izp.induced_vert_break,
-       izp.horz_break, izp.pitch_events_id, izp.thrown_at, izp.tagged_pitcher_name, pe.pitcherthrows
+       izp.horz_break, izp.pitch_events_id, izp.thrown_at, izp.tagged_pitcher_name, izp.confirmed_at, pe.pitcherthrows
      FROM intended_zone_pitches izp
      LEFT JOIN pitch_events pe ON pe.id = izp.pitch_events_id
      WHERE izp.session_id = $1 AND izp.organization_id = $2
@@ -1714,6 +1760,7 @@ export async function listIntendedZonePitches(input: { organizationId: number; s
     thrownAt: row.thrown_at,
     taggedPitcherName: row.tagged_pitcher_name,
     pitcherThrows: row.pitcherthrows,
+    confirmedAt: row.confirmed_at,
   }));
 }
 
@@ -1823,7 +1870,7 @@ export async function listIntendedZonePitchLog(input: {
             izp.plate_loc_side, izp.plate_loc_height, izp.miss_distance_ft,
             izp.miss_direction, COALESCE(izp.pitch_type, 'Undefined') AS pitch_type,
             izp.rel_speed, izp.induced_vert_break, izp.horz_break,
-            izp.pitch_events_id, izp.thrown_at, izp.tagged_pitcher_name,
+            izp.pitch_events_id, izp.thrown_at, izp.tagged_pitcher_name, izp.confirmed_at,
             COALESCE(izp.tagged_pitcher_name, s.pitcher_name) AS pitcher_name,
             COALESCE(NULLIF(TRIM(pe.customlabel), ''), 'Baseball') AS ball_type,
             pe.pitcherthrows, s.mode, s.started_at
@@ -1860,6 +1907,7 @@ export async function listIntendedZonePitchLog(input: {
       thrownAt: row.thrown_at,
       taggedPitcherName: row.tagged_pitcher_name,
       pitcherThrows: row.pitcherthrows,
+      confirmedAt: row.confirmed_at,
       pitcherName: String(row.pitcher_name ?? ''),
       ballType: String(row.ball_type),
       sessionMode: row.mode as IntendedZoneSessionMode,
@@ -1896,7 +1944,7 @@ export async function getIntendedZonePitchesByPitchEventsIds(input: {
             izp.plate_loc_side, izp.plate_loc_height, izp.miss_distance_ft,
             izp.miss_direction, COALESCE(izp.pitch_type, 'Undefined') AS pitch_type,
             izp.rel_speed, izp.induced_vert_break, izp.horz_break,
-            izp.pitch_events_id, izp.thrown_at, izp.tagged_pitcher_name,
+            izp.pitch_events_id, izp.thrown_at, izp.tagged_pitcher_name, izp.confirmed_at,
             COALESCE(izp.tagged_pitcher_name, s.pitcher_name) AS pitcher_name,
             COALESCE(NULLIF(TRIM(pe.customlabel), ''), 'Baseball') AS ball_type,
             pe.pitcherthrows, s.mode, s.started_at
@@ -1937,6 +1985,7 @@ export async function getIntendedZonePitchesByPitchEventsIds(input: {
       thrownAt: row.thrown_at,
       taggedPitcherName: row.tagged_pitcher_name,
       pitcherThrows: row.pitcherthrows,
+      confirmedAt: row.confirmed_at,
       pitcherName: String(row.pitcher_name ?? ''),
       ballType: String(row.ball_type),
       sessionMode: row.mode as IntendedZoneSessionMode,
@@ -1977,14 +2026,18 @@ export async function linkIntendedZonePitchesToPitchEvents(input: { organization
  * fills them in once that day's FTP/CSV sync has ingested the matching
  * pitch_events rows -- typically the next time the daily sync job runs.
  *
+ * Only CONFIRMED targets (confirmed_at set via confirmIntendedZoneTarget,
+ * the "Confirm Target" button) are matched -- a target the coach tapped but
+ * never locked in is left alone rather than guessed at.
+ *
  * There's no shared playId to join on here (that's the whole reason this
- * path exists), so each still-unmatched tap is paired with the same
- * pitcher's *closest-in-time* unclaimed pitch_events row (comparing the
- * coach's tap timestamp against TrackMan's own release timestamp), taps
- * oldest first, greedily consuming the nearest candidate so no pitch is
- * used twice. This self-corrects when a coach skips tapping a target for
+ * path exists), so each confirmed target is paired with the same pitcher's
+ * *closest-in-time* unclaimed pitch_events row (comparing the confirm
+ * timestamp against TrackMan's own release timestamp), oldest confirmation
+ * first, greedily consuming the nearest candidate so no pitch is used
+ * twice. This self-corrects when a coach skips confirming a target for
  * some pitches -- unlike pure position-in-sequence pairing, a single
- * skipped tap no longer shifts every later pairing by one. */
+ * skipped confirmation no longer shifts every later pairing by one. */
 export async function matchIntendedZoneSessionByPitcherAndTime(input: {
   organizationId: number;
   sessionId: number;
@@ -2001,9 +2054,13 @@ export async function matchIntendedZoneSessionByPitcherAndTime(input: {
   if (!session) return { ok: false, error: 'Session not found.' };
   if (!session.pitcher_name) return { ok: false, error: 'Session has no pitcher name to match against.' };
 
-  const pendingResult = await pool.query<{ id: number; target_radius_ft: string; created_at: string }>(
-    `SELECT id, target_radius_ft, created_at FROM intended_zone_pitches
-     WHERE session_id = $1 AND organization_id = $2 AND trackman_play_id IS NULL
+  // Only a confirmed target is a real "this is the target for the next
+  // pitch" moment -- an unconfirmed one (tapped but never locked in with
+  // Confirm Target, e.g. the coach got interrupted mid-bullpen) is left
+  // unmatched rather than guessed at.
+  const pendingResult = await pool.query<{ id: number; target_radius_ft: string; confirmed_at: string }>(
+    `SELECT id, target_radius_ft, confirmed_at FROM intended_zone_pitches
+     WHERE session_id = $1 AND organization_id = $2 AND trackman_play_id IS NULL AND confirmed_at IS NOT NULL
      ORDER BY pitch_index ASC`,
     [input.sessionId, input.organizationId]
   );
@@ -2048,10 +2105,14 @@ export async function matchIntendedZoneSessionByPitcherAndTime(input: {
     [nameOrderingVariants(session.pitcher_name), session.started_at, session.ended_at]
   );
 
-  // Greedy nearest-timestamp pairing: each pending tap (oldest first) claims
-  // whichever remaining candidate's actual thrown_at is closest to its own
-  // created_at, in either direction. A candidate with no parseable thrown_at
-  // (bad date/time text) is skipped rather than treated as infinitely close.
+  // Greedy nearest-timestamp pairing: each confirmed target (oldest first)
+  // claims whichever remaining candidate's actual thrown_at is closest to
+  // its own confirmed_at, in either direction. confirmed_at, not created_at,
+  // is the real "this is the target for the next pitch" moment -- created_at
+  // is whichever tap happened to place the target first, which can be well
+  // before the coach actually locked it in with Confirm Target. A candidate
+  // with no parseable thrown_at (bad date/time text) is skipped rather than
+  // treated as infinitely close.
   const available = candidatesResult.rows.map((candidate) => ({
     candidate,
     thrownAtMs: candidate.thrown_at ? new Date(candidate.thrown_at).getTime() : NaN,
@@ -2060,7 +2121,7 @@ export async function matchIntendedZoneSessionByPitcherAndTime(input: {
   let matched = 0;
   for (const pending of pendingResult.rows) {
     if (!available.length) break;
-    const tapAtMs = new Date(pending.created_at).getTime();
+    const tapAtMs = new Date(pending.confirmed_at).getTime();
     let bestIndex = 0;
     let bestDeltaMs = Math.abs(available[0].thrownAtMs - tapAtMs);
     for (let i = 1; i < available.length; i++) {

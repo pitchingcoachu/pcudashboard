@@ -3671,6 +3671,9 @@ def _build_dynamic_table(
     groups: Dict[str, List[Dict[str, Any]]] = {}
 
     def _pa_key_for_split_row(r: Dict[str, Any]) -> str:
+        annotated_key = str(r.get("_table_pa_key") or "").strip()
+        if annotated_key:
+            return annotated_key
         game_key = str(
             r.get("game_pk")
             or r.get("game_id")
@@ -3679,7 +3682,8 @@ def _build_dynamic_table(
             or r.get("session_date")
             or ""
         ).strip()
-        ab_idx = str(r.get("at_bat_index") or "").strip()
+        ab_idx_raw = r.get("at_bat_index")
+        ab_idx = str(ab_idx_raw).strip() if ab_idx_raw is not None else ""
         play_id = str(r.get("play_id") or "").strip()
         inning = str(r.get("inning") or "").strip()
         outs = str(r.get("outs_num") or "").strip()
@@ -3695,6 +3699,70 @@ def _build_dynamic_table(
             return f"{game_key}|play|{play_id}"
         event_id = str(r.get("pitch_event_id") or r.get("id") or "").strip()
         return event_id or f"row-{id(r)}"
+
+    def _annotate_table_pa_keys(source_rows: List[Dict[str, Any]]) -> None:
+        """Attach one stable PA key before rows are divided into split groups.
+
+        Some college feeds do not supply a game/at-bat identifier. Falling
+        back to the pitch-event id in each group makes every pitch look like a
+        separate batter faced (BF == P). Build the same count-sequence-based
+        synthetic PA keys used by the All-row baseline while the complete,
+        chronologically ordered pitch stream is still available.
+        """
+        fallback_pa_counters: Dict[str, int] = {}
+        fallback_pa_current: Dict[str, int] = {}
+
+        def _order(rr: Dict[str, Any]) -> tuple:
+            return (
+                str(rr.get("session_date") or ""),
+                _game_identifier_sort_key(rr),
+                _sortable_number(rr.get("at_bat_index")),
+                _sortable_number(rr.get("event_index")),
+                _sortable_number(rr.get("pitch_number")),
+                _sortable_number(rr.get("id")),
+            )
+
+        for rr in sorted(source_rows, key=_order):
+            game_key = str(
+                rr.get("game_pk")
+                if rr.get("game_pk") is not None
+                else rr.get("game_id")
+                or rr.get("game_uid")
+                or rr.get("game_foreign_id")
+                or ""
+            ).strip()
+            ab_idx_raw = rr.get("at_bat_index")
+            ab_idx = str(ab_idx_raw).strip() if ab_idx_raw is not None else ""
+            inning = str(rr.get("inning") or "").strip()
+            outs = str(rr.get("outs_num") or "").strip()
+            batter_norm = _normalize_name_key(str(rr.get("batter") or ""))
+            pitcher_norm = _normalize_name_key(str(rr.get("pitcher") or ""))
+
+            pa_key = ""
+            if game_key and ab_idx:
+                pa_key = f"{game_key}|ab|{ab_idx}"
+            elif game_key and inning and batter_norm:
+                pa_key = f"{game_key}|inn|{inning}|outs|{outs}|bat|{batter_norm}"
+            elif game_key and inning and pitcher_norm:
+                pa_key = f"{game_key}|inn|{inning}|outs|{outs}|pit|{pitcher_norm}"
+
+            if not pa_key:
+                date_key = str(rr.get("session_date") or "")
+                cluster = f"{date_key}|{game_key}|{inning}|{pitcher_norm}|{batter_norm}"
+                b = int(float(rr.get("balls_num"))) if _is_num(rr.get("balls_num")) else None
+                s = int(float(rr.get("strikes_num"))) if _is_num(rr.get("strikes_num")) else None
+                if b == 0 and s == 0:
+                    next_idx = fallback_pa_counters.get(cluster, 0) + 1
+                    fallback_pa_counters[cluster] = next_idx
+                    fallback_pa_current[cluster] = next_idx
+                cur_idx = fallback_pa_current.get(cluster)
+                if cur_idx is None:
+                    cur_idx = fallback_pa_counters.get(cluster, 0) + 1
+                    fallback_pa_counters[cluster] = cur_idx
+                    fallback_pa_current[cluster] = cur_idx
+                pa_key = f"syn|{cluster}|{cur_idx}"
+
+            rr["_table_pa_key"] = pa_key
 
     def _global_outcome_baseline(source_rows: List[Dict[str, Any]]) -> Dict[str, Optional[str]]:
         if not source_rows:
@@ -3809,6 +3877,7 @@ def _build_dynamic_table(
         }
 
     split_clean_for_grouping = (split_by or "").strip()
+    _annotate_table_pa_keys(rows)
     if split_clean_for_grouping == "Game":
         _annotate_derived_game_keys(rows)
     if split_clean_for_grouping == "After Count":

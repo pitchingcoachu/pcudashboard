@@ -163,6 +163,7 @@ type IntendedZonePitch = {
   thrownAt: string | null;
   taggedPitcherName: string | null;
   pitcherThrows: string | null;
+  confirmedAt: string | null;
   flightData: {
     position: { x: number; y: number; z: number };
     velocity: { x: number; y: number; z: number };
@@ -241,6 +242,14 @@ export default function IntendedZonePanel({
   const [history, setHistory] = useState<IntendedZoneSession[]>([]);
   const [deletingSessionId, setDeletingSessionId] = useState<number | null>(null);
   const [resumingSessionId, setResumingSessionId] = useState<number | null>(null);
+  const [confirmingTarget, setConfirmingTarget] = useState(false);
+  // Local, immediate source of truth for whether the CURRENT pendingTarget
+  // has been confirmed -- deliberately not derived from polled server state
+  // (lastQueuedPitch/pitches), which can lag a click by up to one poll
+  // interval and would otherwise show/hide the Confirm button based on
+  // stale data (e.g. still reporting the PREVIOUS target as confirmed right
+  // after a brand-new, unconfirmed target was just placed).
+  const [targetIsConfirmedLocally, setTargetIsConfirmedLocally] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollInFlightRef = useRef(false);
   const fallbackSyncInFlightRef = useRef(false);
@@ -303,27 +312,65 @@ export default function IntendedZonePanel({
     pollCountRef.current += 1;
     const syncMetadata = pollCountRef.current % PLAYS_API_SYNC_EVERY_POLLS === 0;
     const syncFallback = pollCountRef.current % DATA_API_SYNC_EVERY_POLLS === 0;
+    // Snapshot the placement version before the request goes out. If a tap
+    // (placeOrMoveLiveTarget) happens while this poll is in flight, that
+    // function bumps targetPlacementVersionRef synchronously -- this poll's
+    // response reflects server state from BEFORE that tap, so it must not
+    // hydrate/overwrite pendingTarget once it resolves, even if its own
+    // snapshot still shows the old (possibly now-confirmed) target as the
+    // only unmatched row. Without this, a poll that was already in flight
+    // when the coach tapped a new spot briefly snaps the marker back to the
+    // previous target for one poll interval before the next poll catches up.
+    const placementVersionAtPollStart = targetPlacementVersionRef.current;
     try {
       const params = new URLSearchParams({ sessionId: String(sessionId) });
       const response = await fetch(`/api/dashboard/pitching/intended-zone/pitches?${params.toString()}`, { cache: 'no-store' });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error ?? 'Failed to poll for pitches.');
       const nextPitches: IntendedZonePitch[] = Array.isArray(payload.pitches) ? payload.pitches : [];
+      // Every unmatched (no trackman_play_id, no plate location) row here,
+      // oldest first. In ftp_deferred mode a CONFIRMED row can sit unmatched
+      // for a long time (until the next FTP sync runs), so once a target is
+      // confirmed and a new one is placed, there are briefly/potentially for
+      // a while TWO unmatched rows: the old confirmed one and the new
+      // unconfirmed one. Picking queuedTargets[0] (oldest) would always
+      // re-select the stale confirmed target and snap pendingTarget back to
+      // it on every poll -- so the row to hydrate from is specifically the
+      // newest UNCONFIRMED one (the one actually still being positioned);
+      // an already-confirmed row is only used to seed targetIsConfirmedLocally
+      // when reloading with no unconfirmed row at all (nothing left to move).
       const queuedTargets = nextPitches.filter((pitch) => !pitch.trackmanPlayId && pitch.plateLocSide === null && pitch.plateLocHeight === null);
-      const nextQueuedTarget = queuedTargets.length ? queuedTargets[0] : null;
+      const unconfirmedQueuedTargets = queuedTargets.filter((pitch) => !pitch.confirmedAt);
+      const nextQueuedTarget =
+        unconfirmedQueuedTargets[unconfirmedQueuedTargets.length - 1]
+        ?? (queuedTargets.length ? queuedTargets[queuedTargets.length - 1] : null);
       const previouslyActiveTargetId = activeQueuedTargetIdRef.current;
-      if (nextQueuedTarget) {
-        activeQueuedTargetIdRef.current = nextQueuedTarget.id;
+      // A tap that landed after this poll's request went out already knows
+      // more than this response does -- e.g. it just created a brand-new
+      // unconfirmed row this snapshot predates. Skip touching
+      // pendingTarget/activeQueuedTargetIdRef/targetIsConfirmedLocally
+      // entirely rather than act on stale data; the next poll (after the
+      // tap's PUT has landed) will have a fresh, trustworthy snapshot.
+      const pollSnapshotIsStale = targetPlacementVersionRef.current !== placementVersionAtPollStart;
+      if (!pollSnapshotIsStale && nextQueuedTarget) {
         // Hydrate a pending target when resuming/reloading. While a local
         // move is already visible, don't let a slightly older poll snap it
-        // back before the serialized PUT finishes.
+        // back before the serialized PUT finishes -- but DO still refresh
+        // targetIsConfirmedLocally even for the same row id, since Confirm
+        // Target's PATCH doesn't change intendedSideFt/HeightFt (nothing for
+        // this same-id branch to clobber) and this is how a second browser
+        // tab, or this same tab after a dropped response, ever learns a
+        // target was confirmed.
         if (previouslyActiveTargetId === null || previouslyActiveTargetId !== nextQueuedTarget.id) {
           setPendingTarget({ sideFt: nextQueuedTarget.intendedSideFt, heightFt: nextQueuedTarget.intendedHeightFt });
           setTargetRadiusFt(nextQueuedTarget.targetRadiusFt);
         }
-      } else if (previouslyActiveTargetId !== null) {
+        activeQueuedTargetIdRef.current = nextQueuedTarget.id;
+        setTargetIsConfirmedLocally(Boolean(nextQueuedTarget.confirmedAt));
+      } else if (!pollSnapshotIsStale && previouslyActiveTargetId !== null) {
         activeQueuedTargetIdRef.current = null;
         setPendingTarget(null);
+        setTargetIsConfirmedLocally(false);
       }
       const matched = nextPitches.filter((p) => p.trackmanPlayId);
       const newest = matched.length ? matched[matched.length - 1] : null;
@@ -509,6 +556,7 @@ export default function IntendedZonePanel({
     const placementVersion = targetPlacementVersionRef.current + 1;
     targetPlacementVersionRef.current = placementVersion;
     setPendingTarget(target);
+    setTargetIsConfirmedLocally(false);
     setError(null);
     targetWriteChainRef.current = targetWriteChainRef.current
       .catch(() => undefined)
@@ -531,6 +579,40 @@ export default function IntendedZonePanel({
         if (targetPlacementVersionRef.current === placementVersion) setPendingTarget(null);
         setError(placementError instanceof Error ? placementError.message : 'Failed to place target.');
       });
+  }
+
+  // FTP-deferred mode's "Confirm Target" button. Locks in the currently
+  // placed target so the daily FTP reconciliation only ever matches a
+  // target the coach explicitly confirmed (see confirmIntendedZoneTarget's
+  // doc comment), instead of guessing off the timestamp of whichever tap
+  // happened to place the target first. Clears the local pendingTarget so
+  // the next tap starts a brand-new target rather than continuing to move
+  // this now-locked one.
+  async function confirmPendingTarget() {
+    if (!activeSession || activeSession.mode !== 'ftp_deferred') return;
+    setConfirmingTarget(true);
+    setError(null);
+    try {
+      await targetWriteChainRef.current.catch(() => undefined);
+      const response = await fetch('/api/dashboard/pitching/intended-zone/pitches', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: activeSession.id }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to confirm target.');
+      // pendingTarget stays visible on the zone -- it's now shown as the
+      // locked-in confirmed target rather than cleared. targetIsConfirmedLocally
+      // is the immediate, local signal the button/status text render off of;
+      // it gets reset to false the moment the next tap calls
+      // placeOrMoveLiveTarget, so a fresh target always starts unconfirmed
+      // without waiting on a poll round-trip to catch up.
+      setTargetIsConfirmedLocally(true);
+    } catch (confirmError) {
+      setError(confirmError instanceof Error ? confirmError.message : 'Failed to confirm target.');
+    } finally {
+      setConfirmingTarget(false);
+    }
   }
 
   function handleZoneClick(event: React.MouseEvent<SVGSVGElement>) {
@@ -672,9 +754,18 @@ export default function IntendedZonePanel({
     setSelectedFlightPitchId(nextIndex === matchedPitches.length - 1 ? null : matchedPitches[nextIndex].id);
   }, [matchedPitches, normalizedFlightPitchIndex]);
 
+  // The zone marker/pitch-counter should track the newest unconfirmed
+  // target when one exists (the target actively being positioned), falling
+  // back to the newest confirmed-but-unmatched one only when nothing
+  // unconfirmed remains (e.g. right after Confirm, before the next tap) --
+  // same rationale as poll()'s nextQueuedTarget selection above: an older
+  // confirmed row can sit unmatched for a long time and must not keep
+  // winning over a newer target that's still being placed.
   const lastQueuedPitch = useMemo(() => {
     const queued = pitches.filter((pitch) => !pitch.trackmanPlayId && pitch.plateLocSide === null && pitch.plateLocHeight === null);
-    return queued.length ? queued[0] : null;
+    if (!queued.length) return null;
+    const unconfirmed = queued.filter((pitch) => !pitch.confirmedAt);
+    return unconfirmed.length ? unconfirmed[unconfirmed.length - 1] : queued[queued.length - 1];
   }, [pitches]);
 
   const sessionAverages = useMemo(() => {
@@ -932,6 +1023,15 @@ export default function IntendedZonePanel({
                 </>
               ) : activeSession.mode === 'manual' && pendingTarget ? (
                 <><span>Tap actual location</span><button type="button" onClick={() => setPendingTarget(null)}>Reset</button></>
+              ) : activeSession.mode === 'ftp_deferred' && pendingTarget && !targetIsConfirmedLocally ? (
+                <>
+                  <span>Target ready · tap elsewhere to move it</span>
+                  <button type="button" onClick={() => void confirmPendingTarget()} disabled={confirmingTarget}>
+                    {confirmingTarget ? 'Confirming…' : 'Confirm Target'}
+                  </button>
+                </>
+              ) : activeSession.mode === 'ftp_deferred' && pendingTarget && targetIsConfirmedLocally ? (
+                <span>Target confirmed · tap the zone to set the next target</span>
               ) : activeSession.mode !== 'manual' && pendingTarget ? (
                 <span>Target ready · tap elsewhere to move it</span>
               ) : (
@@ -1317,6 +1417,17 @@ export default function IntendedZonePanel({
                     ) : null}
                   </div>
                 )
+              ) : activeSession.mode === 'ftp_deferred' && (pendingTarget || lastQueuedPitch) && !targetIsConfirmedLocally ? (
+                <div className={styles.actionRow}>
+                  <p className={styles.zoneHint} style={{ marginBottom: 0 }}>
+                    Target ready — tap anywhere else to move it.
+                  </p>
+                  <button type="button" className={styles.confirmButton} onClick={() => void confirmPendingTarget()} disabled={confirmingTarget}>
+                    {confirmingTarget ? 'Confirming…' : 'Confirm Target'}
+                  </button>
+                </div>
+              ) : activeSession.mode === 'ftp_deferred' && targetIsConfirmedLocally ? (
+                <p className={styles.zoneHint}>Target confirmed — tap the zone to set the next target.</p>
               ) : pendingTarget || lastQueuedPitch ? (
                 <p className={styles.zoneHint}>Target ready — tap anywhere else to move it.</p>
               ) : (
