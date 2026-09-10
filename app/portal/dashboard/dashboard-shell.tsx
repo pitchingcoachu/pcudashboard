@@ -541,7 +541,7 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
               onNavigate={handleHomeNavigate}
             />
           </div>
-          <MobileDashboardHome suiteOptions={suiteOptions} onOpenSuite={activateSuite} />
+          <MobileDashboardHome role={role} suiteOptions={suiteOptions} onOpenSuite={activateSuite} />
         </div>
       ) : null}
       {mountedSuites.Pitching ? (

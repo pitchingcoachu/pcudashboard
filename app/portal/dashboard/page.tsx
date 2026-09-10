@@ -79,8 +79,9 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
   if (['player-notes', 'player_notes', 'player notes'].includes(String(suiteParamRaw ?? '').trim().toLowerCase())) {
     redirect('/portal/admin/player-notes');
   }
-  const initialSuite = readSuiteParam(resolvedSearchParams.suite);
+  const requestedInitialSuite = readSuiteParam(resolvedSearchParams.suite);
   const session = await requirePortalSession();
+  const initialSuite = requestedInitialSuite === 'Flags' && session.role === 'player' ? null : requestedInitialSuite;
   const schoolOptions = await resolveSessionDashboardSchoolOptions(session);
   const selectedSchool = resolveDashboardSchoolCode(session);
   const canAccessDashboard = await canUseDashboardData(session);

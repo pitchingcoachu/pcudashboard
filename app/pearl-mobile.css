@@ -388,6 +388,10 @@
     text-align: left;
     cursor: pointer;
   }
+
+  .portal-shell.portal-shell--viewmode-auto .flags-rules-layout {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
 }
 
 .portal-mobile-dashboard-home {
