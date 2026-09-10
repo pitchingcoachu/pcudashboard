@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { downloadLeaderboardTablePdf, downloadContentPdf } from '../../../lib/leaderboard-pdf-export';
+import { SaveReportToProfileButton } from '../components/save-report-to-profile';
 import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
 import styles from './intended-zone-panel.module.css';
 
@@ -774,10 +775,11 @@ export default function IntendedZoneStats({
           <p className={styles.noPitcher}>No completed Intended Target pitches found for this pitcher{sidebarStartDate || sidebarEndDate ? ' in this date range' : ''}.</p>
         ) : pitchTypeStats.length ? (
           <>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
               <button type="button" className={styles.resetButton} onClick={handleExportPitcherPdf} disabled={isExportingPitcherPdf}>
                 {isExportingPitcherPdf ? 'Exporting…' : 'Export PDF'}
               </button>
+              <SaveReportToProfileButton generate={handleExportPitcherPdf} title={`Intended Target Report - ${pitcherName}`} preferredPlayerName={pitcherName} disabled={isExportingPitcherPdf} className={styles.resetButton} />
             </div>
 
             <div ref={pitcherExportRef} style={{ display: 'grid', gap: 20 }}>
@@ -850,10 +852,11 @@ export default function IntendedZoneStats({
         <p className={styles.noPitcher}>No completed Intended Target pitches found across any pitcher{sidebarStartDate || sidebarEndDate ? ' in this date range' : ''}.</p>
       ) : leaderboard.length ? (
         <>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
             <button type="button" className={styles.resetButton} onClick={handleExportLeaderboardPdf} disabled={isExportingLeaderboardPdf}>
               {isExportingLeaderboardPdf ? 'Exporting…' : 'Export PDF'}
             </button>
+            <SaveReportToProfileButton generate={handleExportLeaderboardPdf} title="Intended Target Leaderboard" disabled={isExportingLeaderboardPdf} className={styles.resetButton} />
           </div>
           <div className={styles.contentGrid} ref={leaderboardExportRef}>
           <div className={styles.logSection} style={{ gridColumn: '1 / -1' }}>

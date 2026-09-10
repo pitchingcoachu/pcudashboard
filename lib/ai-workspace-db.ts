@@ -24,6 +24,7 @@ export type FlagRuleRow = {
   domain: 'pitching' | 'hitting';
   metric: string;
   pitchType: string;
+  pitchTypes: string[];
   direction: 'increase' | 'decrease' | 'either';
   threshold: number;
   thresholdType: 'absolute' | 'percent';
@@ -40,11 +41,14 @@ export type FlagRuleRow = {
 
 declare global {
   var __pcuAiWorkspaceReady: boolean | undefined;
+  var __pcuAiWorkspaceSchemaVersion: number | undefined;
   var __pcuAiWorkspaceReadyPromise: Promise<void> | undefined;
 }
 
+const AI_WORKSPACE_SCHEMA_VERSION = 2;
+
 export async function ensureAiWorkspaceReady(): Promise<void> {
-  if (!isDatabaseConfigured() || global.__pcuAiWorkspaceReady) return;
+  if (!isDatabaseConfigured() || global.__pcuAiWorkspaceSchemaVersion === AI_WORKSPACE_SCHEMA_VERSION) return;
   if (global.__pcuAiWorkspaceReadyPromise) return global.__pcuAiWorkspaceReadyPromise;
   global.__pcuAiWorkspaceReadyPromise = (async () => {
     const pool = getDbPool();
@@ -107,8 +111,14 @@ export async function ensureAiWorkspaceReady(): Promise<void> {
         notified_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         PRIMARY KEY (rule_id, player_name, session_date)
       );
+      ALTER TABLE metric_flag_rules ADD COLUMN IF NOT EXISTS pitch_types TEXT[] NOT NULL DEFAULT ARRAY['All']::TEXT[];
+      UPDATE metric_flag_rules
+      SET pitch_types = ARRAY[pitch_type]::TEXT[]
+      WHERE pitch_types = ARRAY['All']::TEXT[]
+        AND LOWER(COALESCE(pitch_type, 'All')) <> 'all';
     `);
     global.__pcuAiWorkspaceReady = true;
+    global.__pcuAiWorkspaceSchemaVersion = AI_WORKSPACE_SCHEMA_VERSION;
   })().finally(() => { global.__pcuAiWorkspaceReadyPromise = undefined; });
   return global.__pcuAiWorkspaceReadyPromise;
 }
@@ -252,17 +262,19 @@ export async function deleteAiSession(id: number, organizationId: number): Promi
 export async function editAiSession(input:{id:number;organizationId:number;title:string;sessionType:string;summaryBullets:string[];transcriptText:string;playerVisible:boolean;keepAudio:boolean}):Promise<void>{await ensureAiWorkspaceReady();await getDbPool().query(`UPDATE ai_sessions SET title=$3,session_type=$4,summary_json=$5::jsonb,transcript_text=$6,player_visible=$7,keep_audio=$8,audio_expires_at=CASE WHEN $8 THEN NULL WHEN audio_r2_key IS NOT NULL THEN COALESCE(audio_expires_at,NOW()+INTERVAL '30 days') ELSE NULL END,updated_at=NOW() WHERE id=$1 AND organization_id=$2`,[input.id,input.organizationId,input.title,input.sessionType,JSON.stringify(input.summaryBullets),input.transcriptText,input.playerVisible,input.keepAudio]);await syncAiSessionPlayerNotes(input.id,input.organizationId);}
 
 function mapFlagRule(row: Record<string, unknown>): FlagRuleRow {
-  return { id:Number(row.id),name:String(row.name),domain:row.domain as 'pitching'|'hitting',metric:String(row.metric),pitchType:String(row.pitch_type),
+  const pitchTypes=Array.isArray(row.pitch_types)?row.pitch_types.map(String).map((value)=>value.trim()).filter(Boolean):[];
+  const normalizedPitchTypes=pitchTypes.length?pitchTypes:[String(row.pitch_type??'All')];
+  return { id:Number(row.id),name:String(row.name),domain:row.domain as 'pitching'|'hitting',metric:String(row.metric),pitchType:normalizedPitchTypes.length===1?normalizedPitchTypes[0]:normalizedPitchTypes.join(', '),pitchTypes:normalizedPitchTypes,
     direction:row.direction as FlagRuleRow['direction'],threshold:Number(row.threshold),thresholdType:row.threshold_type as FlagRuleRow['thresholdType'],
     baselineDays:Number(row.baseline_days),minimumSample:Number(row.minimum_sample),targetPlayer:String(row.target_player),sessionType:String(row.session_type),
     notificationsEnabled:Boolean(row.notifications_enabled),cooldownHours:Number(row.cooldown_hours),enabled:Boolean(row.enabled),createdAt:String(row.created_at),createdByUserId:row.created_by_user_id?Number(row.created_by_user_id):null };
 }
 
 export async function listFlagRules(organizationId:number):Promise<FlagRuleRow[]> { await ensureAiWorkspaceReady(); const r=await getDbPool().query<Record<string,unknown>>(`SELECT * FROM metric_flag_rules WHERE organization_id=$1 ORDER BY created_at DESC`,[organizationId]);return r.rows.map(mapFlagRule); }
-export async function saveFlagRule(input:Omit<FlagRuleRow,'id'|'createdAt'|'createdByUserId'> & {organizationId:number;userId:number;id?:number}):Promise<number> {
-  await ensureAiWorkspaceReady(); const values=[input.organizationId,input.name,input.domain,input.metric,input.pitchType,input.direction,input.threshold,input.thresholdType,input.baselineDays,input.minimumSample,input.targetPlayer,input.sessionType,input.notificationsEnabled,input.cooldownHours,input.enabled,input.userId];
-  if(input.id){const r=await getDbPool().query<{id:number}>(`UPDATE metric_flag_rules SET name=$2,domain=$3,metric=$4,pitch_type=$5,direction=$6,threshold=$7,threshold_type=$8,baseline_days=$9,minimum_sample=$10,target_player=$11,session_type=$12,notifications_enabled=$13,cooldown_hours=$14,enabled=$15,updated_at=NOW() WHERE organization_id=$1 AND id=$17 RETURNING id`,[...values,input.id]);return Number(r.rows[0]?.id||0);}
-  const r=await getDbPool().query<{id:number}>(`INSERT INTO metric_flag_rules (organization_id,name,domain,metric,pitch_type,direction,threshold,threshold_type,baseline_days,minimum_sample,target_player,session_type,notifications_enabled,cooldown_hours,enabled,created_by_user_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,values);return Number(r.rows[0].id);
+export async function saveFlagRule(input:Omit<FlagRuleRow,'id'|'createdAt'|'createdByUserId'|'pitchType'> & {organizationId:number;userId:number;id?:number}):Promise<number> {
+  await ensureAiWorkspaceReady(); const pitchTypes=input.pitchTypes.length?input.pitchTypes:['All'];const legacyPitchType=pitchTypes.length===1?pitchTypes[0]:'All';const values=[input.organizationId,input.name,input.domain,input.metric,legacyPitchType,pitchTypes,input.direction,input.threshold,input.thresholdType,input.baselineDays,input.minimumSample,input.targetPlayer,input.sessionType,input.notificationsEnabled,input.cooldownHours,input.enabled,input.userId];
+  if(input.id){const r=await getDbPool().query<{id:number}>(`UPDATE metric_flag_rules SET name=$2,domain=$3,metric=$4,pitch_type=$5,pitch_types=$6::text[],direction=$7,threshold=$8,threshold_type=$9,baseline_days=$10,minimum_sample=$11,target_player=$12,session_type=$13,notifications_enabled=$14,cooldown_hours=$15,enabled=$16,updated_at=NOW() WHERE organization_id=$1 AND id=$18 RETURNING id`,[...values,input.id]);return Number(r.rows[0]?.id||0);}
+  const r=await getDbPool().query<{id:number}>(`INSERT INTO metric_flag_rules (organization_id,name,domain,metric,pitch_type,pitch_types,direction,threshold,threshold_type,baseline_days,minimum_sample,target_player,session_type,notifications_enabled,cooldown_hours,enabled,created_by_user_id) VALUES ($1,$2,$3,$4,$5,$6::text[],$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,values);return Number(r.rows[0].id);
 }
 export async function deleteFlagRule(id:number,organizationId:number):Promise<void>{await ensureAiWorkspaceReady();await getDbPool().query(`DELETE FROM metric_flag_rules WHERE id=$1 AND organization_id=$2`,[id,organizationId]);}
 export async function claimFlagNotification(ruleId:number,playerName:string,sessionDate:string):Promise<boolean>{await ensureAiWorkspaceReady();const r=await getDbPool().query(`INSERT INTO metric_flag_notifications (rule_id,player_name,session_date) VALUES ($1,$2,$3::date) ON CONFLICT DO NOTHING RETURNING rule_id`,[ruleId,playerName,sessionDate]);return (r.rowCount??0)>0;}

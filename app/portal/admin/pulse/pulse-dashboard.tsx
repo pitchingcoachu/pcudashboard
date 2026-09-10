@@ -3,6 +3,8 @@
 import Image from 'next/image';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import styles from './pulse.module.css';
+import { deliverReportPdf } from '../../../../lib/report-pdf-delivery';
+import { SaveReportToProfileButton } from '../../components/save-report-to-profile';
 
 type Player = { playerKey:string; playerName:string; lastDate:string|null; acRatio:number|null; acuteWorkload:number|null; chronicWorkload:number|null; oneDayWorkload:number|null; totalThrowCount:number|null; highEffortThrowCount:number|null; eventCount28d:number };
 type Workload = { date:string; acRatio:number|null; acuteWorkload:number|null; chronicWorkload:number|null; oneDayWorkload:number|null; totalThrowCount:number|null; highEffortThrowCount:number|null };
@@ -190,7 +192,7 @@ export default function PulseDashboard({ schoolCode,schoolLogoSrc,schoolLogoAlt 
         );
       }
       const safeName=selected.playerName.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
-      pdf.save(`pulse-${safeName||'athlete'}-${start||'all'}-${end||'all'}.pdf`);
+      deliverReportPdf(pdf, `pulse-${safeName||'athlete'}-${start||'all'}-${end||'all'}.pdf`, `PULSE Report - ${selected?.playerName || 'Athlete'}`);
     }catch(e){setError(e instanceof Error?e.message:'Unable to export PULSE PDF.')}finally{setExporting(false)}
   }
   async function upload(){if(!files.length)return;setUploading(true);setError('');setNotice('');try{const form=new FormData();files.forEach(file=>form.append('files',file));const response=await fetch('/api/admin/pulse',{method:'POST',body:form});const payload=await response.json();if(!response.ok)throw new Error(payload.error||'Upload failed.');const inserted=payload.results.reduce((sum:number,row:{insertedRows:number})=>sum+row.insertedRows,0);setNotice(`${payload.results.length} file${payload.results.length===1?'':'s'} processed · ${inserted.toLocaleString()} rows added or refreshed.`);setFiles([]);if(inputRef.current)inputRef.current.value='';await load();}catch(e){setError(e instanceof Error?e.message:'Upload failed.')}finally{setUploading(false)}}
@@ -243,7 +245,7 @@ export default function PulseDashboard({ schoolCode,schoolLogoSrc,schoolLogoAlt 
         >
           {sidebarOpen?'‹':'›'}
         </button>
-        <div className={styles.profileTitle}><div><p>ATHLETE PROFILE</p><h2>{selected?.playerName}</h2></div><button type="button" className={styles.exportButton} onClick={()=>void exportPdf()} disabled={exporting}>{exporting?'Exporting…':'Export PDF'}</button></div>
+        <div className={styles.profileTitle}><div><p>ATHLETE PROFILE</p><h2>{selected?.playerName}</h2></div><div style={{display:'flex',gap:8,flexWrap:'wrap',justifyContent:'flex-end'}}><button type="button" className={styles.exportButton} onClick={()=>void exportPdf()} disabled={exporting}>{exporting?'Exporting…':'Export PDF'}</button><SaveReportToProfileButton generate={exportPdf} title={`PULSE Report - ${selected?.playerName || 'Athlete'}`} preferredPlayerName={selected?.playerName} disabled={exporting} className={styles.exportButton}/></div></div>
         <div className={styles.cards}><div><small>7-DAY AVG. THROWS / DAY</small><strong>{fmt(data.summary.throws7,1)}</strong></div><div><small>7-DAY AVG. STRESS</small><strong>{fmt(data.summary.avgStress7)}</strong></div><div><small>28-DAY AVG. THROWS / DAY</small><strong>{fmt(data.summary.throws28,1)}</strong></div><div><small>28-DAY AVG. STRESS</small><strong>{fmt(data.summary.avgStress28)}</strong></div></div>
         {tab==='workload'?<>
           <section className={styles.panel}><h3>A:C Ratio and Daily Workload</h3><LineChart rows={data.workload as unknown as Array<Record<string,unknown>>} bars={{key:'oneDayWorkload',label:'1-day workload',color:chartColors.oneDay}} lines={[{key:'acRatio',label:'A:C ratio',color:chartColors.acRatio}]}/></section>

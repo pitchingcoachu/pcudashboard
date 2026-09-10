@@ -54,7 +54,7 @@ const TRIAL_FAKE_LAST_NAMES = [
   'Brooks',
 ];
 
-const TRAINING_DB_VERSION = '2026-09-09-confirm-target';
+const TRAINING_DB_VERSION = '2026-09-09-strikes-count';
 
 declare global {
   var __pcuTrainingDbReady: boolean | string | undefined;
@@ -1109,6 +1109,9 @@ export async function ensureIntendedZoneSchema(): Promise<void> {
       ALTER TABLE intended_zone_pitches ADD COLUMN IF NOT EXISTS tagged_pitcher_name TEXT;
       ALTER TABLE intended_zone_pitches ADD COLUMN IF NOT EXISTS trackman_ball_count_at_target INTEGER;
       ALTER TABLE intended_zone_pitches ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMPTZ;
+      ALTER TABLE intended_zone_pitches ADD COLUMN IF NOT EXISTS is_strike BOOLEAN;
+      ALTER TABLE intended_zone_pitches ADD COLUMN IF NOT EXISTS count_at_pitch TEXT;
+      ALTER TABLE intended_zone_pitches ADD COLUMN IF NOT EXISTS at_bat_index INTEGER;
 
       CREATE INDEX IF NOT EXISTS idx_intended_zone_pitches_session ON intended_zone_pitches (session_id, pitch_index);
       CREATE INDEX IF NOT EXISTS idx_intended_zone_pitches_play_id ON intended_zone_pitches (trackman_play_id) WHERE trackman_play_id IS NOT NULL;
@@ -1181,6 +1184,16 @@ export type IntendedZonePitchRow = {
   /** Set once the coach presses "Confirm Target" (FTP-deferred mode only) --
    * null means still just a placed-but-adjustable preview. */
   confirmedAt: string | null;
+  /** Track Strikes & Count mode only -- the coach's manual ball/strike call
+   * for this landed pitch. Null until called (or if count tracking wasn't
+   * enabled for this session). */
+  isStrike: boolean | null;
+  /** The ball-strike count (e.g. "1-2") BEFORE this pitch was thrown, as
+   * tracked client-side during a Track Strikes & Count session. */
+  countAtPitch: string | null;
+  /** Which simulated at-bat this pitch belongs to within the session
+   * (0-indexed, increments on "Next Batter" or an auto-detected walk/K). */
+  atBatIndex: number | null;
 };
 
 /** Classifies a miss into a 3x3 grid (vertical x horizontal) relative to the
@@ -1244,6 +1257,230 @@ export async function endIntendedZoneSession(input: { organizationId: number; se
   );
   if ((result.rowCount ?? 0) === 0) return { ok: false, error: 'Session was not found or already ended.' };
   return { ok: true };
+}
+
+const SHARED_THROWING_STATE_PLAYER_ID = 0;
+const INTENDED_TARGET_LIVE_TEMPLATE_ID = 'intended-target-live';
+const INTENDED_TARGET_LIVE_TEMPLATE_NAME = 'Intended Target Live';
+
+/** Ensures the shared "Intended Target Live" bullpen script template exists
+ * (matching the exact ScriptTemplate shape app/api/player/throwing/route.ts
+ * and app/api/admin/schedule/throwing/route.ts read/write under
+ * templates_json.bullpenTemplates on the shared player_id=0 row) so a
+ * Track Strikes & Count session's results have somewhere valid to land.
+ * Lazily created on first use rather than via a one-off migration -- self-
+ * healing if the shared row's templates are ever reset, and requires no
+ * coach setup step for this to work for any pitcher in the org. Every other
+ * key already on the shared row's templates_json (throwingTemplates,
+ * velocityTemplates, etc.) is read back and preserved untouched. */
+async function ensureIntendedTargetLiveTemplate(organizationId: number): Promise<{ ok: true } | { ok: false; error: string }> {
+  const shared = await getScheduleThrowingState({ organizationId, playerId: SHARED_THROWING_STATE_PLAYER_ID });
+  const templatesObj = (shared.templates && typeof shared.templates === 'object' && !Array.isArray(shared.templates)
+    ? shared.templates
+    : {}) as Record<string, unknown>;
+  const bullpenTemplates = Array.isArray(templatesObj.bullpenTemplates) ? templatesObj.bullpenTemplates : [];
+  const alreadyExists = bullpenTemplates.some(
+    (entry) => entry && typeof entry === 'object' && (entry as { id?: unknown }).id === INTENDED_TARGET_LIVE_TEMPLATE_ID
+  );
+  if (alreadyExists) return { ok: true };
+
+  const newTemplate = {
+    id: INTENDED_TARGET_LIVE_TEMPLATE_ID,
+    name: INTENDED_TARGET_LIVE_TEMPLATE_NAME,
+    rowCount: 1,
+    columns: ['Pitch Type', 'Strike', 'In Zone', 'Count'],
+    columnTypes: ['auto', 'strike', 'text', 'text'],
+    rows: [['', '', '', '']],
+    updatedAt: new Date().toISOString(),
+  };
+  return saveScheduleThrowingState({
+    organizationId,
+    playerId: SHARED_THROWING_STATE_PLAYER_ID,
+    userId: 0,
+    byDate: (shared.byDate ?? {}) as Record<string, unknown>,
+    weekNotes: (shared.weekNotes ?? {}) as Record<string, unknown>,
+    templates: { ...templatesObj, bullpenTemplates: [...bullpenTemplates, newTemplate] },
+  });
+}
+
+/** Aggregates one Track Strikes & Count session's called pitches into the
+ * bullpen scripts results table (bullpen_log_entries), under the shared
+ * "Intended Target Live" template, for the pitcher's real player record and
+ * the session's own date. Called from the session-end flow, best-effort:
+ * returns { ok: false } (never throws) so a naming mismatch or missing
+ * player link never blocks ending the session itself -- the Intended
+ * Target pitch data is already saved regardless of this step's outcome.
+ * Appends to (rather than overwrites) any existing entry for that player/
+ * date, since bullpen_log_entries is unique per (org, player, template,
+ * date) and a second same-day session must not erase the first's rows. */
+export async function saveIntendedTargetSessionToBullpenLog(input: {
+  organizationId: number;
+  sessionId: number;
+  userId: number | null;
+}): Promise<{ ok: true; rowsSaved: number } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  const izSession = await getIntendedZoneSession({ organizationId: input.organizationId, sessionId: input.sessionId });
+  if (!izSession) return { ok: false, error: 'Session was not found.' };
+  if (!izSession.pitcherName) return { ok: false, error: 'Session has no pitcher name.' };
+
+  const allPitches = await listIntendedZonePitches({ organizationId: input.organizationId, sessionId: input.sessionId });
+  const calledPitches = allPitches.filter((pitch) => pitch.isStrike !== null);
+  if (!calledPitches.length) return { ok: true, rowsSaved: 0 };
+
+  const playerId = await getPlayerIdByName({ organizationId: input.organizationId, playerName: izSession.pitcherName });
+  if (!playerId) return { ok: false, error: 'No matching player found for this pitcher name.' };
+
+  const templateReady = await ensureIntendedTargetLiveTemplate(input.organizationId);
+  if (!templateReady.ok) return templateReady;
+
+  const bullpenDate = izSession.startedAt.slice(0, 10);
+  // __templateColumns fixes the display order/name (see getLogEntryColumns
+  // in shared-script-entry.tsx) rather than relying on object key order.
+  // __intendedZoneSessionId/PitchId are hidden metadata (the shared-script-
+  // entry UI already strips any "__"-prefixed key from what it displays) --
+  // they're what let deleteIntendedZoneSession/deleteIntendedZonePitch find
+  // and remove exactly the right rows here later without touching rows from
+  // other sessions/pitchers sharing the same day's log entry.
+  const templateColumnsJson = JSON.stringify(['Pitch Type', 'Strike', 'In Zone', 'Count']);
+  // FTP Sync mode: a called pitch's real landing location often doesn't
+  // exist yet at session-end time (it only arrives once the next FTP sync
+  // ingests it, potentially hours later) -- pitchLocationLabel(null, null)
+  // would return 'No', a false negative. "Pending" makes the truly-unknown
+  // case distinguishable from a real miss. Reopening the session and
+  // clicking "Check for Results" (see check_ftp_match's re-save) is what
+  // corrects a "Pending" row to its real value once data lands.
+  const newRows = calledPitches.map((pitch) => ({
+    'Pitch Type': pitch.pitchType ?? 'Undefined',
+    Strike: pitch.isStrike ? 'Yes' : 'No',
+    'In Zone': pitch.plateLocSide !== null && pitch.plateLocHeight !== null
+      ? pitchLocationLabel(pitch.plateLocSide, pitch.plateLocHeight)
+      : 'Pending',
+    Count: pitch.countAtPitch ?? '',
+    __templateColumns: templateColumnsJson,
+    __intendedZoneSessionId: String(input.sessionId),
+    __intendedZonePitchId: String(pitch.id),
+  }));
+
+  const existingEntries = await getBullpenLogEntries({
+    organizationId: input.organizationId,
+    playerId,
+    templateId: INTENDED_TARGET_LIVE_TEMPLATE_ID,
+  });
+  const existingForDate = existingEntries.find((entry) => entry.bullpenDate === bullpenDate);
+  // Idempotent per pitch (matched by __intendedZonePitchId), not a blind
+  // append -- this function can run more than once for the same session
+  // (e.g. a "Pending" In Zone value gets corrected once the coach reopens
+  // an ended FTP session and clicks "Check for Results" again), and a
+  // second run must replace that pitch's row rather than duplicate it.
+  const newRowsByPitchId = new Map(newRows.map((row) => [row.__intendedZonePitchId, row]));
+  const untouchedExistingRows = (existingForDate?.rowsJson ?? []).filter(
+    (row) => !newRowsByPitchId.has(String(row.__intendedZonePitchId ?? ''))
+  );
+  const combinedRows = [...untouchedExistingRows, ...newRows];
+
+  const saved = await saveBullpenLogEntry({
+    organizationId: input.organizationId,
+    playerId,
+    userId: input.userId,
+    templateId: INTENDED_TARGET_LIVE_TEMPLATE_ID,
+    bullpenDate,
+    rowsJson: combinedRows,
+  });
+  if (!saved.ok) return saved;
+  return { ok: true, rowsSaved: newRows.length };
+}
+
+/** Removes exactly this Intended Target session's rows from wherever
+ * saveIntendedTargetSessionToBullpenLog wrote them (identified by the
+ * hidden __intendedZoneSessionId tag on each row, not by date/player alone,
+ * since a day's bullpen log entry can hold rows from more than one
+ * session). Must be called BEFORE deleteIntendedZoneSession -- it needs the
+ * session's pitcherName/startedAt to find the right log entry, which is
+ * gone once the session row itself is deleted. Best-effort/no-op safe: if
+ * nothing was ever logged for this session (never ended, or count tracking
+ * wasn't on), there's nothing to find and this is a harmless no-op. */
+export async function removeIntendedZoneSessionFromBullpenLog(input: {
+  organizationId: number;
+  sessionId: number;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: true };
+  const izSession = await getIntendedZoneSession({ organizationId: input.organizationId, sessionId: input.sessionId });
+  if (!izSession || !izSession.pitcherName) return { ok: true };
+
+  const playerId = await getPlayerIdByName({ organizationId: input.organizationId, playerName: izSession.pitcherName });
+  if (!playerId) return { ok: true };
+
+  const bullpenDate = izSession.startedAt.slice(0, 10);
+  const entries = await getBullpenLogEntries({
+    organizationId: input.organizationId,
+    playerId,
+    templateId: INTENDED_TARGET_LIVE_TEMPLATE_ID,
+  });
+  const entry = entries.find((row) => row.bullpenDate === bullpenDate);
+  if (!entry) return { ok: true };
+
+  const sessionIdTag = String(input.sessionId);
+  const remainingRows = entry.rowsJson.filter((row) => String(row.__intendedZoneSessionId ?? '') !== sessionIdTag);
+  if (remainingRows.length === entry.rowsJson.length) return { ok: true };
+
+  return saveBullpenLogEntry({
+    organizationId: input.organizationId,
+    playerId,
+    userId: null,
+    templateId: INTENDED_TARGET_LIVE_TEMPLATE_ID,
+    bullpenDate,
+    rowsJson: remainingRows,
+  });
+}
+
+/** Removes exactly one pitch's row from the bullpen log, if it was ever
+ * logged there -- the per-pitch counterpart to
+ * removeIntendedZoneSessionFromBullpenLog, for deleting a single mis-tap
+ * from the pitch log after its session already ended and was saved. Must be
+ * called BEFORE deleteIntendedZonePitch -- resolves the owning session's
+ * pitcher (and from that, the player) by pitchId, which is gone once the
+ * pitch row itself is deleted. Best-effort/no-op safe throughout: an
+ * unresolvable player, or a pitch that was never logged (deleted mid-
+ * session, before the bullpen-log write happens on session end), is a
+ * harmless no-op rather than an error. */
+export async function removeIntendedZonePitchFromBullpenLog(input: {
+  organizationId: number;
+  pitchId: number;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: true };
+  const pool = getDbPool();
+  const owner = await pool.query<{ pitcher_name: string | null }>(
+    `SELECT s.pitcher_name
+     FROM intended_zone_pitches izp
+     JOIN intended_zone_sessions s ON s.id = izp.session_id
+     WHERE izp.id = $1 AND izp.organization_id = $2
+     LIMIT 1`,
+    [input.pitchId, input.organizationId]
+  );
+  const pitcherName = owner.rows[0]?.pitcher_name;
+  if (!pitcherName) return { ok: true };
+
+  const playerId = await getPlayerIdByName({ organizationId: input.organizationId, playerName: pitcherName });
+  if (!playerId) return { ok: true };
+
+  const entries = await getBullpenLogEntries({
+    organizationId: input.organizationId,
+    playerId,
+    templateId: INTENDED_TARGET_LIVE_TEMPLATE_ID,
+  });
+  const pitchIdTag = String(input.pitchId);
+  const entry = entries.find((row) => row.rowsJson.some((r) => String(r.__intendedZonePitchId ?? '') === pitchIdTag));
+  if (!entry) return { ok: true };
+
+  const remainingRows = entry.rowsJson.filter((row) => String(row.__intendedZonePitchId ?? '') !== pitchIdTag);
+  return saveBullpenLogEntry({
+    organizationId: input.organizationId,
+    playerId,
+    userId: null,
+    templateId: INTENDED_TARGET_LIVE_TEMPLATE_ID,
+    bullpenDate: entry.bullpenDate,
+    rowsJson: remainingRows,
+  });
 }
 
 /** Un-ends a completed session so its pitch log can be edited (delete a bad
@@ -1424,6 +1661,104 @@ export async function placeOrMoveIntendedZoneTarget(input: {
   }
 }
 
+/** Edits the intended target location for a pitch that ALREADY landed and
+ * matched (or, harmlessly, one that hasn't yet) -- for correcting a mis-tap
+ * the coach only notices after the fact, live or from the historical pitch
+ * log. Unlike placeOrMoveIntendedZoneTarget (which only ever moves an
+ * unmatched pending row), this updates any row for this pitchId regardless
+ * of match state. Recomputes miss_distance_ft/miss_direction from the
+ * pitch's EXISTING actual landing location against the new intended
+ * coordinates -- the actual location itself is never touched by this
+ * function, only where the coach intended to throw. Uses the exact same
+ * formula as matchIntendedZonePitch (see its own comment for the geometry)
+ * so a re-edited target's miss stats stay consistent with every other
+ * pitch's. pitcherThrows comes from the linked pitch_events row (same join
+ * listIntendedZonePitches uses), needed for classifyMissDirection's arm-
+ * side/glove-side handedness flip. */
+export async function updateMatchedIntendedZoneTarget(input: {
+  organizationId: number;
+  pitchId: number;
+  intendedSideFt: number;
+  intendedHeightFt: number;
+  targetRadiusFt: number;
+}): Promise<{ ok: true; pitch: IntendedZonePitchRow } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureIntendedZoneSchema();
+  const pool = getDbPool();
+
+  const existing = await pool.query<{ plate_loc_side: string | null; plate_loc_height: string | null; pitcherthrows: string | null }>(
+    `SELECT izp.plate_loc_side, izp.plate_loc_height, pe.pitcherthrows
+     FROM intended_zone_pitches izp
+     LEFT JOIN pitch_events pe ON pe.id = izp.pitch_events_id
+     WHERE izp.id = $1 AND izp.organization_id = $2
+     LIMIT 1`,
+    [input.pitchId, input.organizationId]
+  );
+  const row = existing.rows[0];
+  if (!row) return { ok: false, error: 'Pitch was not found.' };
+
+  const plateLocSide = row.plate_loc_side !== null ? Number(row.plate_loc_side) : null;
+  const plateLocHeight = row.plate_loc_height !== null ? Number(row.plate_loc_height) : null;
+  let missDistanceFt: number | null = null;
+  let missDirection: IntendedZoneMissDirection | null = null;
+  if (plateLocSide !== null && plateLocHeight !== null) {
+    const missSideFt = plateLocSide - input.intendedSideFt;
+    const missHeightFt = plateLocHeight - input.intendedHeightFt;
+    missDistanceFt = Math.sqrt(missSideFt * missSideFt + missHeightFt * missHeightFt);
+    missDirection = classifyMissDirection({
+      missSideFt,
+      missHeightFt,
+      targetRadiusFt: input.targetRadiusFt,
+      pitcherThrows: row.pitcherthrows,
+    });
+  }
+
+  const updated = await pool.query(
+    `UPDATE intended_zone_pitches SET
+       intended_side_ft = $1,
+       intended_height_ft = $2,
+       target_radius_ft = $3,
+       miss_distance_ft = $4,
+       miss_direction = $5
+     WHERE id = $6 AND organization_id = $7
+     RETURNING id, session_id, pitch_index, trackman_play_id, intended_side_ft, intended_height_ft, target_radius_ft,
+       plate_loc_side, plate_loc_height, miss_distance_ft, miss_direction, pitch_type, rel_speed, induced_vert_break,
+       horz_break, pitch_events_id, thrown_at, tagged_pitcher_name, confirmed_at, is_strike, count_at_pitch, at_bat_index`,
+    [input.intendedSideFt, input.intendedHeightFt, input.targetRadiusFt, missDistanceFt, missDirection, input.pitchId, input.organizationId]
+  );
+  const updatedRow = updated.rows[0];
+  if (!updatedRow) return { ok: false, error: 'Pitch was not found.' };
+
+  return {
+    ok: true,
+    pitch: {
+      id: updatedRow.id,
+      sessionId: updatedRow.session_id,
+      pitchIndex: updatedRow.pitch_index,
+      trackmanPlayId: updatedRow.trackman_play_id,
+      intendedSideFt: Number(updatedRow.intended_side_ft),
+      intendedHeightFt: Number(updatedRow.intended_height_ft),
+      targetRadiusFt: Number(updatedRow.target_radius_ft),
+      plateLocSide: updatedRow.plate_loc_side !== null ? Number(updatedRow.plate_loc_side) : null,
+      plateLocHeight: updatedRow.plate_loc_height !== null ? Number(updatedRow.plate_loc_height) : null,
+      missDistanceFt: updatedRow.miss_distance_ft !== null ? Number(updatedRow.miss_distance_ft) : null,
+      missDirection: updatedRow.miss_direction,
+      pitchType: updatedRow.pitch_type,
+      relSpeed: updatedRow.rel_speed !== null ? Number(updatedRow.rel_speed) : null,
+      inducedVertBreak: updatedRow.induced_vert_break !== null ? Number(updatedRow.induced_vert_break) : null,
+      horzBreak: updatedRow.horz_break !== null ? Number(updatedRow.horz_break) : null,
+      pitchEventsId: updatedRow.pitch_events_id,
+      thrownAt: updatedRow.thrown_at,
+      taggedPitcherName: updatedRow.tagged_pitcher_name,
+      pitcherThrows: row.pitcherthrows,
+      confirmedAt: updatedRow.confirmed_at,
+      isStrike: updatedRow.is_strike,
+      countAtPitch: updatedRow.count_at_pitch,
+      atBatIndex: updatedRow.at_bat_index,
+    },
+  };
+}
+
 /** Locks in the session's current pending (unconfirmed, unmatched) target so
  * the FTP-deferred reconciliation (matchIntendedZoneSessionByPitcherAndTime)
  * treats it as a real "this is the target for the next pitch" moment rather
@@ -1570,7 +1905,7 @@ export async function matchIntendedZonePitch(input: {
        AND (trackman_play_id IS NULL OR trackman_play_id = $1)
      RETURNING id, session_id, pitch_index, trackman_play_id, intended_side_ft, intended_height_ft, target_radius_ft,
        plate_loc_side, plate_loc_height, miss_distance_ft, miss_direction, pitch_type, rel_speed, induced_vert_break,
-       horz_break, pitch_events_id, thrown_at, tagged_pitcher_name, confirmed_at`,
+       horz_break, pitch_events_id, thrown_at, tagged_pitcher_name, confirmed_at, is_strike, count_at_pitch, at_bat_index`,
     [
       input.trackmanPlayId,
       plateLocSide,
@@ -1613,6 +1948,9 @@ export async function matchIntendedZonePitch(input: {
       taggedPitcherName: row.tagged_pitcher_name,
       pitcherThrows: input.pitcherThrows,
       confirmedAt: row.confirmed_at,
+      isStrike: row.is_strike,
+      countAtPitch: row.count_at_pitch,
+      atBatIndex: row.at_bat_index,
     },
   };
 }
@@ -1729,7 +2067,8 @@ export async function listIntendedZonePitches(input: { organizationId: number; s
   const result = await pool.query(
     `SELECT izp.id, izp.session_id, izp.pitch_index, izp.trackman_play_id, izp.intended_side_ft, izp.intended_height_ft, izp.target_radius_ft,
        izp.plate_loc_side, izp.plate_loc_height, izp.miss_distance_ft, izp.miss_direction, izp.pitch_type, izp.rel_speed, izp.induced_vert_break,
-       izp.horz_break, izp.pitch_events_id, izp.thrown_at, izp.tagged_pitcher_name, izp.confirmed_at, pe.pitcherthrows
+       izp.horz_break, izp.pitch_events_id, izp.thrown_at, izp.tagged_pitcher_name, izp.confirmed_at,
+       izp.is_strike, izp.count_at_pitch, izp.at_bat_index, pe.pitcherthrows
      FROM intended_zone_pitches izp
      LEFT JOIN pitch_events pe ON pe.id = izp.pitch_events_id
      WHERE izp.session_id = $1 AND izp.organization_id = $2
@@ -1761,7 +2100,36 @@ export async function listIntendedZonePitches(input: { organizationId: number; s
     taggedPitcherName: row.tagged_pitcher_name,
     pitcherThrows: row.pitcherthrows,
     confirmedAt: row.confirmed_at,
+    isStrike: row.is_strike,
+    countAtPitch: row.count_at_pitch,
+    atBatIndex: row.at_bat_index,
   }));
+}
+
+/** Writes the coach's manual ball/strike call (plus the count/at-bat state
+ * at the moment of the call) onto one landed pitch -- Track Strikes & Count
+ * mode's per-pitch write, called right after the coach taps Ball or Strike.
+ * There is no ball/strike-count "auto-derived from location" here on
+ * purpose: a bullpen has no real batter/umpire, so the coach's tap is the
+ * only source of truth, independent of where the pitch actually landed. */
+export async function setIntendedZonePitchCount(input: {
+  organizationId: number;
+  pitchId: number;
+  isStrike: boolean;
+  countAtPitch: string;
+  atBatIndex: number;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureIntendedZoneSchema();
+  const pool = getDbPool();
+  const result = await pool.query(
+    `UPDATE intended_zone_pitches
+     SET is_strike = $1, count_at_pitch = $2, at_bat_index = $3
+     WHERE id = $4 AND organization_id = $5`,
+    [input.isStrike, input.countAtPitch, input.atBatIndex, input.pitchId, input.organizationId]
+  );
+  if ((result.rowCount ?? 0) === 0) return { ok: false, error: 'Pitch was not found.' };
+  return { ok: true };
 }
 
 export async function getPendingIntendedZoneTargetCursor(input: {
@@ -1871,6 +2239,7 @@ export async function listIntendedZonePitchLog(input: {
             izp.miss_direction, COALESCE(izp.pitch_type, 'Undefined') AS pitch_type,
             izp.rel_speed, izp.induced_vert_break, izp.horz_break,
             izp.pitch_events_id, izp.thrown_at, izp.tagged_pitcher_name, izp.confirmed_at,
+            izp.is_strike, izp.count_at_pitch, izp.at_bat_index,
             COALESCE(izp.tagged_pitcher_name, s.pitcher_name) AS pitcher_name,
             COALESCE(NULLIF(TRIM(pe.customlabel), ''), 'Baseball') AS ball_type,
             pe.pitcherthrows, s.mode, s.started_at
@@ -1908,6 +2277,9 @@ export async function listIntendedZonePitchLog(input: {
       taggedPitcherName: row.tagged_pitcher_name,
       pitcherThrows: row.pitcherthrows,
       confirmedAt: row.confirmed_at,
+      isStrike: row.is_strike,
+      countAtPitch: row.count_at_pitch,
+      atBatIndex: row.at_bat_index,
       pitcherName: String(row.pitcher_name ?? ''),
       ballType: String(row.ball_type),
       sessionMode: row.mode as IntendedZoneSessionMode,
@@ -1945,6 +2317,7 @@ export async function getIntendedZonePitchesByPitchEventsIds(input: {
             izp.miss_direction, COALESCE(izp.pitch_type, 'Undefined') AS pitch_type,
             izp.rel_speed, izp.induced_vert_break, izp.horz_break,
             izp.pitch_events_id, izp.thrown_at, izp.tagged_pitcher_name, izp.confirmed_at,
+            izp.is_strike, izp.count_at_pitch, izp.at_bat_index,
             COALESCE(izp.tagged_pitcher_name, s.pitcher_name) AS pitcher_name,
             COALESCE(NULLIF(TRIM(pe.customlabel), ''), 'Baseball') AS ball_type,
             pe.pitcherthrows, s.mode, s.started_at
@@ -1986,6 +2359,9 @@ export async function getIntendedZonePitchesByPitchEventsIds(input: {
       taggedPitcherName: row.tagged_pitcher_name,
       pitcherThrows: row.pitcherthrows,
       confirmedAt: row.confirmed_at,
+      isStrike: row.is_strike,
+      countAtPitch: row.count_at_pitch,
+      atBatIndex: row.at_bat_index,
       pitcherName: String(row.pitcher_name ?? ''),
       ballType: String(row.ball_type),
       sessionMode: row.mode as IntendedZoneSessionMode,
@@ -10915,6 +11291,28 @@ export function nameOrderingVariants(value: string): string[] {
     }
   }
   return Array.from(variants);
+}
+
+/** Resolves a players.id from a display name (e.g. an Intended Target
+ * session's free-text pitcher_name), scoped to the caller's own organization
+ * so one org can never pick up another org's player. Returns null on no
+ * match or an ambiguous (>1 row) match -- callers should treat both the
+ * same way (skip whatever name-dependent write they were about to do). */
+export async function getPlayerIdByName(input: {
+  organizationId: number;
+  playerName: string;
+}): Promise<number | null> {
+  if (!isDatabaseConfigured()) return null;
+  const nameVariants = nameOrderingVariants(input.playerName);
+  if (!nameVariants.length) return null;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{ id: number }>(
+    `SELECT id FROM players WHERE organization_id = $1 AND full_name = ANY($2::text[]) LIMIT 2`,
+    [input.organizationId, nameVariants]
+  );
+  if ((result.rowCount ?? 0) !== 1) return null;
+  return result.rows[0].id;
 }
 
 /** Resolves a school player's PRO link by their display name (as it appears

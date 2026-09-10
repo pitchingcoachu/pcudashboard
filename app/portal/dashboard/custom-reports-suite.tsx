@@ -13,6 +13,8 @@ import NativeDateInput from '../components/native-date-input';
 import AiReportSummary from './ai-report-summary';
 import { DirectionHeatmap, type DirectionBreakdown } from './intended-zone-stats';
 import { IntendedTargetMapMini } from './intended-target-map-mini';
+import { deliverReportPdf } from '../../../lib/report-pdf-delivery';
+import { ReportActionsDropdown, type AutomationPanelSeed } from '../components/save-report-to-profile';
 
 type OptionItem = { value: string; label: string };
 type ReportType = 'Pitching' | 'Hitting' | 'Catching';
@@ -2309,9 +2311,7 @@ type CustomReportsSuiteProps = {
 export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomReportsSuiteProps) {
   const [chartHover, setChartHover] = useState<{ x: number; y: number; text: string; bg?: string; textColor?: string } | null>(null);
   const reportCanvasRef = useRef<HTMLElement | null>(null);
-  const exportMenuRootRef = useRef<HTMLDivElement | null>(null);
   const [isExporting, setIsExporting] = useState(false);
-  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [isMobileView, setIsMobileView] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -4700,7 +4700,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         pdf.rect(0, 0, pageWidth, pageHeight, 'F');
         pdf.addImage(canvas.toDataURL('image/jpeg', 0.84), 'JPEG', drawX, drawY, drawWidth, drawHeight, undefined, 'FAST');
         const safeName = (reportHeaderTitle || 'custom-report').replace(/[^a-z0-9_-]+/gi, '-').replace(/-+/g, '-');
-        pdf.save(`${safeName}.pdf`);
+        deliverReportPdf(pdf, `${safeName}.pdf`, reportHeaderTitle || 'Custom Report');
         return;
       }
 
@@ -4799,7 +4799,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       }
 
       const safeName = (reportHeaderTitle || 'custom-report').replace(/[^a-z0-9_-]+/gi, '-').replace(/-+/g, '-');
-      pdf.save(`${safeName}.pdf`);
+      deliverReportPdf(pdf, `${safeName}.pdf`, reportHeaderTitle || 'Custom Report');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'PDF export failed.');
     } finally {
@@ -4919,15 +4919,20 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     []
   );
 
-  useEffect(() => {
-    if (!isExportMenuOpen) return;
-    const onDocClick = (event: MouseEvent) => {
-      if (!exportMenuRootRef.current) return;
-      if (!exportMenuRootRef.current.contains(event.target as Node)) setIsExportMenuOpen(false);
-    };
-    document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
-  }, [isExportMenuOpen]);
+  const automationPanelSeeds = Array.from(Object.entries(cellRequestUrls).reduce((panels,[cellId,requestUrl]) => {
+    if (!requestUrl) return panels;
+    const sourceId = reportScope === 'Team'
+      ? sourceCellIdForTeamScope(cellId,reportRows)
+      : reportScope === 'Multi-Player' ? templateCellIdForRow(cellId) : cellId;
+    if (panels.has(sourceId)) return panels;
+    const config = reportScope === 'Team'
+      ? normalizeCellConfig(cellConfigs[sourceCellIdForTeamScope(cellId, reportRows)])
+      : effectiveCellConfigForScope(cellId, reportScope, cellConfigs);
+    const panelType = normalizePanelType(config.panelType);
+    if (!panelType || panelType === 'Note Section') return panels;
+    panels.set(sourceId,{id:sourceId,title:config.title || panelType,requestUrl});
+    return panels;
+  },new Map<string,AutomationPanelSeed>()).values());
 
   return (
     <section className="portal-panel portal-admin-panel" style={{ padding: '1rem' }}>
@@ -4937,35 +4942,15 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             {sidebarVisible ? 'Hide Filters' : 'Show Filters'}
           </button>
         ) : null}
-        <div ref={exportMenuRootRef} className="portal-custom-reports-export-split">
-          <button type="button" className="btn btn-primary" onClick={downloadReportPdf} disabled={isExporting}>
-            {isExporting ? 'Exporting...' : 'Download as PDF'}
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => setIsExportMenuOpen((value) => !value)}
-            disabled={isExporting}
-            aria-label="More download options"
-            aria-expanded={isExportMenuOpen}
-          >
-            ▾
-          </button>
-          {isExportMenuOpen ? (
-            <div className="portal-custom-reports-export-menu">
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={() => {
-                  setIsExportMenuOpen(false);
-                  downloadReportPng();
-                }}
-              >
-                Download as PNG
-              </button>
-            </div>
-          ) : null}
-        </div>
+        <ReportActionsDropdown
+          generate={downloadReportPdf}
+          downloadPng={downloadReportPng}
+          title={reportHeaderTitle || 'Custom Report'}
+          reportKey={`${reportType.toLowerCase()}-custom-report`}
+          includeAiSummaryByDefault={showAiSummary}
+          automationPanels={automationPanelSeeds}
+          disabled={isExporting}
+        />
       </div>
       <div className={`portal-dashboard-suite-layout portal-custom-reports-layout${sidebarVisible ? '' : ' portal-custom-reports-layout--no-sidebar'}`}>
         {sidebarVisible ? (

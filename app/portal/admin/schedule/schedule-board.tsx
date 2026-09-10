@@ -3,6 +3,8 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
+import { deliverReportPdf } from '../../../../lib/report-pdf-delivery';
+import { SaveReportToProfileButton } from '../../components/save-report-to-profile';
 import ExerciseVideoPlayer from '../../../../components/exercise-video-player';
 import type { ProgramItemRow, ProgramPlanSection, ThrowingFieldDef } from '../../../../lib/training-db';
 import {
@@ -1913,7 +1915,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         throwingBuilderMode === 'weeks'
           ? `week-template-${Math.max(THROWING_MIN_WEEKS, throwingTemplateWeekCount)}`
           : fromIsoDate(anchorDate).toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' }).replaceAll(' ', '-');
-      pdf.save(`throwing-calendar-${monthName}.pdf`);
+      deliverReportPdf(pdf, `throwing-calendar-${monthName}.pdf`, `Throwing Calendar - ${monthName}`);
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Failed to generate PDF.');
     }
@@ -4208,7 +4210,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       }
 
       const safeTitle = scriptTitle.replace(/[^a-z0-9]+/gi, '-').replace(/(^-|-$)/g, '').toLowerCase() || 'bullpen-script';
-      pdf.save(`${safeTitle}.pdf`);
+      deliverReportPdf(pdf, `${safeTitle}.pdf`, scriptTitle);
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Failed to export bullpen script PDF.');
     }
@@ -4376,9 +4378,10 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                     Week Builder
                   </button>
                   {throwingBuilderMode === 'weeks' && (
-                    <button type="button" className="btn btn-ghost" onClick={() => void downloadThrowingCalendar()}>
-                      Download PDF
-                    </button>
+                    <>
+                      <button type="button" className="btn btn-ghost" onClick={() => void downloadThrowingCalendar()}>Download PDF</button>
+                      <SaveReportToProfileButton generate={downloadThrowingCalendar} title="Throwing Calendar" />
+                    </>
                   )}
                   <button
                     type="button"
@@ -4470,9 +4473,10 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                   </div>
                 )}
                 {throwingBuilderMode !== 'weeks' && throwingCalendarView !== 'day' && (
-                  <button type="button" className="btn btn-ghost" onClick={() => void downloadThrowingCalendar()}>
-                    Download PDF
-                  </button>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button type="button" className="btn btn-ghost" onClick={() => void downloadThrowingCalendar()}>Download PDF</button>
+                    <SaveReportToProfileButton generate={downloadThrowingCalendar} title="Throwing Calendar" />
+                  </div>
                 )}
               </>
             )}
@@ -4496,6 +4500,11 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                   >
                     Download PDF
                   </button>
+                  <SaveReportToProfileButton
+                    generate={downloadBullpenScript}
+                    title={activeCurrent.title.trim() || (isHittingView ? 'Hitting Script' : isVelocityView ? 'Velocity Script' : 'Bullpen Script')}
+                    className="btn btn-ghost"
+                  />
                   <button
                     type="button"
                     className="btn btn-ghost"

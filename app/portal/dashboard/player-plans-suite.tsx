@@ -5,6 +5,8 @@ import { useSearchParams } from 'next/navigation';
 import { formatTableDisplayValue } from '../../../lib/table-sort';
 import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
 import NativeDateInput from '../components/native-date-input';
+import { deliverReportPdf } from '../../../lib/report-pdf-delivery';
+import { SaveReportToProfileButton } from '../components/save-report-to-profile';
 
 type Domain = 'Pitching' | 'Hitting' | 'Catching';
 type GoalSlot = 1 | 2 | 3;
@@ -2100,7 +2102,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
       pdf.rect(0, 0, pageWidth, pageHeight, 'F');
       pdf.addImage(canvas.toDataURL('image/png'), 'PNG', x, y, drawWidth, drawHeight, undefined, 'FAST');
       const safeName = normalizeNameKey(centeredName || 'player-plan') || 'player-plan';
-      pdf.save(`${safeName}-development-plan.pdf`);
+      deliverReportPdf(pdf, `${safeName}-development-plan.pdf`, `${centeredName || selectedPlayerName || 'Player'} Development Plan`);
     } finally {
       exportRoot?.remove();
       setIsExportingPlanPdf(false);
@@ -4330,6 +4332,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
         <button type="button" className="btn btn-ghost" onClick={() => void downloadPlayerPlanPdf()} disabled={isExportingPlanPdf}>
           {isExportingPlanPdf ? 'Downloading PDF...' : 'Download PDF'}
         </button>
+        <SaveReportToProfileButton generate={downloadPlayerPlanPdf} title={`${centeredName || selectedPlayerName || 'Player'} Development Plan`} preferredPlayerId={selectedPlayerId || null} preferredPlayerName={centeredName || selectedPlayerName} disabled={isExportingPlanPdf} />
         <button type="button" className="btn btn-ghost" onClick={() => setPlanFiltersVisible((prev) => !prev)}>
           {planFiltersVisible ? 'Hide Filters' : 'Show Filters'}
         </button>

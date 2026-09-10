@@ -9,8 +9,10 @@ import {
   listIntendedZoneSessionsForPitcher,
   matchIntendedZoneSessionByPitcherAndTime,
   refreshIntendedZonePitchMetadata,
+  removeIntendedZoneSessionFromBullpenLog,
   reopenIntendedZoneSession,
   resetIntendedZoneSessionMatches,
+  saveIntendedTargetSessionToBullpenLog,
   startIntendedZoneSession,
 } from '../../../../../../lib/training-db';
 import { discoverPracticeSessions, getPracticePlays } from '../../../../../../lib/trackman-data-api';
@@ -114,6 +116,17 @@ export async function PATCH(request: Request) {
   if (body.action === 'check_ftp_match') {
     const matchResult = await matchIntendedZoneSessionByPitcherAndTime({ organizationId, sessionId });
     if (!matchResult.ok) return NextResponse.json({ error: matchResult.error }, { status: 400 });
+    // Best-effort: if this session's Track Strikes & Count results were
+    // already saved to the bullpen log with "Pending" In Zone values (no
+    // location data at the time it first ended), a newly-matched pitch's
+    // real location is now available -- re-save so that row updates from
+    // "Pending" to its real value. A session with nothing logged (count
+    // tracking wasn't on, or it never ended) is a harmless no-op here.
+    try {
+      await saveIntendedTargetSessionToBullpenLog({ organizationId, sessionId, userId: session.userId ?? null });
+    } catch (error) {
+      console.error('[intended-zone] bullpen log re-save after FTP match failed:', error);
+    }
     return NextResponse.json({ ok: true, matched: matchResult.matched });
   }
 
@@ -151,7 +164,19 @@ export async function PATCH(request: Request) {
 
   const result = await endIntendedZoneSession({ organizationId, sessionId });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
-  return NextResponse.json({ ok: true });
+
+  // Best-effort, same as the Plays metadata refresh above: a naming
+  // mismatch or missing player link must never block ending the session --
+  // the Intended Target pitch data itself is already saved regardless.
+  let bullpenLogSaved = false;
+  try {
+    const saved = await saveIntendedTargetSessionToBullpenLog({ organizationId, sessionId, userId: session.userId ?? null });
+    bullpenLogSaved = saved.ok && saved.rowsSaved > 0;
+  } catch (error) {
+    console.error('[intended-zone] bullpen log save failed:', error);
+  }
+
+  return NextResponse.json({ ok: true, bullpenLogSaved });
 }
 
 export async function DELETE(request: Request) {
@@ -166,6 +191,16 @@ export async function DELETE(request: Request) {
   const url = new URL(request.url);
   const sessionId = Number(url.searchParams.get('sessionId') ?? '0');
   if (!Number.isFinite(sessionId) || sessionId <= 0) return NextResponse.json({ error: 'sessionId is required.' }, { status: 400 });
+
+  // Must run before the delete -- it needs the (about to be deleted)
+  // session's pitcherName/startedAt to find its bullpen-log rows.
+  // Best-effort: a bullpen-log cleanup failure must not block deleting the
+  // Intended Target session itself.
+  try {
+    await removeIntendedZoneSessionFromBullpenLog({ organizationId, sessionId });
+  } catch (error) {
+    console.error('[intended-zone] bullpen log cleanup failed:', error);
+  }
 
   const result = await deleteIntendedZoneSession({ organizationId, sessionId });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });

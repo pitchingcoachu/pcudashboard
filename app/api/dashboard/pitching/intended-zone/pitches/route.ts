@@ -13,7 +13,10 @@ import {
   queueIntendedZoneTarget,
   recordManualIntendedZonePitch,
   refreshIntendedZonePitchMetadata,
+  removeIntendedZonePitchFromBullpenLog,
+  setIntendedZonePitchCount,
   setPendingIntendedZoneTargetBallCount,
+  updateMatchedIntendedZoneTarget,
 } from '../../../../../../lib/training-db';
 import { getPracticeBalls, getPracticePlays, type TrackmanPitchBall } from '../../../../../../lib/trackman-data-api';
 import { listBufferedTrackmanPitches, type TrackmanFlightData } from '../../../../../../lib/trackman-live-webhook';
@@ -49,6 +52,23 @@ export async function GET(request: Request) {
   const izSession = await getIntendedZoneSession({ organizationId, sessionId });
   if (!izSession) return NextResponse.json({ error: 'Session was not found.' }, { status: 404 });
   const liveFlightByPlayId = new Map<string, TrackmanFlightData>();
+  // Set to the most recent post-mutation listIntendedZonePitches read this
+  // request, if any (the syncFallback block below does one when it runs).
+  // The final response reuses it instead of doing a 3rd redundant full-
+  // session read when nothing after it could have changed the data.
+  let latestPitches: Awaited<ReturnType<typeof listIntendedZonePitches>> | null = null;
+
+  // Client-provided cursor (this poll's own request timestamp, set by the
+  // caller right before it fired) -- bounds the webhook buffer read to only
+  // rows touched since the last poll instead of the whole session's
+  // history, which is what previously made every poll's cost grow with
+  // pitch count (full JSONB re-parse + diff over every pitch thrown so
+  // far, every ~2s). See listBufferedTrackmanPitches's own doc comment for
+  // why this cursors on updated_at, not received_at. Absent/invalid falls
+  // back to full history (e.g. first poll after starting/resuming, where
+  // there's nothing to bound against yet).
+  const sincePollRaw = url.searchParams.get('sincePoll');
+  const sincePoll = sincePollRaw && !Number.isNaN(Date.parse(sincePollRaw)) ? sincePollRaw : null;
 
   if (izSession.trackmanSessionId) {
     const webhookReceivedAtByPlayId = new Map<string, string>();
@@ -56,11 +76,18 @@ export async function GET(request: Request) {
     // soon as TrackMan pushes them, including when the coach's browser is
     // briefly offline; polling this route only drains that durable buffer.
     try {
-      const buffered = await listBufferedTrackmanPitches(izSession.trackmanSessionId);
+      const buffered = await listBufferedTrackmanPitches(izSession.trackmanSessionId, sincePoll);
       for (const pitch of buffered) {
         if (pitch.receivedAt) webhookReceivedAtByPlayId.set(pitch.playId, pitch.receivedAt);
         if (pitch.flightData) liveFlightByPlayId.set(pitch.playId, pitch.flightData);
       }
+      // One read serves both this diff loop AND (further down) the
+      // syncFallback block's existingByPlayId -- collapses what was 3
+      // separate full-session listIntendedZonePitches calls per poll (this
+      // one, syncFallback's own, and the final response's) down to 2: this
+      // pre-mutation snapshot, and one post-mutation read reused for both
+      // syncFallback and the response, since matchIntendedZonePitch calls
+      // below can change what a fresh read would return.
       const existing = await listIntendedZonePitches({ organizationId, sessionId });
       const existingByPlayId = new Map<string, (typeof existing)[number]>();
       for (const pitch of existing) {
@@ -156,6 +183,11 @@ export async function GET(request: Request) {
         });
 
         const trackedPitches = balls.filter(isTrackedPitch);
+        // Fresh read required here (not the pre-webhook-loop `existing`
+        // above) -- the webhook diff loop above may have just called
+        // matchIntendedZonePitch, and this block's own existingByPlayId.has
+        // check needs to see that mutation to avoid re-matching a pitch the
+        // webhook path already matched moments earlier in this same request.
         const existing = await listIntendedZonePitches({ organizationId, sessionId });
         const existingByPlayId = new Map<string, (typeof existing)[number]>();
         for (const pitch of existing) {
@@ -166,6 +198,7 @@ export async function GET(request: Request) {
         // watermark means the snapshot failed, so Data API matching fails closed
         // and the timestamped webhook remains the only safe live path.
         const pendingCursor = await getPendingIntendedZoneTargetCursor({ organizationId, sessionId });
+        let fallbackMatched = false;
         if (pendingCursor?.trackmanBallCountAtTarget !== null && pendingCursor?.trackmanBallCountAtTarget !== undefined) {
           for (let trackmanBallIndex = pendingCursor.trackmanBallCountAtTarget; trackmanBallIndex < trackedPitches.length; trackmanBallIndex += 1) {
             const ball = trackedPitches[trackmanBallIndex];
@@ -188,9 +221,16 @@ export async function GET(request: Request) {
               targetCreatedBefore: webhookReceivedAtByPlayId.get(ball.playId) ?? null,
               trackmanBallIndex,
             });
-            if (matched.ok) break;
+            if (matched.ok) {
+              fallbackMatched = true;
+              break;
+            }
           }
         }
+        // Only safe to reuse for the final response if nothing after this
+        // read (i.e. the loop above) actually mutated a pitch -- otherwise
+        // `existing` is stale and the response must re-fetch.
+        if (!fallbackMatched) latestPitches = existing;
       } catch (error) {
         // Best-effort: if TrackMan is briefly unreachable, still return
         // whatever's already stored rather than failing the whole poll.
@@ -199,7 +239,7 @@ export async function GET(request: Request) {
     }
   }
 
-  const pitches = await listIntendedZonePitches({ organizationId, sessionId });
+  const pitches = latestPitches ?? (await listIntendedZonePitches({ organizationId, sessionId }));
   return NextResponse.json({
     session: izSession,
     pitches: pitches.map((pitch) => ({
@@ -338,11 +378,18 @@ export async function PUT(request: Request) {
   return NextResponse.json(result);
 }
 
-// PATCH -> locks in the session's current pending target (FTP-deferred
-// mode's "Confirm Target" button). Only a confirmed target is eligible for
-// the FTP reconciliation job to match against an incoming pitch_events row,
-// and the next tap after confirming starts a new target instead of moving
-// this one -- see confirmIntendedZoneTarget for the full rationale.
+// PATCH { action: 'confirm_target', sessionId } (default when action is
+// omitted, for backward compatibility) -> locks in the session's current
+// pending target (FTP-deferred mode's "Confirm Target" button). Only a
+// confirmed target is eligible for the FTP reconciliation job to match
+// against an incoming pitch_events row, and the next tap after confirming
+// starts a new target instead of moving this one -- see
+// confirmIntendedZoneTarget for the full rationale.
+//
+// PATCH { action: 'set_count', pitchId, isStrike, countAtPitch, atBatIndex }
+// -> Track Strikes & Count mode's manual Ball/Strike call for one landed
+// pitch. See setIntendedZonePitchCount for why this is a manual call rather
+// than derived from pitch location.
 export async function PATCH(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromRequest(request, cookieStore);
@@ -352,8 +399,61 @@ export async function PATCH(request: Request) {
   const organizationId = await resolveProgrammingOrganizationId(session);
   if (organizationId <= 0) return NextResponse.json({ error: 'Session context missing.' }, { status: 400 });
 
-  const body = (await request.json().catch(() => null)) as { sessionId?: number } | null;
-  const sessionId = Number(body?.sessionId ?? 0);
+  const body = (await request.json().catch(() => null)) as
+    | {
+        action?: string;
+        sessionId?: number;
+        pitchId?: number;
+        isStrike?: boolean;
+        countAtPitch?: string;
+        atBatIndex?: number;
+        intendedSideFt?: number;
+        intendedHeightFt?: number;
+        targetRadiusFt?: number;
+      }
+    | null;
+  if (!body) return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
+
+  if (body.action === 'set_count') {
+    const pitchId = Number(body.pitchId ?? 0);
+    const atBatIndex = Number(body.atBatIndex ?? -1);
+    if (!Number.isFinite(pitchId) || pitchId <= 0 || typeof body.isStrike !== 'boolean' || !Number.isFinite(atBatIndex) || atBatIndex < 0) {
+      return NextResponse.json({ error: 'pitchId, isStrike, and atBatIndex are required.' }, { status: 400 });
+    }
+    const result = await setIntendedZonePitchCount({
+      organizationId,
+      pitchId,
+      isStrike: body.isStrike,
+      countAtPitch: String(body.countAtPitch ?? '').trim(),
+      atBatIndex,
+    });
+    if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
+    return NextResponse.json({ ok: true });
+  }
+
+  // Correct an intended target the coach only notices was wrong after the
+  // pitch already landed/matched -- see updateMatchedIntendedZoneTarget's
+  // doc comment for why this is a separate action from confirm_target/the
+  // PUT handler's placeOrMoveIntendedZoneTarget (neither of which can touch
+  // an already-matched row).
+  if (body.action === 'edit_target') {
+    const pitchId = Number(body.pitchId ?? 0);
+    const intendedSideFt = Number(body.intendedSideFt);
+    const intendedHeightFt = Number(body.intendedHeightFt);
+    const targetRadiusFt = Number(body.targetRadiusFt);
+    if (
+      !Number.isFinite(pitchId) || pitchId <= 0 ||
+      !Number.isFinite(intendedSideFt) || !Number.isFinite(intendedHeightFt) ||
+      !Number.isFinite(targetRadiusFt) || targetRadiusFt <= 0
+    ) {
+      return NextResponse.json({ error: 'pitchId, intendedSideFt, intendedHeightFt, and targetRadiusFt are required.' }, { status: 400 });
+    }
+    const result = await updateMatchedIntendedZoneTarget({ organizationId, pitchId, intendedSideFt, intendedHeightFt, targetRadiusFt });
+    if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
+    return NextResponse.json({ ok: true, pitch: result.pitch });
+  }
+
+  const sessionId = Number(body.sessionId ?? 0);
   if (!Number.isFinite(sessionId) || sessionId <= 0) {
     return NextResponse.json({ error: 'sessionId is required.' }, { status: 400 });
   }
@@ -377,6 +477,15 @@ export async function DELETE(request: Request) {
   const url = new URL(request.url);
   const pitchId = Number(url.searchParams.get('pitchId') ?? '0');
   if (!Number.isFinite(pitchId) || pitchId <= 0) return NextResponse.json({ error: 'pitchId is required.' }, { status: 400 });
+
+  // Must run before the delete -- it needs to look up the (about to be
+  // deleted) pitch's owning session/pitcher. Best-effort: a bullpen-log
+  // cleanup failure must not block deleting the pitch itself.
+  try {
+    await removeIntendedZonePitchFromBullpenLog({ organizationId, pitchId });
+  } catch (error) {
+    console.error('[intended-zone] bullpen log cleanup failed:', error);
+  }
 
   const result = await deleteIntendedZonePitch({ organizationId, pitchId });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });

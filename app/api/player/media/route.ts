@@ -180,6 +180,8 @@ async function recordMediaNotification(request: Request, input: {
 
   const actorName = String(input.allowed.session.name ?? input.allowed.session.email ?? '').trim() || 'Someone';
   const mediaLabel = `${input.mediaType[0]?.toUpperCase() ?? ''}${input.mediaType.slice(1)}`;
+  const isGeneratedReport = input.mediaType === 'pdf' && input.sourceType === 'generated_report';
+  const notificationTitle = isGeneratedReport ? 'Report saved to profile' : `${mediaLabel} uploaded`;
 
   if (input.allowed.session.role === 'player') {
     const context = await getPlayerNotificationContext({
@@ -190,8 +192,8 @@ async function recordMediaNotification(request: Request, input: {
       schoolCode: context?.schoolCode ?? null,
       excludeUserId: input.allowed.session.userId ?? null,
       eventType: 'media_uploaded',
-      title: `${mediaLabel} uploaded`,
-      detail: `${actorName} uploaded ${input.mediaTitle}`,
+      title: notificationTitle,
+      detail: isGeneratedReport ? `${actorName} saved ${input.mediaTitle} to their profile` : `${actorName} uploaded ${input.mediaTitle}`,
       path: profilePath,
       actorUserId: input.allowed.session.userId ?? null,
       actorName,
@@ -202,8 +204,8 @@ async function recordMediaNotification(request: Request, input: {
     if (recipients.length > 0) {
       await sendPushNotificationToUsers({
         userIds: recipients,
-        title: `${mediaLabel} uploaded`,
-        body: `${actorName} uploaded ${input.mediaTitle}${input.allowed.playerName ? ` for ${input.allowed.playerName}` : ''}`,
+        title: notificationTitle,
+        body: isGeneratedReport ? `${actorName} saved ${input.mediaTitle}` : `${actorName} uploaded ${input.mediaTitle}${input.allowed.playerName ? ` for ${input.allowed.playerName}` : ''}`,
         data: { path: profilePath },
       });
     }
@@ -217,8 +219,8 @@ async function recordMediaNotification(request: Request, input: {
   const recipients = await notifyPlayerForStaffActivity({
     playerUserId: context?.userId ?? null,
     eventType: 'media_uploaded',
-    title: `${mediaLabel} uploaded`,
-    detail: `${actorName} uploaded ${input.mediaTitle}`,
+    title: notificationTitle,
+    detail: isGeneratedReport ? `${actorName} saved ${input.mediaTitle} to your profile` : `${actorName} uploaded ${input.mediaTitle}`,
     path: profilePath,
     actorUserId: input.allowed.session.userId ?? null,
     actorName,
@@ -229,8 +231,8 @@ async function recordMediaNotification(request: Request, input: {
   if (recipients.length > 0) {
     await sendPushNotificationToUsers({
       userIds: recipients,
-      title: `${mediaLabel} uploaded`,
-      body: `${actorName} uploaded ${input.mediaTitle}`,
+      title: notificationTitle,
+      body: isGeneratedReport ? `${actorName} saved ${input.mediaTitle} to your profile` : `${actorName} uploaded ${input.mediaTitle}`,
       data: { path: profilePath },
     });
   }

@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { deliverReportPdf } from '../../../../lib/report-pdf-delivery';
+import { SaveReportToProfileButton } from '../../components/save-report-to-profile';
 
 type ScriptTemplate = {
   id: string;
@@ -160,7 +162,7 @@ export default function SharedScriptReadonly({
       }
 
       const safeTitle = scriptTitle.replace(/[^a-z0-9]+/gi, '-').replace(/(^-|-$)/g, '').toLowerCase() || (mode === 'velocity' ? 'velocity-script' : 'bullpen-script');
-      pdf.save(`${safeTitle}.pdf`);
+      deliverReportPdf(pdf, `${safeTitle}.pdf`, scriptTitle);
     } catch (error) {
       setExportError(error instanceof Error ? error.message : 'Failed to export PDF.');
     }
@@ -192,6 +194,7 @@ export default function SharedScriptReadonly({
         <button type="button" className="btn btn-ghost" onClick={() => void downloadScriptPdf()}>
           Download PDF
         </button>
+        <SaveReportToProfileButton generate={downloadScriptPdf} title={current.title?.trim() || (mode === 'velocity' ? 'Velocity Script' : 'Bullpen Script')} />
       </div>
       {exportError ? <p className="auth-error" style={{ margin: 0 }}>{exportError}</p> : null}
       <div

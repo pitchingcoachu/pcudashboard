@@ -13,6 +13,8 @@ import { resolveSchoolBrand } from '../../../lib/school-brand';
 import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../lib/league-team-name-map';
 import { dashboardActivityPath, dispatchPortalActivity } from './activity-events';
 import DashboardGroupFilter from './dashboard-group-filter';
+import { deliverReportPdf } from '../../../lib/report-pdf-delivery';
+import { SaveReportToProfileButton } from '../components/save-report-to-profile';
 
 type OptionItem = { value: string; label: string };
 type HeatCell = { x: number; y: number; w: number; h: number; value: number; density: number };
@@ -4565,7 +4567,7 @@ export default function HittingSuite({
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-|-$/g, '');
-      pdf.save(`${safeHitter || 'hitter'}-ab-report-${abReport.selected_game_date || 'game'}.pdf`);
+      deliverReportPdf(pdf, `${safeHitter || 'hitter'}-ab-report-${abReport.selected_game_date || 'game'}.pdf`, `${abReport.hitter || 'Hitter'} AB Report`);
     } catch (pdfError) {
       setAbPdfError(pdfError instanceof Error ? pdfError.message : 'Failed to download the AB report PDF.');
     } finally {
@@ -5685,6 +5687,7 @@ export default function HittingSuite({
                 >
                   {isExportingLeaderboardPdf ? 'Downloading...' : `Download ${leaderboardExportFormat}`}
                 </button>
+                <SaveReportToProfileButton generate={downloadLeaderboardPdf} title="Hitting Leaderboard" disabled={isExportingLeaderboardPdf || loadingOverview || !leaderboardRowsWithPins.length} />
               </div>
             ) : null}
             {!isLeaderboardPage ? (
@@ -7584,16 +7587,10 @@ export default function HittingSuite({
                       ) : null}
                     </div>
                     {selectedSingleHitter && abReport ? (
-                      <button
-                        type="button"
-                        className="btn btn-primary"
-                        data-ab-pdf-ignore="true"
-                        disabled={isDownloadingAbPdf || !abCards.length}
-                        onClick={() => void downloadAbReportPdf()}
-                        style={{ justifySelf: 'end' }}
-                      >
-                        {isDownloadingAbPdf ? 'Downloading PDF...' : 'Download PDF'}
-                      </button>
+                      <div data-ab-pdf-ignore="true" style={{ justifySelf: 'end', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <button type="button" className="btn btn-primary" disabled={isDownloadingAbPdf || !abCards.length} onClick={() => void downloadAbReportPdf()}>{isDownloadingAbPdf ? 'Downloading PDF...' : 'Download PDF'}</button>
+                        <SaveReportToProfileButton generate={downloadAbReportPdf} title={`${abReport.hitter} AB Report`} preferredPlayerName={abReport.hitter} disabled={isDownloadingAbPdf || !abCards.length} className="btn btn-primary" />
+                      </div>
                     ) : null}
                   </div>
                   {!selectedSingleHitter ? (

@@ -2,6 +2,8 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { deliverReportPdf } from '../../../../lib/report-pdf-delivery';
+import { SaveReportToProfileButton } from '../../components/save-report-to-profile';
 
 type ThrowingDayEntry = Record<string, string>;
 type ThrowingFieldDef = { key: string; label: string };
@@ -434,7 +436,7 @@ export default function MasterCalendarTabs({
       }
 
       const fileNameDate = dateRangeLabel.split(' ')[0] || 'export';
-      pdf.save(`master-calendar-${tab}-${fileNameDate}.pdf`);
+      deliverReportPdf(pdf, `master-calendar-${tab}-${fileNameDate}.pdf`, `Master Calendar - ${tab}`);
     } catch (error) {
       setPdfError(error instanceof Error ? error.message : 'Failed to generate PDF.');
     } finally {
@@ -555,6 +557,7 @@ export default function MasterCalendarTabs({
           <button type="button" className="btn btn-ghost" disabled={isExportingPdf} onClick={() => void exportPdf()}>
             {isExportingPdf ? 'Exporting…' : 'Export PDF'}
           </button>
+          <SaveReportToProfileButton generate={exportPdf} title={`Master Calendar - ${tab}`} disabled={isExportingPdf} />
         </div>
       </div>
 

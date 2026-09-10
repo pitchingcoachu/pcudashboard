@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatTableDisplayValue, sortTableRows, type SortDirection } from '../../../lib/table-sort';
 import { buildPinnedAllRow, pinKeyFromRow, sortRowsWithPins } from '../../../lib/leaderboard-pins';
 import { downloadLeaderboardTablePdf } from '../../../lib/leaderboard-pdf-export';
+import { SaveReportToProfileButton } from '../components/save-report-to-profile';
 import { getProTeamLogoUrl } from './pro-team-logos';
 import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
 import NativeDateInput from '../components/native-date-input';
@@ -1454,6 +1455,7 @@ export default function CatchingSuite() {
                       >
                         {isExportingLeaderboardPdf ? 'Downloading...' : `Download ${leaderboardExportFormat}`}
                       </button>
+                      <SaveReportToProfileButton generate={downloadLeaderboardPdf} title="Catching Leaderboard" disabled={isExportingLeaderboardPdf || loadingOverview || !leaderboardRowsWithPins.length} />
                     </div>
                   ) : null}
                   {page !== 'Leaderboard' ? (

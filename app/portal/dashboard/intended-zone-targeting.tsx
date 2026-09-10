@@ -11,6 +11,7 @@ import {
   intendedTargetLocation,
 } from '../../../lib/intended-target-location';
 import { downloadContentPdf } from '../../../lib/leaderboard-pdf-export';
+import { SaveReportToProfileButton } from '../components/save-report-to-profile';
 import styles from './intended-zone-panel.module.css';
 
 const VIEW_W = 420;
@@ -549,6 +550,7 @@ export default function IntendedZoneTargeting(props: {
           <button type="button" className={styles.targetingUtilityButton} onClick={() => void exportPdf()} disabled={isExporting}>
             <span>⇩</span> {isExporting ? 'Exporting…' : 'Export PDF'}
           </button>
+          <SaveReportToProfileButton generate={exportPdf} title={`Intended Target Plan - ${props.pitcherName}`} preferredPlayerName={props.pitcherName} disabled={isExporting} className={styles.targetingUtilityButton} />
           <button type="button" className={styles.targetingAddMap} onClick={addMap}>
             <span>＋</span> Add target map
           </button>

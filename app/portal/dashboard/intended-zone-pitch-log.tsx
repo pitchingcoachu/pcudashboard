@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import styles from './intended-zone-panel.module.css';
 import { IntendedTargetLocationGraphic } from './intended-target-location-graphic';
+import { deliverReportPdf } from '../../../lib/report-pdf-delivery';
+import { SaveReportToProfileButton } from '../components/save-report-to-profile';
 
 const PAGE_SIZE = 18;
 const X_MIN = -2.5;
@@ -104,6 +106,100 @@ function pitchDate(pitch: PitchLogRow): Date {
   return new Date(pitch.thrownAt || pitch.sessionStartedAt);
 }
 
+// Same fixed pixel size/geometry as IntendedTargetLocationSvg
+// (intended-target-location-graphic.tsx) so an editable card looks
+// pixel-alike to its static counterpart -- kept as a separate component
+// (not a variant of that one) since editing is a Pitch Log-only, explicit-
+// button-first affordance (see the card's Edit Target button) that the
+// shared bare Svg component must NOT gain, as it's also reused read-only by
+// the video-modal sidebar in pitching-suite.tsx.
+const EDIT_ZONE_W = 230;
+const EDIT_ZONE_H = 250;
+const EDIT_PAD = 10;
+const EDIT_SCALE = Math.min((EDIT_ZONE_W - EDIT_PAD * 2) / (X_MAX - X_MIN), (EDIT_ZONE_H - EDIT_PAD * 2) / (Y_MAX - Y_MIN));
+const EDIT_DRAWN_W = (X_MAX - X_MIN) * EDIT_SCALE;
+const EDIT_DRAWN_H = (Y_MAX - Y_MIN) * EDIT_SCALE;
+const EDIT_LEFT_PAD = (EDIT_ZONE_W - EDIT_DRAWN_W) / 2;
+const EDIT_TOP_PAD = (EDIT_ZONE_H - EDIT_DRAWN_H) / 2;
+const editPx = (x: number) => EDIT_LEFT_PAD + (x - X_MIN) * EDIT_SCALE;
+const editPy = (y: number) => EDIT_TOP_PAD + (Y_MAX - y) * EDIT_SCALE;
+const editXFromPx = (pxVal: number) => (pxVal - EDIT_LEFT_PAD) / EDIT_SCALE + X_MIN;
+const editYFromPy = (pyVal: number) => Y_MAX - (pyVal - EDIT_TOP_PAD) / EDIT_SCALE;
+const EDIT_STRIKE_THIRD_X = (STRIKE_RIGHT - STRIKE_LEFT) / 3;
+const EDIT_STRIKE_THIRD_Y = (STRIKE_TOP - STRIKE_BOTTOM) / 3;
+const EDIT_POCKETS = Array.from({ length: 9 }, (_, index) => ({
+  number: index + 1,
+  x: STRIKE_LEFT + EDIT_STRIKE_THIRD_X * ((index % 3) + 0.5),
+  y: STRIKE_TOP - EDIT_STRIKE_THIRD_Y * (Math.floor(index / 3) + 0.5),
+}));
+
+function EditableTargetGraphic({
+  pitch,
+  draft,
+  onPick,
+}: {
+  pitch: PitchLogRow;
+  draft: { sideFt: number; heightFt: number };
+  onPick: (sideFt: number, heightFt: number) => void;
+}) {
+  const color = PITCH_COLORS[pitch.pitchType ?? 'Undefined'] ?? PITCH_COLORS.Undefined;
+  const targetX = editPx(draft.sideFt);
+  const targetY = editPy(draft.heightFt);
+  const actualX = editPx(pitch.plateLocSide);
+  const actualY = editPy(pitch.plateLocHeight);
+
+  function handleClick(event: React.MouseEvent<SVGSVGElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const clickPxX = ((event.clientX - rect.left) / rect.width) * EDIT_ZONE_W;
+    const clickPxY = ((event.clientY - rect.top) / rect.height) * EDIT_ZONE_H;
+    onPick(
+      Math.min(X_MAX, Math.max(X_MIN, editXFromPx(clickPxX))),
+      Math.min(Y_MAX, Math.max(Y_MIN, editYFromPy(clickPxY)))
+    );
+  }
+
+  return (
+    <div className={styles.historyPitchVisual}>
+      <svg
+        viewBox={`0 0 ${EDIT_ZONE_W} ${EDIT_ZONE_H}`}
+        onClick={handleClick}
+        style={{ cursor: 'crosshair' }}
+        aria-label={`Pitch ${pitch.pitchIndex}: tap the new intended target location`}
+      >
+        <polygon points={`${editPx(-0.75)},${editPy(0.55)} ${editPx(0.75)},${editPy(0.55)} ${editPx(0.75)},${editPy(0.65)} ${editPx(0)},${editPy(0.75)} ${editPx(-0.75)},${editPy(0.65)}`} fill="none" stroke="rgba(226,232,240,.75)" strokeWidth="3" />
+        <rect x={editPx(-1.5)} y={editPy(STRIKE_CENTER_Y + 1.5)} width={editPx(1.5) - editPx(-1.5)} height={editPy(STRIKE_CENTER_Y - 1.5) - editPy(STRIKE_CENTER_Y + 1.5)} fill="none" stroke="rgba(148,163,184,.28)" strokeWidth="2" />
+        <line x1={editPx(-1.5)} y1={editPy(STRIKE_CENTER_Y)} x2={editPx(1.5)} y2={editPy(STRIKE_CENTER_Y)} stroke="rgba(148,163,184,.2)" />
+        <line x1={editPx(0)} y1={editPy(STRIKE_CENTER_Y - 1.5)} x2={editPx(0)} y2={editPy(STRIKE_CENTER_Y + 1.5)} stroke="rgba(148,163,184,.2)" />
+        <rect x={editPx(STRIKE_LEFT)} y={editPy(STRIKE_TOP)} width={editPx(STRIKE_RIGHT) - editPx(STRIKE_LEFT)} height={editPy(STRIKE_BOTTOM) - editPy(STRIKE_TOP)} fill="rgba(15,23,42,.28)" stroke="#e2e8f0" strokeWidth="3" />
+        {[1, 2].map((third) => (
+          <line key={`v-${third}`} x1={editPx(STRIKE_LEFT + EDIT_STRIKE_THIRD_X * third)} y1={editPy(STRIKE_TOP)} x2={editPx(STRIKE_LEFT + EDIT_STRIKE_THIRD_X * third)} y2={editPy(STRIKE_BOTTOM)} stroke="rgba(148,163,184,.48)" strokeWidth="1" />
+        ))}
+        {[1, 2].map((third) => (
+          <line key={`h-${third}`} x1={editPx(STRIKE_LEFT)} y1={editPy(STRIKE_TOP - EDIT_STRIKE_THIRD_Y * third)} x2={editPx(STRIKE_RIGHT)} y2={editPy(STRIKE_TOP - EDIT_STRIKE_THIRD_Y * third)} stroke="rgba(148,163,184,.48)" strokeWidth="1" />
+        ))}
+        {EDIT_POCKETS.map((pocket) => (
+          <text key={pocket.number} x={editPx(pocket.x)} y={editPy(pocket.y)} className={styles.historyPocketNumber}>{pocket.number}</text>
+        ))}
+        <text x={editPx(-1.19)} y={editPy(3.825)} className={styles.historyPocketNumber}>10</text>
+        <text x={editPx(1.19)} y={editPy(3.825)} className={styles.historyPocketNumber}>11</text>
+        <text x={editPx(-1.19)} y={editPy(1.275)} className={styles.historyPocketNumber}>12</text>
+        <text x={editPx(1.19)} y={editPy(1.275)} className={styles.historyPocketNumber}>13</text>
+        <line x1={targetX} y1={targetY} x2={actualX} y2={actualY} stroke="rgba(226,232,240,.55)" strokeWidth="1.5" strokeDasharray="5 4" />
+        <circle cx={targetX} cy={targetY} r={Math.max(5, pitch.targetRadiusFt * EDIT_SCALE)} fill="rgba(74,222,128,.17)" stroke="#4ade80" strokeWidth="2.3" strokeDasharray="5 4" />
+        <circle cx={targetX} cy={targetY} r="3" fill="#86efac" />
+        <circle cx={actualX} cy={actualY} r="8" fill={color} stroke="#f8fafc" strokeWidth="2" />
+      </svg>
+      <div className={styles.historyPitchLegend}>
+        <span>
+          <svg className={styles.historyLegendTarget} viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="5" /><circle cx="7" cy="7" r="1.5" /></svg>
+          New intended target (tap to move)
+        </span>
+        <span><i className={styles.historyLegendActual} style={{ background: color }} /> Actual location</span>
+      </div>
+    </div>
+  );
+}
+
 export default function IntendedZonePitchLog({
   pitcherName,
   startDate,
@@ -124,6 +220,16 @@ export default function IntendedZonePitchLog({
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [displayTargetInches, setDisplayTargetInches] = useState<number>(DEFAULT_TARGET_SIZE_INCHES);
+  // Correct an intended target from the pitch history after the fact.
+  // Explicit "Edit Target" button first (not direct click), matching the
+  // live-tracking view's same rule, so browsing/reviewing pitches never
+  // accidentally moves one. editDraft holds the new location while the
+  // coach is choosing it; seeded with the pitch's current intended
+  // location so Cancel with no tap is a true no-op.
+  const [editingPitchId, setEditingPitchId] = useState<number | null>(null);
+  const [editDraft, setEditDraft] = useState<{ sideFt: number; heightFt: number } | null>(null);
+  const [savingEditId, setSavingEditId] = useState<number | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
 
   // Every pitch's targetHit/targetRadiusFt as returned by the API reflect
   // whichever size that pitch's OWN session happened to use -- overridden
@@ -172,6 +278,59 @@ export default function IntendedZonePitchLog({
   useEffect(() => {
     void loadPitches();
   }, [loadPitches]);
+
+  function startEditTarget(pitch: PitchLogRow) {
+    setEditingPitchId(pitch.id);
+    setEditDraft({ sideFt: pitch.intendedSideFt, heightFt: pitch.intendedHeightFt });
+    setEditError(null);
+  }
+
+  function cancelEditTarget() {
+    setEditingPitchId(null);
+    setEditDraft(null);
+  }
+
+  async function saveEditTarget(pitch: PitchLogRow) {
+    if (!editDraft) return;
+    setSavingEditId(pitch.id);
+    setEditError(null);
+    try {
+      const response = await fetch('/api/dashboard/pitching/intended-zone/pitches', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'edit_target',
+          pitchId: pitch.id,
+          intendedSideFt: editDraft.sideFt,
+          intendedHeightFt: editDraft.heightFt,
+          targetRadiusFt: pitch.targetRadiusFt,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to update the target.');
+      // Update the underlying rawPitches list in place -- the displayed
+      // `pitches` memo recomputes targetHit from the new missDistanceFt
+      // automatically, no full reload needed.
+      const updated = payload.pitch as
+        | { intendedSideFt: number; intendedHeightFt: number; missDistanceFt: number | null; missDirection: string | null }
+        | undefined;
+      if (updated) {
+        setRawPitches((current) =>
+          current.map((p) =>
+            p.id === pitch.id
+              ? { ...p, intendedSideFt: updated.intendedSideFt, intendedHeightFt: updated.intendedHeightFt, missDistanceFt: updated.missDistanceFt, missDirection: updated.missDirection }
+              : p
+          )
+        );
+      }
+      setEditingPitchId(null);
+      setEditDraft(null);
+    } catch (saveError) {
+      setEditError(saveError instanceof Error ? saveError.message : 'Failed to update the target.');
+    } finally {
+      setSavingEditId(null);
+    }
+  }
 
   const pageCount = Math.max(1, Math.ceil(pitches.length / PAGE_SIZE));
   const visiblePitches = pitches.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -341,7 +500,7 @@ export default function IntendedZonePitchLog({
         });
       }
       const safeName = (pitcherName || 'all-pitchers').toLowerCase().replace(/[^a-z0-9]+/g, '-');
-      pdf.save(`intended-target-pitch-log-${safeName}.pdf`);
+      deliverReportPdf(pdf, `intended-target-pitch-log-${safeName}.pdf`, `Intended Target Pitch Log - ${pitcherName || 'Pitcher'}`);
     } catch (exportFailure) {
       setExportError(exportFailure instanceof Error ? exportFailure.message : 'Unable to export the pitch log.');
     } finally {
@@ -382,6 +541,7 @@ export default function IntendedZonePitchLog({
           <button type="button" className={styles.historyExportButton} onClick={() => void exportPdf()} disabled={!pitches.length || loading || isExporting}>
             <span>⇩</span> {isExporting ? 'Exporting…' : 'Export PDF'}
           </button>
+          <SaveReportToProfileButton generate={exportPdf} title={`Intended Target Pitch Log - ${pitcherName || 'Pitcher'}`} preferredPlayerName={pitcherName ?? undefined} disabled={!pitches.length || loading || isExporting} className={styles.historyExportButton} />
         </div>
       </header>
 
@@ -407,7 +567,11 @@ export default function IntendedZonePitchLog({
                   <span className={pitch.targetHit ? styles.historyHitBadge : styles.historyMissBadge}>{pitch.targetHit ? 'Target hit' : 'Miss'}</span>
                 </header>
                 <div className={styles.historyPitchBody}>
-                  <IntendedTargetLocationGraphic pitch={pitch} />
+                  {editingPitchId === pitch.id && editDraft ? (
+                    <EditableTargetGraphic pitch={pitch} draft={editDraft} onPick={(sideFt, heightFt) => setEditDraft({ sideFt, heightFt })} />
+                  ) : (
+                    <IntendedTargetLocationGraphic pitch={pitch} />
+                  )}
                   <div className={styles.historyPitchDetails}>
                     <div className={styles.historyPitchTimestamp}>
                       <strong>{Number.isNaN(date.getTime()) ? 'Unknown date' : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</strong>
@@ -424,6 +588,23 @@ export default function IntendedZonePitchLog({
                       <div><dt>Direction</dt><dd>{pitch.missDirection ? DIRECTION_LABELS[pitch.missDirection] ?? pitch.missDirection : '—'}</dd></div>
                       <div><dt>Ball</dt><dd>{pitch.ballType}</dd></div>
                     </dl>
+                    {editingPitchId === pitch.id ? (
+                      <>
+                        {editError ? <p className={styles.targetingError}>{editError}</p> : null}
+                        <div className={styles.historyPitchEditActions}>
+                          <button type="button" onClick={() => void saveEditTarget(pitch)} disabled={savingEditId === pitch.id}>
+                            {savingEditId === pitch.id ? 'Saving…' : 'Save'}
+                          </button>
+                          <button type="button" onClick={cancelEditTarget} disabled={savingEditId === pitch.id}>
+                            Cancel
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <div className={styles.historyPitchEditActions}>
+                        <button type="button" onClick={() => startEditTarget(pitch)}>Edit Target</button>
+                      </div>
+                    )}
                   </div>
                 </div>
               </article>

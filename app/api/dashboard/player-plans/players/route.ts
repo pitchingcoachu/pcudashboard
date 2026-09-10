@@ -24,36 +24,40 @@ export async function GET(request: Request) {
     return finish(200, { players: [] }, { role: session.role ?? 'unknown', count: 0, unresolvedOrg: true });
   }
 
-  if (session.role === 'player') {
-    const own = await getPlayerForUser({
-      organizationId: scopedOrganizationId,
-      userId: session.userId ?? 0,
-    });
-    if (!own) return finish(200, { players: [] }, { role: 'player', count: 0 });
-    return finish(200, {
-      players: [
-        {
-          playerId: own.id,
-          fullName: own.fullName,
-          throwsHand: own.throwsHand,
-          batsHand: own.batsHand,
-          position: own.position,
-        },
-      ],
-    }, { role: 'player', count: 1 });
-  }
+  try {
+    if (session.role === 'player') {
+      const own = await getPlayerForUser({
+        organizationId: scopedOrganizationId,
+        userId: session.userId ?? 0,
+      });
+      if (!own) return finish(200, { players: [] }, { role: 'player', count: 0 });
+      return finish(200, {
+        players: [
+          {
+            playerId: own.id,
+            fullName: own.fullName,
+            throwsHand: own.throwsHand,
+            batsHand: own.batsHand,
+            position: own.position,
+          },
+        ],
+      }, { role: 'player', count: 1 });
+    }
 
-  const filtered = await listPlayerSummariesByOrganization({
-    organizationId: scopedOrganizationId,
-    assignedCoachUserId: null,
-  });
-  return finish(200, {
-    players: filtered.map((player) => ({
-      playerId: player.playerId,
-      fullName: player.fullName,
-      throwsHand: player.throwsHand,
-      batsHand: player.batsHand,
-      position: player.position,
-    })),
-  }, { role: session.role ?? 'unknown', count: filtered.length });
+    const filtered = await listPlayerSummariesByOrganization({
+      organizationId: scopedOrganizationId,
+      assignedCoachUserId: null,
+    });
+    return finish(200, {
+      players: filtered.map((player) => ({
+        playerId: player.playerId,
+        fullName: player.fullName,
+        throwsHand: player.throwsHand,
+        batsHand: player.batsHand,
+        position: player.position,
+      })),
+    }, { role: session.role ?? 'unknown', count: filtered.length });
+  } catch (error) {
+    return finish(500, { error: error instanceof Error ? error.message : 'Unable to load players.' });
+  }
 }

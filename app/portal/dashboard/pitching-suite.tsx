@@ -16,6 +16,8 @@ import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../lib/league-team-name-map';
 import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
 import { dashboardActivityPath, dispatchPortalActivity } from './activity-events';
 import { calculateExpectedMovement, magnusAngleDegrees, measuredTiltDegrees } from '../../../lib/expected-movement';
+import { deliverReportPdf } from '../../../lib/report-pdf-delivery';
+import { SaveReportToProfileButton } from '../components/save-report-to-profile';
 import DashboardGroupFilter from './dashboard-group-filter';
 import { IntendedTargetLocationSvg } from './intended-target-location-graphic';
 import type { LiveFlightPitch } from './live-flight-replay';
@@ -5251,6 +5253,8 @@ export default function PitchingSuite({
   const [correlationAllStatRows, setCorrelationAllStatRows] = useState<Array<Record<string, string | number | null>>>([]);
   const [isExportingLeaderboardPdf, setIsExportingLeaderboardPdf] = useState(false);
   const [leaderboardExportFormat, setLeaderboardExportFormat] = useState<'PDF' | 'CSV'>('PDF');
+  const [isExportingLogPdf, setIsExportingLogPdf] = useState(false);
+  const [logExportFormat, setLogExportFormat] = useState<'PDF' | 'CSV'>('PDF');
   const [customTables, setCustomTables] = useState<CustomTableConfig[]>([]);
   const [loadingCustomTables, setLoadingCustomTables] = useState(false);
   const [customTablesLoaded, setCustomTablesLoaded] = useState(false);
@@ -5349,6 +5353,8 @@ export default function PitchingSuite({
   }, [customTables]);
   const lastAppliedHomeRequestRef = useRef<number>(0);
   const leaderboardTableExportRef = useRef<HTMLDivElement | null>(null);
+  const gameLogTableExportRef = useRef<HTMLDivElement | null>(null);
+  const pitchLogTableExportRef = useRef<HTMLDivElement | null>(null);
   const pcuSearchPlayerDatePendingRef = useRef(false);
   const summaryLocationViewTouchedRef = useRef(false);
   const [releaseView, setReleaseView] = useState('Averages Only');
@@ -14861,7 +14867,7 @@ export default function PitchingSuite({
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-|-$/g, '');
-      pdf.save(`${safePitcher || 'pitcher'}-ab-report-${abReport.selected_game_date || 'game'}.pdf`);
+      deliverReportPdf(pdf, `${safePitcher || 'pitcher'}-ab-report-${abReport.selected_game_date || 'game'}.pdf`, `${abReport.pitcher || 'Pitcher'} AB Report`);
     } catch (pdfError) {
       setAbPdfError(pdfError instanceof Error ? pdfError.message : 'Failed to download the AB report PDF.');
     } finally {
@@ -15010,6 +15016,67 @@ export default function PitchingSuite({
     if (PITCH_LOG_TWO_DECIMAL_TOKENS.has(token)) return adjusted.toFixed(2);
     return formatPitchingTableDisplayValue(column, value);
   }, [formatPitchingTableDisplayValue, isPro]);
+  const downloadLogPdf = useCallback(async () => {
+    const isGameLog = dashboardPage === 'Game Log';
+    const isPitchLog = dashboardPage === 'Pitch Log';
+    if (!isGameLog && !isPitchLog) return;
+    const wrapNode = isGameLog ? gameLogTableExportRef.current : pitchLogTableExportRef.current;
+    if (!wrapNode) return;
+    try {
+      setError('');
+      setIsExportingLogPdf(true);
+      const pageLabel = isGameLog ? 'Game Log' : 'Pitch Log';
+      const selectionLabel = (isGameLog ? gameLogHeader.label : pitchLogHeader.label)
+        .replace(/^Game Log:\s*/, '')
+        .replace(/^Pitch Log:\s*/, '');
+      const dateRangeLabel =
+        startDate && endDate
+          ? `${new Date(`${startDate}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} – ${new Date(`${endDate}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+          : '';
+      const fileStem = isGameLog ? 'pitching-game-log' : 'pitching-pitch-log';
+      await downloadLeaderboardTablePdf({
+        wrapNode,
+        titleText: `Pitching ${pageLabel}`,
+        subtitleText: [selectionLabel, dateRangeLabel].filter(Boolean).join('  ·  '),
+        fileName: `${fileStem}-${toYmdNow()}.pdf`,
+      });
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : 'Failed to export log PDF.');
+    } finally {
+      setIsExportingLogPdf(false);
+    }
+  }, [dashboardPage, gameLogHeader.label, pitchLogHeader.label, startDate, endDate]);
+  const downloadLogCsv = useCallback(() => {
+    const isGameLog = dashboardPage === 'Game Log';
+    const isPitchLog = dashboardPage === 'Pitch Log';
+    if (!isGameLog && !isPitchLog) return;
+    const columns = isGameLog ? gameLogDisplayColumns : pitchLogDisplayColumns;
+    const rows = isGameLog ? gameLogRowsWithPins : pitchLogRowsWithPins;
+    if (!columns.length || !rows.length) return;
+    const lines = [columns.map(csvEscape).join(',')];
+    for (const row of rows) {
+      const cells = columns.map((column) => {
+        const rawValue = row[column];
+        if (column === 'Date') return formatShortDate(String(rawValue ?? '')) || '-';
+        if (column === 'Team' || column === 'Opponent') return formatTeamLabel(rawValue);
+        return isPitchLog
+          ? formatPitchLogCellDisplayValue(column, rawValue)
+          : formatPitchingTableDisplayValue(column, rawValue);
+      });
+      lines.push(cells.map(csvEscape).join(','));
+    }
+    const fileStem = isGameLog ? 'pitching-game-log' : 'pitching-pitch-log';
+    downloadTextFile(lines.join('\n'), `${fileStem}-${toYmdNow()}.csv`, 'text/csv;charset=utf-8');
+  }, [
+    dashboardPage,
+    gameLogDisplayColumns,
+    pitchLogDisplayColumns,
+    gameLogRowsWithPins,
+    pitchLogRowsWithPins,
+    formatTeamLabel,
+    formatPitchLogCellDisplayValue,
+    formatPitchingTableDisplayValue,
+  ]);
   const sortedManualEntries = useMemo(
     () =>
       sortTableRows(
@@ -15596,7 +15663,7 @@ export default function PitchingSuite({
               </div>
             )}
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
-              {!isMobileView && isLeaderboardPage ? (
+              {isLeaderboardPage ? (
                 <>
                   <select
                     value={leaderboardExportFormat}
@@ -15621,6 +15688,42 @@ export default function PitchingSuite({
                   >
                     {isExportingLeaderboardPdf ? 'Downloading...' : `Download ${leaderboardExportFormat}`}
                   </button>
+                  <SaveReportToProfileButton generate={downloadLeaderboardPdf} title="Pitching Leaderboard" disabled={isExportingLeaderboardPdf || loadingOverview || !leaderboardRowsWithPins.length} />
+                </>
+              ) : null}
+              {isGameLogPage || isPitchLogPage ? (
+                <>
+                  <select
+                    value={logExportFormat}
+                    onChange={(event) => setLogExportFormat(event.target.value as 'PDF' | 'CSV')}
+                    style={{ minHeight: 38, borderRadius: 8, padding: '0 0.5rem' }}
+                    aria-label={`${isGameLogPage ? 'Game log' : 'Pitch log'} export format`}
+                  >
+                    <option value="PDF">PDF</option>
+                    <option value="CSV">CSV</option>
+                  </select>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => {
+                      if (logExportFormat === 'CSV') {
+                        downloadLogCsv();
+                      } else {
+                        void downloadLogPdf();
+                      }
+                    }}
+                    disabled={
+                      isExportingLogPdf ||
+                      (isGameLogPage ? loadingGameLog || !gameLogRowsWithPins.length : loadingPitchLog || !pitchLogRowsWithPins.length)
+                    }
+                  >
+                    {isExportingLogPdf ? 'Downloading...' : `Download ${logExportFormat}`}
+                  </button>
+                  <SaveReportToProfileButton
+                    generate={downloadLogPdf}
+                    title={isGameLogPage ? 'Pitching Game Log' : 'Pitching Pitch Log'}
+                    disabled={isExportingLogPdf || (isGameLogPage ? loadingGameLog || !gameLogRowsWithPins.length : loadingPitchLog || !pitchLogRowsWithPins.length)}
+                  />
                 </>
               ) : null}
               {isMobileView ? (
@@ -16816,7 +16919,7 @@ export default function PitchingSuite({
                 <p className="portal-muted-text">No game log rows found for the current filters.</p>
               ) : null}
               {canRunGameLog && !loadingGameLog && !gameLogError && gameLogRowsWithPins.length > 0 ? (
-                <div className="portal-table-wrap" style={{ maxHeight: '68vh', overflowY: 'auto' }}>
+                <div ref={gameLogTableExportRef} className="portal-table-wrap" style={{ maxHeight: '68vh', overflowY: 'auto' }}>
                   <table className="portal-table">
                     <thead>
                       <tr>
@@ -17163,7 +17266,7 @@ export default function PitchingSuite({
                 <p className="portal-muted-text">No pitch log rows found for the current filters.</p>
               ) : null}
               {canRunPitchLog && !loadingPitchLog && !pitchLogError && sortedPitchLogRows.length > 0 ? (
-                <div className="portal-table-wrap" style={{ maxHeight: '68vh', overflowY: 'auto' }}>
+                <div ref={pitchLogTableExportRef} className="portal-table-wrap" style={{ maxHeight: '68vh', overflowY: 'auto' }}>
                   <table className="portal-table">
                     <thead>
                       <tr>
@@ -17419,16 +17522,10 @@ export default function PitchingSuite({
                     ) : null}
                   </div>
                   {selectedSinglePitcher && abReport ? (
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      data-ab-pdf-ignore="true"
-                      disabled={isDownloadingAbPdf || !abCards.length}
-                      onClick={() => void downloadAbReportPdf()}
-                      style={{ justifySelf: 'end' }}
-                    >
-                      {isDownloadingAbPdf ? 'Downloading PDF...' : 'Download PDF'}
-                    </button>
+                    <div data-ab-pdf-ignore="true" style={{ justifySelf: 'end', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button type="button" className="btn btn-primary" disabled={isDownloadingAbPdf || !abCards.length} onClick={() => void downloadAbReportPdf()}>{isDownloadingAbPdf ? 'Downloading PDF...' : 'Download PDF'}</button>
+                      <SaveReportToProfileButton generate={downloadAbReportPdf} title={`${abReport.pitcher} AB Report`} preferredPlayerName={abReport.pitcher} disabled={isDownloadingAbPdf || !abCards.length} className="btn btn-primary" />
+                    </div>
                   ) : null}
                 </div>
               </div>

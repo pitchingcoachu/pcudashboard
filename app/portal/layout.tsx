@@ -6,6 +6,7 @@ import { requirePortalSession } from '../../lib/portal-session';
 import { resolveDashboardSchoolCode } from '../../lib/dashboard-access';
 import { schoolBrandCssVars } from '../../lib/school-brand';
 import NativePushRegistration from './native-push-registration';
+import ReportProfileSaveManager from './components/save-report-to-profile';
 
 export default async function PortalLayout({ children }: { children: React.ReactNode }) {
   const session = await requirePortalSession();
@@ -15,6 +16,7 @@ export default async function PortalLayout({ children }: { children: React.React
   return (
     <div className={`portal-school-theme ${schoolThemeClass}`} style={schoolBrandCssVars(selectedSchool)}>
       <NativePushRegistration />
+      <ReportProfileSaveManager />
       <Suspense fallback={null}>
         <PortalActivityTracker />
       </Suspense>

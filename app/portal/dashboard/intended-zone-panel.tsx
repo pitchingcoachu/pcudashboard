@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { pitchLocationLabel } from '../../../lib/pitch-location';
 import { downloadContentPdf } from '../../../lib/leaderboard-pdf-export';
+import { SaveReportToProfileButton } from '../components/save-report-to-profile';
 import IntendedZoneStats, { DirectionHeatmap, emptyIntendedZoneDirectionBreakdown, type MissDirection } from './intended-zone-stats';
 import IntendedZoneTargeting from './intended-zone-targeting';
 import IntendedZonePitchLog from './intended-zone-pitch-log';
@@ -164,6 +165,9 @@ type IntendedZonePitch = {
   taggedPitcherName: string | null;
   pitcherThrows: string | null;
   confirmedAt: string | null;
+  isStrike: boolean | null;
+  countAtPitch: string | null;
+  atBatIndex: number | null;
   flightData: {
     position: { x: number; y: number; z: number };
     velocity: { x: number; y: number; z: number };
@@ -250,10 +254,52 @@ export default function IntendedZonePanel({
   // stale data (e.g. still reporting the PREVIOUS target as confirmed right
   // after a brand-new, unconfirmed target was just placed).
   const [targetIsConfirmedLocally, setTargetIsConfirmedLocally] = useState(false);
+  // Track Strikes & Count: chosen when starting a session, alongside the
+  // Live/FTP Sync/Manual mode picker. currentCount/atBatIndex/callingPitchId
+  // are local UI state driving the Ball/Strike prompt and live stat display;
+  // the actual per-pitch calls are persisted via setIntendedZonePitchCount
+  // (PATCH .../pitches, action 'set_count') as they're made, and aggregated
+  // into the bullpen scripts log server-side when the session ends.
+  const [trackCountEnabled, setTrackCountEnabled] = useState(false);
+  const [currentCount, setCurrentCount] = useState({ balls: 0, strikes: 0 });
+  const [atBatIndex, setAtBatIndex] = useState(0);
+  // At-bat indices that reached a 2-strike count (0-2 or 1-2) within their
+  // first 3 pitches -- tallied once per at-bat as pitches are called, per
+  // the exact "2/3%" definition: don't count it twice for the same at-bat.
+  const [twoThreeHits, setTwoThreeHits] = useState<Set<number>>(new Set());
+  const [callingPitchId, setCallingPitchId] = useState<number | null>(null);
+  // FTP Sync mode only: the pitch id just confirmed via Confirm Target,
+  // awaiting a Ball/Strike call. FTP mode has no real TrackMan location data
+  // at confirm-time (it only arrives once the next sync ingests it, often
+  // hours later), so unlike Live/Manual mode -- which prompts off
+  // lastMatchedPitch once a pitch actually lands -- FTP mode prompts right
+  // after Confirm Target instead, using this id directly rather than
+  // waiting for a "matched" pitch that may not exist yet.
+  const [pendingFtpCountPitchId, setPendingFtpCountPitchId] = useState<number | null>(null);
+  // Edit an already-landed/matched pitch's intended target -- an explicit
+  // "Edit Target" button starts this (never a direct click, to avoid
+  // accidentally moving history while just reviewing/tracking). editDraft
+  // holds the new location while the coach is choosing it, kept separate
+  // from pendingTarget/lastMatchedPitch so it never interferes with the
+  // normal live-tracking click flow (handleZoneClick branches to this mode
+  // first, before any of its usual pending-target logic).
+  const [editingPitchId, setEditingPitchId] = useState<number | null>(null);
+  const [editDraft, setEditDraft] = useState<{ sideFt: number; heightFt: number } | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollInFlightRef = useRef(false);
   const fallbackSyncInFlightRef = useRef(false);
   const pollCountRef = useRef(0);
+  // Cursor for the GET route's sincePoll param -- bounds each poll's server-
+  // side webhook buffer read to only rows touched since the LAST poll
+  // started, instead of the whole session's history every time (previously
+  // the direct cause of live tracking slowing down / dropping pitches as a
+  // bullpen went on). null on the first poll after starting/resuming a
+  // session, so that poll gets full history with nothing to bound against.
+  // Captured as the timestamp BEFORE each request fires (not after it
+  // resolves) so a webhook event landing during the round trip is still
+  // covered by the NEXT poll's window rather than falling in the gap.
+  const lastPollStartedAtRef = useRef<string | null>(null);
   const sessionExportRef = useRef<HTMLDivElement | null>(null);
   const [isExportingSessionPdf, setIsExportingSessionPdf] = useState(false);
   const lastSeenPitchId = useRef<number | null>(null);
@@ -322,8 +368,10 @@ export default function IntendedZonePanel({
     // when the coach tapped a new spot briefly snaps the marker back to the
     // previous target for one poll interval before the next poll catches up.
     const placementVersionAtPollStart = targetPlacementVersionRef.current;
+    const thisPollStartedAt = new Date().toISOString();
     try {
       const params = new URLSearchParams({ sessionId: String(sessionId) });
+      if (lastPollStartedAtRef.current) params.set('sincePoll', lastPollStartedAtRef.current);
       const response = await fetch(`/api/dashboard/pitching/intended-zone/pitches?${params.toString()}`, { cache: 'no-store' });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error ?? 'Failed to poll for pitches.');
@@ -379,8 +427,24 @@ export default function IntendedZonePanel({
         setJustLanded(true);
         setTimeout(() => setJustLanded(false), 550);
       }
-      setPitches(nextPitches);
+      // The server only attaches flightData for pitches whose webhook rows
+      // it actually re-read THIS poll (bounded by the sincePoll cursor, so
+      // only new/recently-changed pitches -- see poll's params.set('sincePoll', ...)
+      // below). Carry forward any earlier pitch's already-received
+      // flightData rather than letting it silently disappear once that
+      // pitch ages out of the cursor window; flight replay lets the coach
+      // navigate back through the whole session's pitches, not just the
+      // newest one.
+      setPitches((current) => {
+        const previousFlightById = new Map(current.map((p) => [p.id, p.flightData]));
+        return nextPitches.map((p) => ({ ...p, flightData: p.flightData ?? previousFlightById.get(p.id) ?? null }));
+      });
       setPollWarning(null);
+      // Only advance the cursor on a SUCCESSFUL poll -- if this one failed
+      // (caught below) or the server 404'd/500'd, the next poll should
+      // retry against the same window rather than silently widen the gap
+      // and risk missing whatever this attempt failed to pick up.
+      lastPollStartedAtRef.current = thisPollStartedAt;
 
       // TrackMan's pull API is useful for classification enrichment and as a
       // delivery fallback, but it can take several seconds. Run it separately
@@ -389,6 +453,7 @@ export default function IntendedZonePanel({
         fallbackSyncInFlightRef.current = true;
         const fallbackParams = new URLSearchParams({ sessionId: String(sessionId), metadata: '1' });
         if (syncFallback) fallbackParams.set('fallback', '1');
+        if (lastPollStartedAtRef.current) fallbackParams.set('sincePoll', lastPollStartedAtRef.current);
         void fetch(`/api/dashboard/pitching/intended-zone/pitches?${fallbackParams.toString()}`, { cache: 'no-store' })
           .catch(() => undefined)
           .finally(() => {
@@ -441,6 +506,14 @@ export default function IntendedZonePanel({
       lastSeenPitchId.current = null;
       activeQueuedTargetIdRef.current = null;
       pollCountRef.current = 0;
+      lastPollStartedAtRef.current = null;
+      setCurrentCount({ balls: 0, strikes: 0 });
+      setAtBatIndex(0);
+      setTwoThreeHits(new Set());
+      setCallingPitchId(null);
+      setPendingFtpCountPitchId(null);
+      setEditingPitchId(null);
+      setEditDraft(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start session.');
     } finally {
@@ -463,6 +536,8 @@ export default function IntendedZonePanel({
       setPendingTarget(null);
       setSelectedFlightPitchId(null);
       activeQueuedTargetIdRef.current = null;
+      setEditingPitchId(null);
+      setEditDraft(null);
       loadHistory();
     }
   }
@@ -542,6 +617,7 @@ export default function IntendedZonePanel({
       lastSeenPitchId.current = null;
       activeQueuedTargetIdRef.current = null;
       pollCountRef.current = 0;
+      lastPollStartedAtRef.current = null;
       await poll(target.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to resume session.');
@@ -608,11 +684,95 @@ export default function IntendedZonePanel({
       // placeOrMoveLiveTarget, so a fresh target always starts unconfirmed
       // without waiting on a poll round-trip to catch up.
       setTargetIsConfirmedLocally(true);
+      if (trackCountEnabled) {
+        const confirmedPitchId = Number(payload.pitchId);
+        if (Number.isFinite(confirmedPitchId) && confirmedPitchId > 0) setPendingFtpCountPitchId(confirmedPitchId);
+      }
     } catch (confirmError) {
       setError(confirmError instanceof Error ? confirmError.message : 'Failed to confirm target.');
     } finally {
       setConfirmingTarget(false);
     }
+  }
+
+  // Track Strikes & Count: the coach's manual Ball/Strike call for one
+  // pitch. Manual (not derived from pitch location) because a bullpen has
+  // no real batter/umpire -- see setIntendedZonePitchCount's doc comment.
+  // Called two different ways depending on mode: Live/Manual call this
+  // right after a pitch LANDS (lastMatchedPitch, has real TrackMan/tapped
+  // location data already); FTP Sync mode has no location data yet at
+  // that point (it only arrives once the next sync ingests it, often
+  // hours later), so FTP calls this right after CONFIRMING the target
+  // instead -- the pitch row already exists at that point even though
+  // it's still unmatched, and the coach's ball/strike call doesn't need
+  // real location data to be meaningful. Takes a bare pitchId (not a full
+  // pitch object) so both call sites work identically. Advances the local
+  // count/at-bat state the same way a real plate appearance would: a 4th
+  // ball or 3rd strike auto-starts a fresh at-bat (an unambiguous boundary
+  // even though "Next Batter" is otherwise a manual action), and a count
+  // that reaches 2 strikes within the first 3 pitches of an at-bat credits
+  // that at-bat's 2/3% exactly once.
+  function callBallOrStrike(pitchId: number, isStrike: boolean) {
+    if (!activeSession) return;
+    const countAtPitch = `${currentCount.balls}-${currentCount.strikes}`;
+    const pitchNumberInAtBat = pitches.filter((p) => p.atBatIndex === atBatIndex && p.isStrike !== null).length + 1;
+    setCallingPitchId(pitchId);
+    setError(null);
+
+    let nextBalls = currentCount.balls;
+    let nextStrikes = currentCount.strikes;
+    if (isStrike) nextStrikes += 1;
+    else nextBalls += 1;
+
+    if (pitchNumberInAtBat <= 3 && nextStrikes >= 2) {
+      setTwoThreeHits((current) => (current.has(atBatIndex) ? current : new Set(current).add(atBatIndex)));
+    }
+
+    const atBatEnded = nextBalls >= 4 || nextStrikes >= 3;
+    const thisAtBatIndex = atBatIndex;
+
+    // Optimistic: reflect the call immediately rather than waiting up to one
+    // poll interval, so the Ball/Strike prompt clears and the live stats
+    // (In Zone%/Comp%/Strike%/2-3%) update right away.
+    setPitches((current) =>
+      current.map((p) => (p.id === pitchId ? { ...p, isStrike, countAtPitch, atBatIndex: thisAtBatIndex } : p))
+    );
+    setPendingFtpCountPitchId((current) => (current === pitchId ? null : current));
+
+    fetch('/api/dashboard/pitching/intended-zone/pitches', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'set_count', pitchId, isStrike, countAtPitch, atBatIndex: thisAtBatIndex }),
+    })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error ?? 'Failed to record the call.');
+      })
+      .catch((callError) => {
+        setError(callError instanceof Error ? callError.message : 'Failed to record the call.');
+        // Roll back the optimistic call so the prompt reappears and the coach
+        // can retry -- the server never persisted this one.
+        setPitches((current) =>
+          current.map((p) => (p.id === pitchId ? { ...p, isStrike: null, countAtPitch: null, atBatIndex: null } : p))
+        );
+      })
+      .finally(() => {
+        setCallingPitchId((current) => (current === pitchId ? null : current));
+      });
+
+    if (atBatEnded) {
+      setCurrentCount({ balls: 0, strikes: 0 });
+      setAtBatIndex((current) => current + 1);
+    } else {
+      setCurrentCount({ balls: nextBalls, strikes: nextStrikes });
+    }
+  }
+
+  // Manual "start a new simulated at-bat" -- for when the coach wants a
+  // fresh count without a real walk/strikeout having occurred.
+  function handleNextBatter() {
+    setCurrentCount({ balls: 0, strikes: 0 });
+    setAtBatIndex((current) => current + 1);
   }
 
   function handleZoneClick(event: React.MouseEvent<SVGSVGElement>) {
@@ -624,12 +784,75 @@ export default function IntendedZonePanel({
     const sideFt = pxToFeetX(px);
     const heightFt = pxToFeetY(py);
 
+    if (editingPitchId !== null) {
+      setEditDraft({ sideFt, heightFt });
+      return;
+    }
+
     if (activeSession.mode === 'manual') {
       if (!pendingTarget) setPendingTarget({ sideFt, heightFt });
       else if (!manualActual) setManualActual({ sideFt, heightFt });
       return;
     }
     placeOrMoveLiveTarget({ sideFt, heightFt });
+  }
+
+  // Edit an already-landed/matched pitch's intended target (see editingPitchId's
+  // doc comment). Seeds editDraft with the pitch's CURRENT intended location
+  // so the marker doesn't jump anywhere until the coach actually taps a new
+  // spot -- Cancel with no tap is then a true no-op.
+  function startEditTarget(pitch: IntendedZonePitch) {
+    setEditingPitchId(pitch.id);
+    setEditDraft({ sideFt: pitch.intendedSideFt, heightFt: pitch.intendedHeightFt });
+    setError(null);
+  }
+
+  function cancelEditTarget() {
+    setEditingPitchId(null);
+    setEditDraft(null);
+  }
+
+  async function saveEditTarget() {
+    if (editingPitchId === null || !editDraft) return;
+    setSavingEdit(true);
+    setError(null);
+    try {
+      const response = await fetch('/api/dashboard/pitching/intended-zone/pitches', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'edit_target',
+          pitchId: editingPitchId,
+          intendedSideFt: editDraft.sideFt,
+          intendedHeightFt: editDraft.heightFt,
+          targetRadiusFt,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to update the target.');
+      // Optimistic: apply the corrected target/miss values immediately
+      // rather than waiting for the next poll, since this pitch may no
+      // longer be lastMatchedPitch by the time the poll response would
+      // normally refresh it.
+      const updated = payload.pitch as
+        | { intendedSideFt: number; intendedHeightFt: number; targetRadiusFt: number; missDistanceFt: number | null; missDirection: string | null }
+        | undefined;
+      if (updated) {
+        setPitches((current) =>
+          current.map((p) =>
+            p.id === editingPitchId
+              ? { ...p, intendedSideFt: updated.intendedSideFt, intendedHeightFt: updated.intendedHeightFt, targetRadiusFt: updated.targetRadiusFt, missDistanceFt: updated.missDistanceFt, missDirection: updated.missDirection }
+              : p
+          )
+        );
+      }
+      setEditingPitchId(null);
+      setEditDraft(null);
+    } catch (editError) {
+      setError(editError instanceof Error ? editError.message : 'Failed to update the target.');
+    } finally {
+      setSavingEdit(false);
+    }
   }
 
   async function handleConfirmManualPitch() {
@@ -736,6 +959,9 @@ export default function IntendedZonePanel({
   }, [pitches]);
 
   const lastMatchedPitch = matchedPitches.length ? matchedPitches[matchedPitches.length - 1] : null;
+  // The pitch currently being edited (see editingPitchId's doc comment) --
+  // can be ANY pitch in the session's Pitch Log table, not just the newest.
+  const editingPitch = editingPitchId !== null ? pitches.find((p) => p.id === editingPitchId) ?? null : null;
   const selectedFlightPitchIndex = selectedFlightPitchId === null
     ? matchedPitches.length - 1
     : matchedPitches.findIndex((pitch) => pitch.id === selectedFlightPitchId);
@@ -803,6 +1029,41 @@ export default function IntendedZonePanel({
 
     return { overall: tally(matched), byType };
   }, [pitches]);
+
+  // Track Strikes & Count's live stat block -- scoped to only the pitches
+  // the coach has actually called Ball/Strike on (not every matched pitch),
+  // so In Zone%/Comp% here reads consistently alongside Strike%/2-3%, which
+  // can only ever mean something for called pitches.
+  const countStats = useMemo(() => {
+    const called = pitches.filter((p) => p.isStrike !== null);
+    if (!called.length) return null;
+    // In FTP Sync mode a called pitch has no real landing location yet at
+    // call-time -- it only arrives once the next FTP sync ingests it,
+    // often hours later. Scoping In Zone%/Comp% to only the called pitches
+    // that already have a real location (rather than all called pitches)
+    // avoids showing a misleading 0% for pitches with no data yet; the UI
+    // hides these two entirely when locatedCalled is empty.
+    const locatedCalled = called.filter((p) => p.plateLocSide !== null && p.plateLocHeight !== null);
+    let inZoneN = 0;
+    let competitiveN = 0;
+    let strikeN = 0;
+    for (const p of locatedCalled) {
+      const label = pitchLocationLabel(p.plateLocSide, p.plateLocHeight);
+      if (label === 'Yes') inZoneN += 1;
+      if (label === 'Yes' || label === 'Competitive') competitiveN += 1;
+    }
+    for (const p of called) {
+      if (p.isStrike) strikeN += 1;
+    }
+    const atBatsWithCalls = new Set(called.map((p) => p.atBatIndex)).size;
+    return {
+      total: called.length,
+      inZonePct: locatedCalled.length ? (inZoneN / locatedCalled.length) * 100 : null,
+      compPct: locatedCalled.length ? (competitiveN / locatedCalled.length) * 100 : null,
+      strikePct: (strikeN / called.length) * 100,
+      twoThreePct: atBatsWithCalls ? (twoThreeHits.size / atBatsWithCalls) * 100 : null,
+    };
+  }, [pitches, twoThreeHits]);
 
   const liveDirectionBreakdown = useMemo(() => {
     const breakdown = emptyIntendedZoneDirectionBreakdown();
@@ -1110,6 +1371,19 @@ export default function IntendedZonePanel({
             ) : null}
           </div>
 
+          <div className={styles.field}>
+            <label className={styles.fieldLabel} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="checkbox" checked={trackCountEnabled} onChange={(event) => setTrackCountEnabled(event.target.checked)} />
+              Track Strikes &amp; Count
+            </label>
+            {trackCountEnabled ? (
+              <p className={styles.zoneHint} style={{ textAlign: 'left', marginTop: 8 }}>
+                After each pitch lands, call it a Ball or Strike yourself (no real batter to call it for you). In Zone%, Comp%, Strike%, 2/3%, and
+                the active count will show live, and results save to this pitcher&apos;s bullpen scripts log when you end the session.
+              </p>
+            ) : null}
+          </div>
+
           {mode === 'live' ? (
             <div className={styles.field}>
               <label className={styles.fieldLabel} htmlFor="iz-session">
@@ -1211,6 +1485,7 @@ export default function IntendedZonePanel({
               <button type="button" className={styles.deleteLink} onClick={handleExportSessionPdf} disabled={isExportingSessionPdf}>
                 {isExportingSessionPdf ? 'Exporting…' : 'Export PDF'}
               </button>
+              <SaveReportToProfileButton generate={handleExportSessionPdf} title={`Intended Target Session - ${pitcherName || 'Pitcher'}`} preferredPlayerName={pitcherName} disabled={isExportingSessionPdf} className={styles.deleteLink} />
               <button
                 type="button"
                 className={styles.deleteLink}
@@ -1303,7 +1578,9 @@ export default function IntendedZonePanel({
                   <text x={zonePx(-1.19)} y={zonePy(1.275)} className={styles.zonePocketNumber}>12</text>
                   <text x={zonePx(1.19)} y={zonePy(1.275)} className={styles.zonePocketNumber}>13</text>
 
-                  {pendingTarget ? (
+                  {editingPitchId !== null && editDraft ? (
+                    <IntendedTargetGlove xFt={editDraft.sideFt} yFt={editDraft.heightFt} radiusFt={targetRadiusFt} />
+                  ) : pendingTarget ? (
                     <IntendedTargetGlove xFt={pendingTarget.sideFt} yFt={pendingTarget.heightFt} radiusFt={targetRadiusFt} />
                   ) : activeSession.mode !== 'manual' && lastQueuedPitch ? (
                     <IntendedTargetGlove xFt={lastQueuedPitch.intendedSideFt} yFt={lastQueuedPitch.intendedHeightFt} radiusFt={lastQueuedPitch.targetRadiusFt} />
@@ -1322,29 +1599,50 @@ export default function IntendedZonePanel({
                     />
                   ) : null}
 
-                  {lastMatchedPitch && !pendingTarget && !lastQueuedPitch && activeSession.mode !== 'manual' && lastMatchedPitch.plateLocSide !== null && lastMatchedPitch.plateLocHeight !== null ? (
-                    <>
-                      <line
-                        x1={zonePx(lastMatchedPitch.intendedSideFt)}
-                        y1={zonePy(lastMatchedPitch.intendedHeightFt)}
-                        x2={zonePx(lastMatchedPitch.plateLocSide)}
-                        y2={zonePy(lastMatchedPitch.plateLocHeight)}
-                        stroke="rgba(248, 250, 252, 0.35)"
-                        strokeWidth="1.5"
-                        strokeDasharray="3 3"
-                      />
-                      <circle
-                        key={lastMatchedPitch.id}
-                        className={justLanded ? styles.actualDot : undefined}
-                        cx={zonePx(lastMatchedPitch.plateLocSide)}
-                        cy={zonePy(lastMatchedPitch.plateLocHeight)}
-                        r="9"
-                        fill={lastPitchColor ?? PITCH_COLORS.Undefined}
-                        stroke={ZONE_STROKE_STRONG}
-                        strokeWidth="2"
-                      />
-                    </>
-                  ) : null}
+                  {/* While editing, show the EDITED pitch's own actual
+                      landing dot/connector (against the new draft target)
+                      instead of always the most recent pitch's -- otherwise
+                      editing an older pitch confusingly still showed the
+                      newest pitch's actual location. */}
+                  {(() => {
+                    const displayPitch = editingPitchId !== null ? editingPitch : lastMatchedPitch;
+                    const displayTargetSideFt = editingPitchId !== null && editDraft ? editDraft.sideFt : displayPitch?.intendedSideFt;
+                    const displayTargetHeightFt = editingPitchId !== null && editDraft ? editDraft.heightFt : displayPitch?.intendedHeightFt;
+                    if (
+                      !displayPitch ||
+                      displayTargetSideFt === undefined ||
+                      displayTargetHeightFt === undefined ||
+                      (editingPitchId === null && (!lastMatchedPitch || pendingTarget || lastQueuedPitch)) ||
+                      activeSession.mode === 'manual' ||
+                      displayPitch.plateLocSide === null ||
+                      displayPitch.plateLocHeight === null
+                    ) {
+                      return null;
+                    }
+                    const displayColor = PITCH_COLORS[displayPitch.pitchType ?? 'Undefined'] ?? PITCH_COLORS.Undefined;
+                    return (
+                      <g>
+                        <line
+                          x1={zonePx(displayTargetSideFt)}
+                          y1={zonePy(displayTargetHeightFt)}
+                          x2={zonePx(displayPitch.plateLocSide)}
+                          y2={zonePy(displayPitch.plateLocHeight)}
+                          stroke="rgba(248, 250, 252, 0.35)"
+                          strokeWidth="1.5"
+                          strokeDasharray="3 3"
+                        />
+                        <circle
+                          className={editingPitchId === null && justLanded ? styles.actualDot : undefined}
+                          cx={zonePx(displayPitch.plateLocSide)}
+                          cy={zonePy(displayPitch.plateLocHeight)}
+                          r="9"
+                          fill={displayColor}
+                          stroke={ZONE_STROKE_STRONG}
+                          strokeWidth="2"
+                        />
+                      </g>
+                    );
+                  })()}
                 </svg>
               </div>
 
@@ -1446,6 +1744,108 @@ export default function IntendedZonePanel({
                       {resettingMatches ? 'Resetting…' : 'Reset Matches'}
                     </button>
                   ) : null}
+                </div>
+              ) : null}
+
+              {/* Correct an already-landed/matched pitch's intended target --
+                  started from that pitch's row in the Pitch Log table below
+                  (Edit Target button per row, not just the most recent
+                  pitch), never a direct zone click, to avoid accidentally
+                  moving history while just reviewing/tracking -- see
+                  editingPitchId's doc comment. This block is just the
+                  save/cancel controls once editing is active; editingPitch
+                  looks up which row that is (could be any pitch in the
+                  session, not only the newest one). */}
+              {editingPitchId !== null ? (
+                <div className={styles.actionRow} style={{ marginTop: 8 }}>
+                  <p className={styles.zoneHint} style={{ marginBottom: 0 }}>
+                    Tap the zone for pitch #{editingPitch?.pitchIndex ?? editingPitchId}&apos;s corrected target.
+                  </p>
+                  <button type="button" className={styles.confirmButton} onClick={() => void saveEditTarget()} disabled={savingEdit}>
+                    {savingEdit ? 'Saving…' : 'Save'}
+                  </button>
+                  <button type="button" className={styles.resetButton} onClick={cancelEditTarget} disabled={savingEdit}>
+                    Cancel
+                  </button>
+                </div>
+              ) : null}
+
+              {trackCountEnabled && activeSession.mode !== 'ftp_deferred' && lastMatchedPitch && lastMatchedPitch.isStrike === null ? (
+                <div className={styles.actionRow} style={{ marginTop: 8 }}>
+                  <p className={styles.zoneHint} style={{ marginBottom: 0 }}>
+                    Was that a ball or a strike?
+                  </p>
+                  <button
+                    type="button"
+                    className={styles.confirmButton}
+                    onClick={() => callBallOrStrike(lastMatchedPitch.id, true)}
+                    disabled={callingPitchId === lastMatchedPitch.id}
+                  >
+                    Strike
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.resetButton}
+                    onClick={() => callBallOrStrike(lastMatchedPitch.id, false)}
+                    disabled={callingPitchId === lastMatchedPitch.id}
+                  >
+                    Ball
+                  </button>
+                </div>
+              ) : null}
+
+              {trackCountEnabled && activeSession.mode === 'ftp_deferred' && pendingFtpCountPitchId !== null ? (
+                <div className={styles.actionRow} style={{ marginTop: 8 }}>
+                  <p className={styles.zoneHint} style={{ marginBottom: 0 }}>
+                    Was that a ball or a strike?
+                  </p>
+                  <button
+                    type="button"
+                    className={styles.confirmButton}
+                    onClick={() => callBallOrStrike(pendingFtpCountPitchId, true)}
+                    disabled={callingPitchId === pendingFtpCountPitchId}
+                  >
+                    Strike
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.resetButton}
+                    onClick={() => callBallOrStrike(pendingFtpCountPitchId, false)}
+                    disabled={callingPitchId === pendingFtpCountPitchId}
+                  >
+                    Ball
+                  </button>
+                </div>
+              ) : null}
+
+              {trackCountEnabled ? (
+                <div className={styles.actionRow} style={{ marginTop: 8, flexWrap: 'wrap', gap: 16 }}>
+                  <span className={styles.zoneHint} style={{ marginBottom: 0 }}>
+                    Count: <strong>{currentCount.balls}-{currentCount.strikes}</strong>
+                  </span>
+                  {countStats ? (
+                    <>
+                      {/* In Zone%/Comp% need real landing location data, which
+                          in FTP Sync mode doesn't exist yet at call-time --
+                          hidden entirely (not shown as 0%/pending) until at
+                          least one called pitch actually has it, same as
+                          everywhere else location-dependent already defers
+                          to FTP data arriving later. */}
+                      {countStats.inZonePct !== null ? (
+                        <span className={styles.zoneHint} style={{ marginBottom: 0 }}>In Zone {countStats.inZonePct.toFixed(0)}%</span>
+                      ) : null}
+                      {countStats.compPct !== null ? (
+                        <span className={styles.zoneHint} style={{ marginBottom: 0 }}>Comp {countStats.compPct.toFixed(0)}%</span>
+                      ) : null}
+                      <span className={styles.zoneHint} style={{ marginBottom: 0 }}>Strike {countStats.strikePct.toFixed(0)}%</span>
+                      <span className={styles.zoneHint} style={{ marginBottom: 0 }}>
+                        2/3 {countStats.twoThreePct === null ? '—' : `${countStats.twoThreePct.toFixed(0)}%`}
+                      </span>
+                    </>
+                  ) : null}
+                  <button type="button" className={styles.resetButton} onClick={handleNextBatter}>
+                    Next Batter
+                  </button>
                 </div>
               ) : null}
             </div>
@@ -1629,6 +2029,19 @@ export default function IntendedZonePanel({
                           </td>
                           <td>{p.missDirection ? MISS_DIRECTION_LABELS[p.missDirection] ?? p.missDirection : '—'}</td>
                           <td>
+                            {p.trackmanPlayId && activeSession.mode !== 'manual' ? (
+                              <button
+                                type="button"
+                                className={styles.deleteLink}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  if (editingPitchId === p.id) cancelEditTarget();
+                                  else startEditTarget(p);
+                                }}
+                              >
+                                {editingPitchId === p.id ? 'Editing…' : 'Edit Target'}
+                              </button>
+                            ) : null}
                             <button type="button" className={styles.deleteLink} onClick={(event) => { event.stopPropagation(); void handleDeletePitch(p.id); }}>
                               Delete
                             </button>

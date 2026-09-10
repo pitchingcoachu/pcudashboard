@@ -5,6 +5,8 @@ import { sortTableRows, type SortDirection } from '../../../lib/table-sort';
 import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
 import NativeDateInput from '../components/native-date-input';
 import { resolveSchoolBrand } from '../../../lib/school-brand';
+import { deliverReportPdf } from '../../../lib/report-pdf-delivery';
+import { SaveReportToProfileButton } from '../components/save-report-to-profile';
 
 const BIOMECH_RECORDING_MIME_OPTIONS = [
   { mimeType: 'video/mp4;codecs=h264,aac', extension: 'mp4' },
@@ -1962,7 +1964,7 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
       const player = String(selectedPitchPlayer ?? '').trim() || 'pitch';
       const date = String(selectedPitchDate ?? '').trim() || 'date';
       const safeName = `${player}_${date}`.replace(/[^a-z0-9_-]+/gi, '_');
-      pdf.save(`biomechanics_summary_${safeName}.pdf`);
+      deliverReportPdf(pdf, `biomechanics_summary_${safeName}.pdf`, `Biomechanics Summary - ${selectedPitchPlayer || 'Player'}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to download PDF.');
     } finally {
@@ -2336,7 +2338,7 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
       const usableH = pageH - margin * 2;
       const scale = Math.min(usableW / canvas.width, usableH / canvas.height);
       pdf.addImage(imageData, 'JPEG', (pageW - canvas.width * scale) / 2, (pageH - canvas.height * scale) / 2, canvas.width * scale, canvas.height * scale, undefined, 'FAST');
-      pdf.save(`biomechanics_compare.pdf`);
+      deliverReportPdf(pdf, 'biomechanics_compare.pdf', 'Biomechanics Comparison');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to download PDF.');
     } finally {
@@ -2506,6 +2508,7 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
           <button type="button" className="btn btn-ghost" onClick={() => void downloadSummaryPdf()} disabled={isExportingSummaryPdf}>
             {isExportingSummaryPdf ? 'Downloading PDF...' : 'Download PDF'}
           </button>
+          <SaveReportToProfileButton generate={downloadSummaryPdf} title={`Biomechanics Summary - ${selectedPitchPlayer || 'Player'}`} preferredPlayerName={selectedPitchPlayer} disabled={isExportingSummaryPdf} />
           {selectedPitchHasVideo ? (
             <button type="button" className="btn btn-ghost" onClick={() => void downloadSummaryVideo()} disabled={isRecordingSummaryVideo}>
               {isRecordingSummaryVideo ? 'Recording...' : 'Download MP4'}
@@ -2724,6 +2727,7 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
             <button type="button" className="btn btn-ghost" onClick={() => void downloadComparePdf()} disabled={isExportingComparePdf}>
               {isExportingComparePdf ? 'Downloading PDF...' : 'Download PDF'}
             </button>
+            <SaveReportToProfileButton generate={downloadComparePdf} title="Biomechanics Comparison" disabled={isExportingComparePdf} />
             {comparePitchMetaA?.hasVideo || comparePitchMetaB?.hasVideo ? (
               <button type="button" className="btn btn-ghost" onClick={() => void downloadCompareVideo()} disabled={isRecordingCompareVideo}>
                 {isRecordingCompareVideo ? 'Recording...' : 'Download MP4'}

@@ -182,7 +182,7 @@ async function renderCaptureBatchesToPdf(options: {
     }
     pdf.addImage(sourceCanvas.toDataURL('image/jpeg', 0.82), 'JPEG', margin, contentTop, contentWidth, drawHeight, undefined, 'FAST');
   }
-  pdf.save(fileName);
+  deliverReportPdf(pdf, fileName, titleText);
 }
 
 /** For a content block that ISN'T a table -- a mix of summary cards, a
@@ -588,3 +588,4 @@ export async function downloadLeaderboardTablePdf(options: {
     tableNode.style.display = originalTableDisplay;
   }
 }
+import { deliverReportPdf } from './report-pdf-delivery';

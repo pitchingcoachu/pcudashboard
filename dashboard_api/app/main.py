@@ -17559,7 +17559,11 @@ PRO_TEAM_CODE_BY_NAME = {v.lower(): k for k, v in {**PRO_TEAM_NAME_BY_CODE, **PR
 PRO_TEAM_CODE_ALIASES: Dict[str, str] = {
     "ARI": "AZ",
     "OAK": "ATH",
-    "SL": "SLC",
+    # The Statcast source and both pro rollup tables store these AAA clubs
+    # under LV/SL. Canonicalizing their display-name aliases to LAS/SLC made
+    # every team-filtered query miss otherwise healthy data.
+    "LAS": "LV",
+    "SLC": "SL",
 }
 PRO_MLB_TEAM_CODES: List[str] = sorted(
     {

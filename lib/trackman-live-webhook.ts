@@ -384,18 +384,46 @@ export async function listLiveTrackmanSessions(): Promise<
   });
 }
 
-export async function listBufferedTrackmanPitches(sessionId: string): Promise<NormalizedTrackmanPitch[]> {
+// sinceUpdatedAt (optional): only rows touched (inserted OR corrected) at or
+// after this timestamp. Deliberately NOT received_at -- a correction to an
+// already-buffered pitch (a late/refined webhook event for the same
+// play_id) updates the row in place via ON CONFLICT (play_id) DO UPDATE
+// (see recordTrackmanLiveEvent below) and bumps updated_at, but received_at
+// is never touched by that UPDATE clause, so cursoring on received_at would
+// silently miss corrections to older pitches. updated_at is also bumped by
+// this function's own self-healing repair write (below), so a cursor on it
+// still safely re-observes anything that legitimately changed.
+//
+// Live tracking polls this every ~2s and previously re-fetched +
+// re-normalized the FULL session history every single call -- an O(pitch
+// count) cost that grew every poll and, combined with the throttled
+// Plays/Data API sync path doing the same, was the direct cause of live
+// tracking slowing down and dropping pitches as a bullpen went on (session
+// history was being fully re-read and re-processed dozens of times over
+// the course of one bullpen). Passing a cursor here bounds each poll's
+// work to "what's new or changed since last time" (typically 0-1 rows)
+// regardless of how long the session has run. Omit it for callers that
+// genuinely need full history (there are none today, but the full-history
+// behavior is preserved for any future one).
+export async function listBufferedTrackmanPitches(sessionId: string, sinceUpdatedAt?: string | null): Promise<NormalizedTrackmanPitch[]> {
   if (!isDatabaseConfigured()) return [];
   await ensureTrackmanLiveSchema();
   const pool = getDbPool();
   const result = await pool.query(
-    `SELECT play_id, session_id, track_id, tracked_at, received_at, plate_loc_side_ft, plate_loc_height_ft,
-            rel_speed_mph, induced_vert_break_in, horz_break_in, pitch_type, pitcher_throws, tagged_pitcher_name,
-            raw_payload
-     FROM trackman_live_ball_events
-     WHERE session_id = $1 AND kind = 'Pitch'
-     ORDER BY COALESCE(tracked_at, received_at) ASC, received_at ASC`,
-    [sessionId]
+    sinceUpdatedAt
+      ? `SELECT play_id, session_id, track_id, tracked_at, received_at, plate_loc_side_ft, plate_loc_height_ft,
+              rel_speed_mph, induced_vert_break_in, horz_break_in, pitch_type, pitcher_throws, tagged_pitcher_name,
+              raw_payload
+         FROM trackman_live_ball_events
+         WHERE session_id = $1 AND kind = 'Pitch' AND updated_at >= $2::timestamptz
+         ORDER BY COALESCE(tracked_at, received_at) ASC, received_at ASC`
+      : `SELECT play_id, session_id, track_id, tracked_at, received_at, plate_loc_side_ft, plate_loc_height_ft,
+              rel_speed_mph, induced_vert_break_in, horz_break_in, pitch_type, pitcher_throws, tagged_pitcher_name,
+              raw_payload
+         FROM trackman_live_ball_events
+         WHERE session_id = $1 AND kind = 'Pitch'
+         ORDER BY COALESCE(tracked_at, received_at) ASC, received_at ASC`,
+    sinceUpdatedAt ? [sessionId, sinceUpdatedAt] : [sessionId]
   );
   const repairedRows = result.rows.map((row) => {
     // Re-normalizing the durable raw event makes the unit fix self-healing for
