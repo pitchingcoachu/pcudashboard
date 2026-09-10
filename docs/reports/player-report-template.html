@@ -1,0 +1,562 @@
+<title>{{PLAYER_NAME}} Report</title>
+<style>
+:root{
+  --bg:#0a0a0a;
+  --panel:#111111;
+  --panel-border:#2a2a2a;
+  --red:#c8102e;
+  --red-soft:#8f0f24;
+  --text:#f5f5f5;
+  --text-muted:#a3a3a3;
+  --cream:#dcc1a1;
+}
+*{box-sizing:border-box;}
+body{background:var(--bg);color:var(--text);}
+.deck{max-width:1180px;margin:0 auto;padding:32px 20px 80px;font-family:'Manrope',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}
+.slide{
+  background:linear-gradient(180deg,#0d0d0d 0%,#0a0a0a 100%);
+  border:1px solid var(--panel-border);
+  border-radius:18px;
+  padding:40px;
+  margin-bottom:28px;
+  position:relative;
+  overflow:hidden;
+  box-shadow:0 20px 50px rgba(0,0,0,.5);
+}
+.slide::before{
+  content:'';
+  position:absolute;top:0;left:0;right:0;height:4px;
+  background:linear-gradient(90deg,var(--red) 0%,var(--red-soft) 60%,transparent 100%);
+}
+.slide-label{
+  font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--red);
+  font-weight:800;margin-bottom:6px;
+}
+.slide h2{
+  font-size:26px;margin:0 0 4px;font-weight:800;letter-spacing:-.01em;
+}
+.slide .sub{color:var(--text-muted);font-size:13.5px;margin-bottom:24px;}
+
+/* ---- Title slide ---- */
+.title-slide{
+  text-align:center;
+  padding:64px 40px 56px;
+  background:radial-gradient(circle at 50% 0%, #1a0b0d 0%, #0a0a0a 60%);
+}
+.title-slide .logo{width:118px;height:118px;border-radius:50%;margin:0 auto 28px;display:block;box-shadow:0 0 0 1px rgba(255,255,255,.08), 0 20px 45px rgba(200,16,46,.35);}
+.title-slide .kicker{color:var(--red);letter-spacing:.22em;text-transform:uppercase;font-size:12px;font-weight:800;margin-bottom:14px;}
+.title-slide h1{font-size:44px;font-weight:800;margin:0 0 10px;letter-spacing:-.02em;}
+.title-slide .meta{color:var(--text-muted);font-size:14px;}
+.title-slide .divider{width:64px;height:3px;background:var(--red);margin:26px auto;border-radius:3px;}
+.title-slide .tagline{color:var(--cream);font-size:15px;font-weight:600;letter-spacing:.02em;}
+
+/* ---- Generic content ---- */
+.media-frame{
+  border-radius:12px;overflow:hidden;border:1px solid var(--panel-border);
+  background:#000;position:relative;
+}
+.media-frame img{display:block;width:100%;height:auto;}
+.media-caption{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:10px 2px 0;font-size:12px;color:var(--text-muted);
+}
+.pill{
+  display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
+  background:rgba(200,16,46,.12);border:1px solid rgba(200,16,46,.35);color:#ff9fae;
+  font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+}
+.two-col{display:grid;grid-template-columns:1.15fr .85fr;gap:28px;align-items:start;}
+@media (max-width:760px){.two-col{grid-template-columns:1fr;}}
+.stat-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:0;}
+.stat-list li{
+  display:flex;justify-content:space-between;align-items:baseline;
+  padding:11px 0;border-bottom:1px solid var(--panel-border);font-size:14px;
+}
+.stat-list li:last-child{border-bottom:none;}
+.stat-list .k{color:var(--text-muted);}
+.stat-list .v{font-weight:800;font-size:16px;}
+.stat-list .v.accent{color:var(--red);}
+
+.metric-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-top:6px;}
+@media (max-width:900px){.metric-grid{grid-template-columns:repeat(3,1fr);}}
+@media (max-width:600px){.metric-grid{grid-template-columns:repeat(2,1fr);}}
+.metric-card{
+  background:var(--panel);border:1px solid var(--panel-border);border-radius:12px;
+  padding:16px 14px;text-align:center;
+}
+.metric-card .label{font-size:10.5px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;line-height:1.3;min-height:26px;}
+.metric-card .value{font-size:24px;font-weight:800;}
+
+.leg-panel{background:var(--panel);border:1px solid var(--panel-border);border-radius:12px;padding:18px 20px;}
+.leg-panel h4{margin:0 0 12px;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--cream);font-weight:800;}
+.leg-panel .row{display:flex;justify-content:space-between;font-size:13px;padding:7px 0;border-bottom:1px dashed rgba(255,255,255,.08);}
+.leg-panel .row:last-child{border-bottom:none;}
+.leg-panel .row span:last-child{font-weight:700;}
+
+.bullpen-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:20px;}
+@media (max-width:760px){.bullpen-grid{grid-template-columns:1fr;}}
+.bp-card{background:var(--panel);border:1px solid var(--panel-border);border-radius:12px;padding:16px;}
+.bp-card h5{margin:0 0 10px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);font-weight:800;}
+
+.usage-bars{display:flex;flex-direction:column;gap:10px;}
+.usage-row{display:flex;align-items:center;gap:10px;font-size:12.5px;}
+.usage-row .dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;}
+.usage-row .track{flex:1;height:7px;background:#1c1c1c;border-radius:6px;overflow:hidden;}
+.usage-row .fill{height:100%;border-radius:6px;}
+.usage-row .pct{width:42px;text-align:right;font-weight:700;}
+
+table.pitch-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:22px;}
+table.pitch-table th{
+  text-align:right;color:var(--text-muted);font-weight:700;text-transform:uppercase;
+  font-size:10px;letter-spacing:.04em;padding:8px 8px;border-bottom:1px solid var(--panel-border);
+}
+table.pitch-table th:first-child,table.pitch-table td:first-child{text-align:left;}
+table.pitch-table td{padding:9px 8px;text-align:right;border-bottom:1px solid #1a1a1a;}
+table.pitch-table tr.all-row td{font-weight:800;color:var(--text);border-top:1px solid var(--panel-border);border-bottom:none;}
+.chip{display:inline-block;padding:2px 9px;border-radius:5px;font-size:11px;font-weight:800;}
+.chip.fb{background:#f5f5f5;color:#111;}
+.chip.sl{background:var(--red);color:#fff;}
+.chip.ch{background:#2f7d4f;color:#fff;}
+
+.takeaway-list{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:12px;}
+.takeaway-list li{
+  display:flex;align-items:flex-start;gap:14px;
+  background:var(--panel);border:1px solid var(--panel-border);border-radius:12px;
+  padding:16px 18px;font-size:14.5px;line-height:1.4;
+}
+.takeaway-list .num{
+  flex-shrink:0;width:26px;height:26px;border-radius:50%;background:var(--red);color:#fff;
+  display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;margin-top:1px;
+}
+
+.footer-note{
+  text-align:center;color:var(--text-muted);font-size:12px;padding:20px 0 0;
+}
+.footer-note .brand{color:var(--red);font-weight:800;letter-spacing:.08em;text-transform:uppercase;font-size:11px;}
+
+.asset-note{
+  margin-top:14px;padding:12px 14px;border-radius:10px;background:rgba(220,193,161,.06);
+  border:1px solid rgba(220,193,161,.2);font-size:12px;color:var(--cream);
+}
+
+/* ---- Custom video player (no native-controls dimming on hover/scrub) ---- */
+.player{position:relative;background:#000;}
+.player video{display:block;width:100%;}
+.player-bar{
+  display:flex;align-items:center;gap:10px;
+  padding:9px 12px;background:#141414;border-top:1px solid var(--panel-border);
+}
+.player-play{
+  flex-shrink:0;width:30px;height:30px;border-radius:50%;
+  background:var(--red);border:none;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;
+}
+.player-play:hover{background:var(--red-soft);}
+.player-time{flex-shrink:0;font-size:11px;color:var(--text-muted);font-variant-numeric:tabular-nums;min-width:34px;}
+.player-scrub{
+  flex:1;height:5px;border-radius:4px;background:#2a2a2a;position:relative;cursor:pointer;
+}
+.player-scrub .fill{position:absolute;left:0;top:0;bottom:0;background:var(--red);border-radius:4px;width:0%;}
+.player-scrub .knob{
+  position:absolute;top:50%;width:12px;height:12px;border-radius:50%;background:#fff;
+  transform:translate(-50%,-50%);left:0%;box-shadow:0 1px 4px rgba(0,0,0,.5);
+}
+
+/* ---- Present mode toggle ---- */
+.present-toggle{
+  position:fixed;top:18px;right:18px;z-index:200;
+  display:flex;align-items:center;gap:8px;
+  padding:9px 16px;border-radius:999px;
+  background:var(--red);color:#fff;border:none;cursor:pointer;
+  font-family:inherit;font-weight:800;font-size:12.5px;letter-spacing:.04em;text-transform:uppercase;
+  box-shadow:0 10px 24px rgba(200,16,46,.4);
+}
+.present-toggle:hover{background:var(--red-soft);}
+
+/* ---- Present mode (one slide at a time, fullscreen-style) ---- */
+body.presenting{overflow:hidden;}
+body.presenting .deck{
+  max-width:none;margin:0;padding:0;height:100vh;
+}
+body.presenting .slide{
+  display:none;
+  margin:0;border-radius:0;border:none;height:100vh;
+  padding:64px 8vw 40px;
+  align-items:center;justify-content:flex-start;flex-direction:column;
+  overflow-y:auto;
+}
+body.presenting .slide.active{display:flex;}
+body.presenting .footer-note{display:none;}
+body.presenting .force-curve-card{display:none;}
+body.presenting .slide > *{max-width:1100px;width:100%;flex-shrink:0;}
+body.presenting .slide.title-slide{justify-content:center;}
+body.presenting .title-slide .logo{width:118px;height:118px;flex-shrink:0;}
+
+/* Shorter data slides: center vertically and scale up since they don't overflow the viewport.
+   Add class="slide slide-compact" to any slide that's short enough to fit on one screen
+   (a couple of cards / a short list) so it doesn't look top-pinned with empty space below
+   in Present mode. Leave tall slides (video + chart, the full pitch table) without it so
+   they stay top-anchored and scroll safely instead of clipping content above the fold. */
+body.presenting .slide.slide-compact{justify-content:center;}
+body.presenting .slide-compact h2{font-size:38px;}
+body.presenting .slide-compact .sub{font-size:17px;}
+body.presenting .slide-compact .metric-card .value{font-size:32px;}
+body.presenting .slide-compact .metric-card .label{font-size:12px;}
+body.presenting .slide-compact .leg-panel .row{font-size:16px;padding:10px 0;}
+body.presenting .slide-compact .leg-panel h4{font-size:14px;}
+body.presenting .slide-compact .takeaway-list{gap:18px;margin-top:16px;}
+body.presenting .slide-compact .takeaway-list li{font-size:24px;padding:28px 30px;}
+body.presenting .slide-compact .takeaway-list .num{width:42px;height:42px;font-size:18px;}
+body.presenting .slide-compact .bp-card .media-frame{width:460px !important;}
+
+.present-nav{
+  position:fixed;bottom:22px;left:50%;transform:translateX(-50%);z-index:200;
+  display:none;align-items:center;gap:16px;
+  padding:10px 18px;border-radius:999px;
+  background:rgba(17,17,17,.92);border:1px solid var(--panel-border);
+  box-shadow:0 12px 30px rgba(0,0,0,.5);
+}
+body.presenting .present-nav{display:flex;}
+.present-nav button{
+  width:32px;height:32px;border-radius:50%;border:none;background:#242424;color:#fff;
+  cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;
+}
+.present-nav button:hover{background:var(--red);}
+.present-nav button:disabled{opacity:.35;cursor:default;background:#242424;}
+.present-nav .count{color:var(--text-muted);font-size:12.5px;font-variant-numeric:tabular-nums;min-width:48px;text-align:center;}
+.present-exit{
+  position:fixed;top:18px;right:18px;z-index:200;display:none;
+  padding:9px 16px;border-radius:999px;background:#1c1c1c;border:1px solid var(--panel-border);
+  color:#fff;cursor:pointer;font-family:inherit;font-size:12.5px;font-weight:700;
+}
+body.presenting .present-exit{display:block;}
+body.presenting .present-toggle{display:none;}
+</style>
+
+<button type="button" class="present-toggle" id="presentToggle">&#9654; Present</button>
+<button type="button" class="present-exit" id="presentExit">&times; Exit</button>
+<div class="present-nav" id="presentNav">
+  <button type="button" id="presentPrev">&#8249;</button>
+  <span class="count" id="presentCount">1 / {{SLIDE_COUNT}}</span>
+  <button type="button" id="presentNext">&#8250;</button>
+</div>
+
+<div class="deck" id="deck">
+
+  <!-- TITLE SLIDE -->
+  <section class="slide title-slide">
+    <img class="logo" src="data:image/png;base64,{{LOGO_BASE64}}" alt="Pitching Coach U" />
+    <div class="kicker">Pitching Coach "U" &middot; Player Development</div>
+    <h1>{{PLAYER_NAME}}</h1>
+    <div class="meta">{{REPORT_SUBTITLE}} &middot; {{REPORT_DATE}}</div>
+    <div class="divider"></div>
+  </section>
+
+  <!-- SLIDE: Pitch clip -->
+  <section class="slide">
+    <div class="slide-label">Bullpen Session</div>
+    <h2>{{PITCH_HEADLINE}}</h2>
+    <div class="sub">Live delivery capture with real-time TrackMan overlay</div>
+    <div class="media-frame player" id="player-pitch">
+      <video playsinline poster="data:image/jpeg;base64,{{PITCH_VIDEO_POSTER_BASE64}}">
+        <source src="{{PITCH_VIDEO_ASSET_URL}}" type="video/mp4" />
+      </video>
+      <div class="player-bar">
+        <button type="button" class="player-play" data-action="toggle">&#9654;</button>
+        <span class="player-time" data-role="current">0:00</span>
+        <div class="player-scrub" data-action="scrub"><div class="fill"></div><div class="knob"></div></div>
+        <span class="player-time" data-role="duration">0:00</span>
+      </div>
+    </div>
+    <div class="media-caption">
+      <span class="pill">Video &middot; {{PITCH_CLIP_LENGTH}}</span>
+      <span>{{PITCH_TRACKMAN_LINE}}</span>
+    </div>
+    <div class="asset-note">Full-resolution video: <a href="{{PITCH_VIDEO_ASSET_URL}}" target="_blank" style="color:#dcc1a1;">{{PITCH_VIDEO_FILENAME}}</a></div>
+  </section>
+
+  <!-- SLIDE: Biomechanics summary -->
+  <section class="slide">
+    <div class="slide-label">Force Plate &middot; Biomechanics</div>
+    <h2>Ground Reaction Force Summary</h2>
+    <div class="sub">{{BIOMECH_SUBTITLE}}</div>
+    <div class="media-frame player" id="player-biomech">
+      <video playsinline poster="data:image/jpeg;base64,{{BIOMECH_VIDEO_POSTER_BASE64}}">
+        <source src="{{BIOMECH_VIDEO_ASSET_URL}}" type="video/mp4" />
+      </video>
+      <div class="player-bar">
+        <button type="button" class="player-play" data-action="toggle">&#9654;</button>
+        <span class="player-time" data-role="current">0:00</span>
+        <div class="player-scrub" data-action="scrub"><div class="fill"></div><div class="knob"></div></div>
+        <span class="player-time" data-role="duration">0:00</span>
+      </div>
+    </div>
+    <div class="media-caption">
+      <span class="pill">Video &middot; {{BIOMECH_CLIP_LENGTH}}</span>
+      <span>{{BIOMECH_SUMMARY_LINE}}</span>
+    </div>
+    <div class="asset-note">Full-resolution video: <a href="{{BIOMECH_VIDEO_ASSET_URL}}" target="_blank" style="color:#dcc1a1;">{{BIOMECH_VIDEO_FILENAME}}</a></div>
+    <!-- force-curve-card is hidden automatically in Present mode (it's usually visible inside the video itself) -->
+    <div class="bp-card force-curve-card" style="margin-top:16px;">
+      <h5>Force-Time Curve (Back &amp; Lead Leg, Fx/Fy/Fz)</h5>
+      <div class="media-frame"><img src="data:image/png;base64,{{FORCE_CURVE_FULL_BASE64}}" alt="Full force-time curve, back and lead leg Fx Fy Fz"/></div>
+    </div>
+  </section>
+
+  <!-- SLIDE: Force plate key metrics -->
+  <section class="slide slide-compact">
+    <div class="slide-label">Force Plate Data</div>
+    <h2>Key Ground Reaction Metrics</h2>
+    <div class="sub">{{FORCE_METRICS_SUBTITLE}}</div>
+    <div class="two-col">
+      <div class="leg-panel">
+        <h4>Back Leg</h4>
+        <div class="row"><span>Peak Fz (BW%)</span><span>{{BACK_PEAK_FZ}}</span></div>
+        <div class="row"><span>Peak De-Weighting (BW%)</span><span>{{BACK_PEAK_DEWEIGHTING}}</span></div>
+        <div class="row"><span>Z-Force Gain (BW%)</span><span>{{BACK_Z_FORCE_GAIN}}</span></div>
+        <div class="row"><span>Peak Fy (BW%)</span><span>{{BACK_PEAK_FY}}</span></div>
+        <div class="row"><span>Mound Connection (BW%)</span><span>{{BACK_MOUND_CONNECTION}}</span></div>
+        <div class="row"><span>Impulse (BW%&middot;s)</span><span>{{BACK_IMPULSE}}</span></div>
+        <div class="row"><span>Impulse Time (ms)</span><span>{{BACK_IMPULSE_TIME}}</span></div>
+        <div class="row"><span>YZ Transfer Back (ms)</span><span>{{BACK_YZ_TRANSFER}}</span></div>
+      </div>
+      <div class="leg-panel">
+        <h4>Lead Leg</h4>
+        <div class="row"><span>Peak Fz (BW%)</span><span>{{LEAD_PEAK_FZ}}</span></div>
+        <div class="row"><span>Peak Fy (BW%)</span><span>{{LEAD_PEAK_FY}}</span></div>
+        <div class="row"><span>Clawback Time (s)</span><span>{{LEAD_CLAWBACK_TIME}}</span></div>
+        <div class="row"><span>FFC to Peak Y (s)</span><span>{{LEAD_FFC_TO_PEAK_Y}}</span></div>
+        <div class="row"><span>YZ Transfer Front (ms)</span><span>{{LEAD_YZ_TRANSFER}}</span></div>
+      </div>
+    </div>
+    <!-- Pick whichever 5 metrics matter most for this player -- these do not have to match the leg-panel rows above -->
+    <div class="metric-grid">
+      <div class="metric-card"><div class="label">{{METRIC_1_LABEL}}</div><div class="value">{{METRIC_1_VALUE}}</div></div>
+      <div class="metric-card"><div class="label">{{METRIC_2_LABEL}}</div><div class="value">{{METRIC_2_VALUE}}</div></div>
+      <div class="metric-card"><div class="label">{{METRIC_3_LABEL}}</div><div class="value">{{METRIC_3_VALUE}}</div></div>
+      <div class="metric-card"><div class="label">{{METRIC_4_LABEL}}</div><div class="value">{{METRIC_4_VALUE}}</div></div>
+      <div class="metric-card"><div class="label">{{METRIC_5_LABEL}}</div><div class="value">{{METRIC_5_VALUE}}</div></div>
+    </div>
+  </section>
+
+  <!-- SLIDE: Jump profile -->
+  <section class="slide slide-compact">
+    <div class="slide-label">Force Plate Data</div>
+    <h2>Jump Profile</h2>
+    <div class="sub">Countermovement jump testing &middot; {{CMJ_REPS}} reps</div>
+    <div class="two-col">
+      <div class="leg-panel" style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:28px 20px;">
+        <h4 style="margin-bottom:10px;">Eccentric Braking RFD / BM</h4>
+        <div style="font-size:44px;font-weight:800;color:var(--text);line-height:1;">{{ECCENTRIC_BRAKING_RFD}}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:8px;text-transform:uppercase;letter-spacing:.05em;">N/s/kg</div>
+      </div>
+      <div class="leg-panel">
+        <h4>CMJ Results</h4>
+        <div class="row"><span>Peak Power / BM</span><span>{{CMJ_PEAK_POWER}}</span></div>
+        <div class="row"><span>RSI-modified</span><span>{{CMJ_RSI}}</span></div>
+        <div class="row"><span>Jump Height (Flight Time)</span><span>{{CMJ_JUMP_HEIGHT}}</span></div>
+      </div>
+    </div>
+    <!-- Only include this card if you have an actual jump force-time curve screenshot; otherwise delete the whole .bp-card block -->
+    <div class="bp-card" style="margin-top:16px;">
+      <h5>Force-Time Curve</h5>
+      <div class="media-frame" style="width:320px;max-width:100%;margin:0 auto;border-radius:10px;overflow:hidden;"><img src="data:image/png;base64,{{JUMP_FORCE_CURVE_BASE64}}" alt="Jump force-time curve screenshot" style="display:block;"/></div>
+    </div>
+  </section>
+
+  <!-- SLIDE: Bullpen summary / arsenal overview -->
+  <section class="slide">
+    <div class="slide-label">Bullpen Summary Report</div>
+    <h2>Arsenal Overview</h2>
+    <div class="sub">{{PLAYER_NAME}} &middot; {{BULLPEN_DATE}} &middot; {{PITCH_COUNT}} pitches logged</div>
+
+    <!-- Usage: repeat/remove .usage-row lines per pitch type actually thrown -->
+    <div class="bullpen-grid">
+      <div class="bp-card">
+        <h5>Usage</h5>
+        <div class="usage-bars">
+          <div class="usage-row"><span class="dot" style="background:#f5f5f5;"></span><span style="width:70px;">Fastball</span><div class="track"><div class="fill" style="width:{{FB_USAGE_PCT}}%;background:#f5f5f5;"></div></div><span class="pct">{{FB_USAGE_PCT}}%</span></div>
+          <div class="usage-row"><span class="dot" style="background:#2f7d4f;"></span><span style="width:70px;">ChangeUp</span><div class="track"><div class="fill" style="width:{{CH_USAGE_PCT}}%;background:#2f7d4f;"></div></div><span class="pct">{{CH_USAGE_PCT}}%</span></div>
+          <div class="usage-row"><span class="dot" style="background:var(--red);"></span><span style="width:70px;">Slider</span><div class="track"><div class="fill" style="width:{{SL_USAGE_PCT}}%;background:var(--red);"></div></div><span class="pct">{{SL_USAGE_PCT}}%</span></div>
+        </div>
+      </div>
+      <div class="bp-card">
+        <h5>Velocity Progression</h5>
+        <ul class="stat-list">
+          <li><span class="k">Fastball avg</span><span class="v">{{FB_VELO_AVG}}</span></li>
+          <li><span class="k">Fastball max</span><span class="v accent">{{FB_VELO_MAX}}</span></li>
+          <li><span class="k">Slider avg</span><span class="v">{{SL_VELO_AVG}}</span></li>
+          <li><span class="k">ChangeUp avg</span><span class="v">{{CH_VELO_AVG}}</span></li>
+        </ul>
+      </div>
+      <div class="bp-card">
+        <h5>Command</h5>
+        <ul class="stat-list">
+          <li><span class="k">In-Zone % (all)</span><span class="v">{{INZONE_PCT_ALL}}</span></li>
+          <li><span class="k">Competitive % (all)</span><span class="v">{{COMP_PCT_ALL}}</span></li>
+          <li><span class="k">Ctrl+ (all)</span><span class="v accent">{{CTRL_PLUS_ALL}}</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="bp-card" style="margin-top:16px;">
+      <h5>Movement Plot</h5>
+      <div class="media-frame" style="width:420px;max-width:100%;margin:0 auto;"><img src="data:image/png;base64,{{MOVEMENT_PANEL_BASE64}}" alt="Pitch movement plot, horizontal break vs induced vertical break"/></div>
+    </div>
+
+    <!-- Add/remove <tr> rows per pitch type actually thrown; keep the All row last -->
+    <table class="pitch-table">
+      <thead>
+        <tr><th>Pitch</th><th>#</th><th>Velo</th><th>Max</th><th>IVB</th><th>HB</th><th>Spin</th><th>Spin Eff</th><th>bTilt</th><th>Height</th><th>Ext</th><th>InZone%</th><th>Comp%</th><th>Ctrl+</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><span class="chip fb">Fastball</span></td><td>{{FB_N}}</td><td>{{FB_VELO}}</td><td>{{FB_MAX}}</td><td>{{FB_IVB}}</td><td>{{FB_HB}}</td><td>{{FB_SPIN}}</td><td>{{FB_SPINEFF}}</td><td>{{FB_BTILT}}</td><td>{{FB_HEIGHT}}</td><td>{{FB_EXT}}</td><td>{{FB_INZONE}}</td><td>{{FB_COMP}}</td><td>{{FB_CTRL}}</td></tr>
+        <tr><td><span class="chip sl">Slider</span></td><td>{{SL_N}}</td><td>{{SL_VELO}}</td><td>{{SL_MAX}}</td><td>{{SL_IVB}}</td><td>{{SL_HB}}</td><td>{{SL_SPIN}}</td><td>{{SL_SPINEFF}}</td><td>{{SL_BTILT}}</td><td>{{SL_HEIGHT}}</td><td>{{SL_EXT}}</td><td>{{SL_INZONE}}</td><td>{{SL_COMP}}</td><td>{{SL_CTRL}}</td></tr>
+        <tr><td><span class="chip ch">ChangeUp</span></td><td>{{CH_N}}</td><td>{{CH_VELO}}</td><td>{{CH_MAX}}</td><td>{{CH_IVB}}</td><td>{{CH_HB}}</td><td>{{CH_SPIN}}</td><td>{{CH_SPINEFF}}</td><td>{{CH_BTILT}}</td><td>{{CH_HEIGHT}}</td><td>{{CH_EXT}}</td><td>{{CH_INZONE}}</td><td>{{CH_COMP}}</td><td>{{CH_CTRL}}</td></tr>
+        <tr class="all-row"><td>All</td><td>{{ALL_N}}</td><td>{{ALL_VELO}}</td><td>{{ALL_MAX}}</td><td>{{ALL_IVB}}</td><td>{{ALL_HB}}</td><td>{{ALL_SPIN}}</td><td>{{ALL_SPINEFF}}</td><td>{{ALL_BTILT}}</td><td>{{ALL_HEIGHT}}</td><td>{{ALL_EXT}}</td><td>{{ALL_INZONE}}</td><td>{{ALL_COMP}}</td><td>{{ALL_CTRL}}</td></tr>
+      </tbody>
+    </table>
+    <div class="asset-note">Full PDF report (Release, Location, Movement charts included): <a href="{{BULLPEN_PDF_ASSET_URL}}" target="_blank" style="color:#dcc1a1;">{{BULLPEN_PDF_FILENAME}}</a></div>
+  </section>
+
+  <!-- SLIDE: Programming takeaways -- number of <li> items is flexible -->
+  <section class="slide slide-compact">
+    <div class="slide-label">Player Development</div>
+    <h2>Programming Takeaways</h2>
+    <ul class="takeaway-list">
+      <li><span class="num">1</span><span>{{TAKEAWAY_1}}</span></li>
+      <li><span class="num">2</span><span>{{TAKEAWAY_2}}</span></li>
+      <li><span class="num">3</span><span>{{TAKEAWAY_3}}</span></li>
+      <li><span class="num">4</span><span>{{TAKEAWAY_4}}</span></li>
+      <li><span class="num">5</span><span>{{TAKEAWAY_5}}</span></li>
+    </ul>
+  </section>
+
+  <div class="footer-note">
+    <div class="brand">Pitching Coach "U"</div>
+    <div>Generated from PCU dashboard data &middot; {{GENERATED_DATE}}</div>
+  </div>
+
+</div>
+
+<script>
+(function(){
+  function fmt(t){
+    if(!isFinite(t)) return '0:00';
+    var m=Math.floor(t/60), s=Math.floor(t%60);
+    return m+':'+(s<10?'0':'')+s;
+  }
+  document.querySelectorAll('.player').forEach(function(root){
+    var video=root.querySelector('video');
+    var playBtn=root.querySelector('[data-action="toggle"]');
+    var scrub=root.querySelector('[data-action="scrub"]');
+    var fill=scrub.querySelector('.fill');
+    var knob=scrub.querySelector('.knob');
+    var curEl=root.querySelector('[data-role="current"]');
+    var durEl=root.querySelector('[data-role="duration"]');
+    var dragging=false;
+
+    function setProgress(ratio){
+      ratio=Math.max(0,Math.min(1,ratio));
+      fill.style.width=(ratio*100)+'%';
+      knob.style.left=(ratio*100)+'%';
+    }
+    function ratioFromEvent(evt){
+      var rect=scrub.getBoundingClientRect();
+      var x=(evt.touches?evt.touches[0].clientX:evt.clientX)-rect.left;
+      return x/rect.width;
+    }
+
+    playBtn.addEventListener('click',function(){
+      if(video.paused){ video.play(); } else { video.pause(); }
+    });
+    video.addEventListener('play',function(){ playBtn.innerHTML='&#10074;&#10074;'; });
+    video.addEventListener('pause',function(){ playBtn.innerHTML='&#9654;'; });
+    video.addEventListener('loadedmetadata',function(){ durEl.textContent=fmt(video.duration); });
+    video.addEventListener('timeupdate',function(){
+      if(dragging) return;
+      curEl.textContent=fmt(video.currentTime);
+      if(video.duration) setProgress(video.currentTime/video.duration);
+    });
+    video.addEventListener('ended',function(){ playBtn.innerHTML='&#9654;'; });
+
+    function beginDrag(evt){
+      dragging=true;
+      updateFromEvent(evt);
+      evt.preventDefault();
+    }
+    function updateFromEvent(evt){
+      var ratio=ratioFromEvent(evt);
+      setProgress(ratio);
+      if(video.duration){
+        var t=ratio*video.duration;
+        curEl.textContent=fmt(t);
+        video.currentTime=t;
+      }
+    }
+    function endDrag(){ dragging=false; }
+
+    scrub.addEventListener('mousedown',beginDrag);
+    scrub.addEventListener('touchstart',beginDrag,{passive:false});
+    window.addEventListener('mousemove',function(evt){ if(dragging) updateFromEvent(evt); });
+    window.addEventListener('touchmove',function(evt){ if(dragging) updateFromEvent(evt); },{passive:false});
+    window.addEventListener('mouseup',endDrag);
+    window.addEventListener('touchend',endDrag);
+  });
+})();
+</script>
+
+<script>
+(function(){
+  var deck=document.getElementById('deck');
+  var slides=Array.prototype.slice.call(deck.querySelectorAll('.slide'));
+  var toggleBtn=document.getElementById('presentToggle');
+  var exitBtn=document.getElementById('presentExit');
+  var prevBtn=document.getElementById('presentPrev');
+  var nextBtn=document.getElementById('presentNext');
+  var countEl=document.getElementById('presentCount');
+  var current=0;
+  var presenting=false;
+
+  function render(){
+    slides.forEach(function(s,i){ s.classList.toggle('active', i===current); });
+    countEl.textContent=(current+1)+' / '+slides.length;
+    prevBtn.disabled=current===0;
+    nextBtn.disabled=current===slides.length-1;
+  }
+
+  function enterPresent(){
+    presenting=true;
+    current=0;
+    document.body.classList.add('presenting');
+    var el=document.documentElement;
+    if(el.requestFullscreen){ el.requestFullscreen().catch(function(){}); }
+    render();
+  }
+  function exitPresent(){
+    presenting=false;
+    document.body.classList.remove('presenting');
+    if(document.fullscreenElement && document.exitFullscreen){ document.exitFullscreen().catch(function(){}); }
+  }
+  function go(delta){
+    if(!presenting) return;
+    current=Math.max(0,Math.min(slides.length-1,current+delta));
+    render();
+  }
+
+  toggleBtn.addEventListener('click',enterPresent);
+  exitBtn.addEventListener('click',exitPresent);
+  prevBtn.addEventListener('click',function(){ go(-1); });
+  nextBtn.addEventListener('click',function(){ go(1); });
+
+  document.addEventListener('keydown',function(evt){
+    if(!presenting) return;
+    if(evt.key==='ArrowRight'||evt.key===' '||evt.key==='PageDown'){ go(1); evt.preventDefault(); }
+    else if(evt.key==='ArrowLeft'||evt.key==='PageUp'){ go(-1); evt.preventDefault(); }
+    else if(evt.key==='Escape'){ exitPresent(); }
+  });
+  document.addEventListener('fullscreenchange',function(){
+    if(!document.fullscreenElement && presenting){ exitPresent(); }
+  });
+})();
+</script>

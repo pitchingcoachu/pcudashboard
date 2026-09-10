@@ -4,7 +4,7 @@ import { claimFlagNotification, listFlagRules } from '../../../../../lib/ai-work
 import { resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
 import { evaluateFlagRules } from '../../../../../lib/flag-evaluation';
 import { loadFlagMetricPoints } from '../../../../../lib/flag-metric-data';
-import { createNotificationsForUsers } from '../../../../../lib/training-db';
+import { createNotificationsForUsers, listPlayerSummariesByOrganization } from '../../../../../lib/training-db';
 import { sendPushNotificationToUsers } from '../../../../../lib/push-notifications';
 import { dashboardMetricLabel } from '../../../../../lib/dashboard-metric-catalog';
 import { formatTableDisplayValue } from '../../../../../lib/table-sort';
@@ -41,7 +41,18 @@ export async function GET(request: Request) {
 
   try {
     const domains = Array.from(new Set(enabledRules.map((rule) => rule.domain)));
-    const points = await loadFlagMetricPoints({ schoolCode, startDate: ymd(start), endDate: ymd(end), domains, rules: enabledRules });
+    const organizationPlayers = await listPlayerSummariesByOrganization({
+      organizationId: access.organizationId,
+      assignedCoachUserId: null,
+    });
+    const points = await loadFlagMetricPoints({
+      schoolCode,
+      startDate: ymd(start),
+      endDate: ymd(end),
+      domains,
+      rules: enabledRules,
+      allowedPlayerNames: organizationPlayers.map((player) => player.fullName),
+    });
     const results = evaluateFlagRules(rules, points);
 
     await Promise.all(results.filter((result) => result.triggered).map(async (result) => {

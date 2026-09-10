@@ -56,8 +56,17 @@ export async function loadFlagMetricPoints(input: {
   endDate: string;
   domains: FlagDomain[];
   rules: FlagRuleRow[];
+  allowedPlayerNames?: string[];
 }): Promise<{ pitching: Point[]; hitting: Point[] }> {
   const schoolCode = String(input.schoolCode ?? '').trim().toUpperCase();
+  const playerKey = (value: unknown) => String(value ?? '')
+    .trim()
+    .replace(/^([^,]+),\s*(.+)$/, '$2 $1')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+  const allowedPlayerKeys = input.allowedPlayerNames
+    ? new Set(input.allowedPlayerNames.map(playerKey).filter(Boolean))
+    : null;
   const table = schoolCode === 'PRO' ? 'public.pro_pitch_events' : 'public.pitch_events';
   const dateResult = await getDbPool().query<{ session_date: string }>(
     `SELECT DISTINCT session_date::text AS session_date
@@ -102,6 +111,7 @@ export async function loadFlagMetricPoints(input: {
     for (const row of payload.table_rows ?? []) {
       const player = String(row[playerColumn] ?? '').trim();
       if (!player || player.toLowerCase() === 'all') continue;
+      if (allowedPlayerKeys && !allowedPlayerKeys.has(playerKey(player))) continue;
       for (const rule of rules) {
         const metric = canonicalFlagMetric(rule.metric);
         const value = parseMetricValue(metric, row[metric]);

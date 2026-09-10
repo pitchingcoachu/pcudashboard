@@ -35,6 +35,7 @@ export type FlagRuleRow = {
   notificationsEnabled: boolean;
   cooldownHours: number;
   enabled: boolean;
+  displayOrder: number;
   createdAt: string;
   createdByUserId: number | null;
 };
@@ -45,7 +46,7 @@ declare global {
   var __pcuAiWorkspaceReadyPromise: Promise<void> | undefined;
 }
 
-const AI_WORKSPACE_SCHEMA_VERSION = 2;
+const AI_WORKSPACE_SCHEMA_VERSION = 3;
 
 export async function ensureAiWorkspaceReady(): Promise<void> {
   if (!isDatabaseConfigured() || global.__pcuAiWorkspaceSchemaVersion === AI_WORKSPACE_SCHEMA_VERSION) return;
@@ -112,10 +113,22 @@ export async function ensureAiWorkspaceReady(): Promise<void> {
         PRIMARY KEY (rule_id, player_name, session_date)
       );
       ALTER TABLE metric_flag_rules ADD COLUMN IF NOT EXISTS pitch_types TEXT[] NOT NULL DEFAULT ARRAY['All']::TEXT[];
+      ALTER TABLE metric_flag_rules ADD COLUMN IF NOT EXISTS display_order INTEGER;
       UPDATE metric_flag_rules
       SET pitch_types = ARRAY[pitch_type]::TEXT[]
       WHERE pitch_types = ARRAY['All']::TEXT[]
         AND LOWER(COALESCE(pitch_type, 'All')) <> 'all';
+      WITH ranked_rules AS (
+        SELECT id, ROW_NUMBER() OVER (PARTITION BY organization_id ORDER BY created_at DESC, id DESC) - 1 AS next_order
+        FROM metric_flag_rules
+      )
+      UPDATE metric_flag_rules AS rule
+      SET display_order = ranked.next_order
+      FROM ranked_rules AS ranked
+      WHERE rule.id = ranked.id
+        AND rule.display_order IS NULL;
+      ALTER TABLE metric_flag_rules ALTER COLUMN display_order SET DEFAULT 0;
+      ALTER TABLE metric_flag_rules ALTER COLUMN display_order SET NOT NULL;
     `);
     global.__pcuAiWorkspaceReady = true;
     global.__pcuAiWorkspaceSchemaVersion = AI_WORKSPACE_SCHEMA_VERSION;
@@ -267,16 +280,31 @@ function mapFlagRule(row: Record<string, unknown>): FlagRuleRow {
   return { id:Number(row.id),name:String(row.name),domain:row.domain as 'pitching'|'hitting',metric:String(row.metric),pitchType:normalizedPitchTypes.length===1?normalizedPitchTypes[0]:normalizedPitchTypes.join(', '),pitchTypes:normalizedPitchTypes,
     direction:row.direction as FlagRuleRow['direction'],threshold:Number(row.threshold),thresholdType:row.threshold_type as FlagRuleRow['thresholdType'],
     baselineDays:Number(row.baseline_days),minimumSample:Number(row.minimum_sample),targetPlayer:String(row.target_player),sessionType:String(row.session_type),
-    notificationsEnabled:Boolean(row.notifications_enabled),cooldownHours:Number(row.cooldown_hours),enabled:Boolean(row.enabled),createdAt:String(row.created_at),createdByUserId:row.created_by_user_id?Number(row.created_by_user_id):null };
+    notificationsEnabled:Boolean(row.notifications_enabled),cooldownHours:Number(row.cooldown_hours),enabled:Boolean(row.enabled),displayOrder:Number(row.display_order??0),createdAt:String(row.created_at),createdByUserId:row.created_by_user_id?Number(row.created_by_user_id):null };
 }
 
-export async function listFlagRules(organizationId:number):Promise<FlagRuleRow[]> { await ensureAiWorkspaceReady(); const r=await getDbPool().query<Record<string,unknown>>(`SELECT * FROM metric_flag_rules WHERE organization_id=$1 ORDER BY created_at DESC`,[organizationId]);return r.rows.map(mapFlagRule); }
-export async function saveFlagRule(input:Omit<FlagRuleRow,'id'|'createdAt'|'createdByUserId'|'pitchType'> & {organizationId:number;userId:number;id?:number}):Promise<number> {
+export async function listFlagRules(organizationId:number):Promise<FlagRuleRow[]> { await ensureAiWorkspaceReady(); const r=await getDbPool().query<Record<string,unknown>>(`SELECT * FROM metric_flag_rules WHERE organization_id=$1 ORDER BY display_order ASC, created_at DESC`,[organizationId]);return r.rows.map(mapFlagRule); }
+export async function saveFlagRule(input:Omit<FlagRuleRow,'id'|'createdAt'|'createdByUserId'|'pitchType'|'displayOrder'> & {organizationId:number;userId:number;id?:number}):Promise<number> {
   await ensureAiWorkspaceReady(); const pitchTypes=input.pitchTypes.length?input.pitchTypes:['All'];const legacyPitchType=pitchTypes.length===1?pitchTypes[0]:'All';const values=[input.organizationId,input.name,input.domain,input.metric,legacyPitchType,pitchTypes,input.direction,input.threshold,input.thresholdType,input.baselineDays,input.minimumSample,input.targetPlayer,input.sessionType,input.notificationsEnabled,input.cooldownHours,input.enabled,input.userId];
   if(input.id){const r=await getDbPool().query<{id:number}>(`UPDATE metric_flag_rules SET name=$2,domain=$3,metric=$4,pitch_type=$5,pitch_types=$6::text[],direction=$7,threshold=$8,threshold_type=$9,baseline_days=$10,minimum_sample=$11,target_player=$12,session_type=$13,notifications_enabled=$14,cooldown_hours=$15,enabled=$16,updated_at=NOW() WHERE organization_id=$1 AND id=$18 RETURNING id`,[...values,input.id]);return Number(r.rows[0]?.id||0);}
-  const r=await getDbPool().query<{id:number}>(`INSERT INTO metric_flag_rules (organization_id,name,domain,metric,pitch_type,pitch_types,direction,threshold,threshold_type,baseline_days,minimum_sample,target_player,session_type,notifications_enabled,cooldown_hours,enabled,created_by_user_id) VALUES ($1,$2,$3,$4,$5,$6::text[],$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,values);return Number(r.rows[0].id);
+  const r=await getDbPool().query<{id:number}>(`INSERT INTO metric_flag_rules (organization_id,name,domain,metric,pitch_type,pitch_types,direction,threshold,threshold_type,baseline_days,minimum_sample,target_player,session_type,notifications_enabled,cooldown_hours,enabled,display_order,created_by_user_id) SELECT $1,$2,$3,$4,$5,$6::text[],$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,COALESCE(MAX(display_order)+1,0),$17 FROM metric_flag_rules WHERE organization_id=$1 RETURNING id`,values);return Number(r.rows[0].id);
 }
 export async function deleteFlagRule(id:number,organizationId:number):Promise<void>{await ensureAiWorkspaceReady();await getDbPool().query(`DELETE FROM metric_flag_rules WHERE id=$1 AND organization_id=$2`,[id,organizationId]);}
+export async function reorderFlagRules(organizationId:number,ruleIds:number[]):Promise<boolean>{
+  await ensureAiWorkspaceReady();
+  const ids=Array.from(new Set(ruleIds.map(Number).filter((id)=>Number.isInteger(id)&&id>0)));
+  if(ids.length!==ruleIds.length)return false;
+  const client=await getDbPool().connect();
+  try{
+    await client.query('BEGIN');
+    const existing=await client.query<{id:number}>(`SELECT id FROM metric_flag_rules WHERE organization_id=$1 FOR UPDATE`,[organizationId]);
+    const existingIds=new Set(existing.rows.map((row)=>Number(row.id)));
+    if(existingIds.size!==ids.length||ids.some((id)=>!existingIds.has(id))){await client.query('ROLLBACK');return false;}
+    await client.query(`UPDATE metric_flag_rules AS rule SET display_order=ordered.position::integer-1,updated_at=NOW() FROM unnest($2::bigint[]) WITH ORDINALITY AS ordered(id,position) WHERE rule.organization_id=$1 AND rule.id=ordered.id`,[organizationId,ids]);
+    await client.query('COMMIT');
+    return true;
+  }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+}
 export async function claimFlagNotification(ruleId:number,playerName:string,sessionDate:string):Promise<boolean>{await ensureAiWorkspaceReady();const r=await getDbPool().query(`INSERT INTO metric_flag_notifications (rule_id,player_name,session_date) VALUES ($1,$2,$3::date) ON CONFLICT DO NOTHING RETURNING rule_id`,[ruleId,playerName,sessionDate]);return (r.rowCount??0)>0;}
 
 export async function listExpiredAiAudio():Promise<Array<{id:number;organizationId:number;r2Key:string}>>{await ensureAiWorkspaceReady();const r=await getDbPool().query<{id:number;organization_id:number;audio_r2_key:string}>(`SELECT id,organization_id,audio_r2_key FROM ai_sessions WHERE keep_audio=FALSE AND audio_r2_key IS NOT NULL AND audio_expires_at<=NOW() LIMIT 500`);return r.rows.map(x=>({id:Number(x.id),organizationId:Number(x.organization_id),r2Key:x.audio_r2_key}));}
