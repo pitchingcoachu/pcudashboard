@@ -21,6 +21,7 @@ type DashboardShellProps = {
   selectedSchoolCode: string;
   forceHome?: boolean;
   initialSuite?: SuiteName | null;
+  initialPitchingPage?: 'Flags' | null;
 };
 
 type Candidate = {
@@ -156,12 +157,13 @@ async function fetchHomePayload(signal?: AbortSignal): Promise<SearchPayload> {
   return payload;
 }
 
-export default function DashboardShell({ role, selectedSchoolCode, forceHome = false, initialSuite = null }: DashboardShellProps) {
+export default function DashboardShell({ role, selectedSchoolCode, forceHome = false, initialSuite = null, initialPitchingPage = null }: DashboardShellProps) {
   const storageSchoolToken = String(selectedSchoolCode ?? '').trim().toUpperCase() || 'DEFAULT';
   const shellStorageKey = `portal_dashboard_shell_state:${storageSchoolToken}`;
   const pendingHomeNavigateStorageKey = `portal_dashboard_home_nav:${storageSchoolToken}`;
   const [homeNavigateRequest, setHomeNavigateRequest] = useState<HomeNavigateRequest | null>(null);
   const [suite, setSuite] = useState<SuiteName>('Home');
+  const [isMobileDashboardView, setIsMobileDashboardView] = useState(false);
   const appliedHomeNavigateSuiteRef = useRef<number | null>(null);
   const [navSearchPayload, setNavSearchPayload] = useState<SearchPayload | null>(null);
   const [navSearchInput, setNavSearchInput] = useState('');
@@ -213,6 +215,9 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
   }, [isLeague, isPro, role, selectedSchoolCode]);
 
   const activeSuite: SuiteName = suiteOptions.includes(suite) ? suite : 'Home';
+  const suitePickerOptions = isMobileDashboardView && activeSuite !== 'Flags'
+    ? suiteOptions.filter((name) => name !== 'Flags')
+    : suiteOptions;
   const showSuite = (name: SuiteName) => activeSuite === name;
   const activateSuite = useCallback((name: string) => {
     const resolved = suiteOptions.includes(name as SuiteName) ? (name as SuiteName) : 'Home';
@@ -226,6 +231,13 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
       }
     }
   }, [shellStorageKey, suiteOptions]);
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 900px)');
+    const sync = () => setIsMobileDashboardView(media.matches);
+    sync();
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, []);
   useEffect(() => {
     dispatchPortalActivity({
       eventType: 'page_view',
@@ -409,7 +421,7 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
               value={activeSuite}
               onChange={(event) => activateSuite(event.target.value as SuiteName)}
             >
-              {suiteOptions.map((name) => (
+              {suitePickerOptions.map((name) => (
                 <option key={name} value={name}>
                   {name}
                 </option>
@@ -541,12 +553,12 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
               onNavigate={handleHomeNavigate}
             />
           </div>
-          <MobileDashboardHome role={role} suiteOptions={suiteOptions} onOpenSuite={activateSuite} />
+          <MobileDashboardHome suiteOptions={suiteOptions} onOpenSuite={activateSuite} />
         </div>
       ) : null}
       {mountedSuites.Pitching ? (
         <div style={{ display: showSuite('Pitching') ? 'block' : 'none' }}>
-          <PitchingSuite role={role} selectedSchoolCode={selectedSchoolCode} homeNavigateRequest={homeNavigateRequest} />
+          <PitchingSuite role={role} selectedSchoolCode={selectedSchoolCode} homeNavigateRequest={homeNavigateRequest} initialPage={initialPitchingPage} />
         </div>
       ) : null}
       {mountedSuites.Hitting ? <div style={{ display: showSuite('Hitting') ? 'block' : 'none' }}><HittingSuite role={role} selectedSchoolCode={selectedSchoolCode} homeNavigateRequest={homeNavigateRequest} /></div> : null}

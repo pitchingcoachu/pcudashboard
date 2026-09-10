@@ -34,6 +34,10 @@ const LiveFlightReplay = dynamic(() => import('./live-flight-replay'), {
   loading: () => <p className="portal-muted-text">Loading flight replay…</p>,
 });
 
+const FlagsSuite = dynamic(() => import('./flags-suite'), {
+  loading: () => <p className="portal-muted-text">Loading flags…</p>,
+});
+
 type FiltersPayload = {
   school_code: string;
   min_date: string | null;
@@ -5094,6 +5098,7 @@ export default function PitchingSuite({
   role,
   selectedSchoolCode,
   homeNavigateRequest,
+  initialPage,
 }: {
   role?: 'admin' | 'coach' | 'player';
   selectedSchoolCode?: string;
@@ -5107,12 +5112,14 @@ export default function PitchingSuite({
     page?: 'Summary' | 'Leaderboard' | 'Game Log' | 'Pitch Log';
     navigationSource?: 'search' | 'home_leaderboard';
   } | null;
+  initialPage?: 'Flags' | null;
 }) {
   const canUsePitchEdits = role === 'admin' || role === 'coach';
+  const isStaff = role === 'admin' || role === 'coach';
   const isPlayerRole = role === 'player';
   const initialSchoolCode = String(selectedSchoolCode ?? '').trim().toUpperCase();
   const shouldUsePcuDefaults = initialSchoolCode === 'PCU';
-  const [dashboardPage, setDashboardPage] = useState<'Summary' | 'Leaderboard' | 'Game Log' | 'Pitch Log' | 'AB Report' | 'Velocity' | 'HeatMaps' | 'QP Locations' | 'Trend' | 'Velo Manual Entry' | 'Pitcher DNA' | 'Ball Flight' | 'Intended Zones'>('Summary');
+  const [dashboardPage, setDashboardPage] = useState<'Summary' | 'Leaderboard' | 'Game Log' | 'Pitch Log' | 'AB Report' | 'Velocity' | 'HeatMaps' | 'QP Locations' | 'Trend' | 'Velo Manual Entry' | 'Pitcher DNA' | 'Ball Flight' | 'Intended Zones' | 'Flags'>(()=>initialPage==='Flags'&&isStaff?'Flags':'Summary');
   const [isSidebarHidden, setIsSidebarHidden] = useState(false);
   const [isMobileView, setIsMobileView] = useState(false);
   const [filters, setFilters] = useState<FiltersPayload | null>(null);
@@ -15557,6 +15564,7 @@ export default function PitchingSuite({
                   <option value="Pitcher DNA">Pitcher DNA</option>
                   <option value="Ball Flight">Ball Flight</option>
                   <option value="Intended Zones">Intended Target</option>
+                  {isStaff ? <option value="Flags">Flags</option> : null}
                 </select>
               </label>
             ) : (
@@ -15726,18 +15734,20 @@ export default function PitchingSuite({
                   />
                 </>
               ) : null}
-              {isMobileView ? (
+              {isMobileView ? (dashboardPage !== 'Flags' ? (
                 <button type="button" className="btn btn-ghost" onClick={() => setIsSidebarHidden((value) => !value)}>
                   {isSidebarHidden ? 'Show Filters' : 'Hide Filters'}
                 </button>
-              ) : isSidebarHidden ? (
+              ) : null) : isSidebarHidden ? (
                 <button type="button" className="btn btn-ghost" onClick={() => setIsSidebarHidden(false)}>
                   Show Filters
                 </button>
               ) : null}
             </div>
           </div>
-          {dashboardPage === 'Summary' || dashboardPage === 'Leaderboard' ? (
+          {dashboardPage === 'Flags' && isStaff ? (
+            <FlagsSuite />
+          ) : dashboardPage === 'Summary' || dashboardPage === 'Leaderboard' ? (
             <>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
               <h3 style={{ margin: 0 }}>{overviewHeaderLabel}</h3>

@@ -51,7 +51,7 @@ export async function GET(request: Request) {
       const direction = change >= 0 ? 'increased' : 'decreased';
       const detail = `${result.player}: ${result.metric.replaceAll('_', ' ')} ${direction} by ${Math.abs(change).toFixed(2)} (${Math.abs(changePercent).toFixed(1)}%) versus the ${rule.baselineDays}-day session baseline.`;
       await createNotificationsForUsers({ recipientUserIds: [rule.createdByUserId], eventType: 'metric_flag', title: `Flag: ${rule.name}`, detail, path: '/portal/dashboard?suite=flags', playerName: result.player });
-      await sendPushNotificationToUsers({ userIds: [rule.createdByUserId], title: `Flag: ${rule.name}`, body: detail, data: { path: '/portal/dashboard?suite=flags' } });
+      await sendPushNotificationToUsers({ userIds: [rule.createdByUserId], title: `Flag: ${rule.name}`, body: detail, data: { path: '/portal/dashboard?suite=pitching&page=flags' } });
     }));
 
     return NextResponse.json({ results, rules, generatedAt: new Date().toISOString() });

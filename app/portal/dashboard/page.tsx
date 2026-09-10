@@ -95,6 +95,8 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
   const isLeagueSchool = ['LEAGUE', 'INDY'].includes(String(selectedSchool ?? '').trim().toUpperCase());
   const isTrialSchool = String(selectedSchool ?? '').trim().toUpperCase() === 'TRIAL';
   const isStaff = session.role === 'admin' || session.role === 'coach';
+  const pageParamRaw = Array.isArray(resolvedSearchParams.page) ? resolvedSearchParams.page[0] : resolvedSearchParams.page;
+  const initialPitchingPage = isStaff && String(pageParamRaw ?? '').trim().toLowerCase() === 'flags' ? 'Flags' as const : null;
   const canAccessPlayerNotes = isStaff && !isLeagueSchool;
   const canAccessActivityTracker = !isTrialSchool && canViewPortalActivity(session);
   const canAccessEmailAutomations =
@@ -208,6 +210,7 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
           selectedSchoolCode={selectedSchool}
           forceHome={forceHome}
           initialSuite={initialSuite}
+          initialPitchingPage={initialPitchingPage}
         />
       ) : (
         <>
