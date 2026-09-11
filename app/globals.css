@@ -13932,6 +13932,15 @@ body:not(.theme-light) .portal-shell--arizona .portal-social-row .social-link:is
 .report-profile-save-dialog h2,
 .report-profile-save-dialog p { margin: 0; }
 .report-profile-save-dialog label { display: grid; gap: 6px; font-weight: 700; }
+.report-profile-category-picker {
+  padding: 11px;
+  border: 1px solid color-mix(in srgb, var(--school-primary, #d7b879) 22%, var(--border));
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--school-primary, #d7b879) 5%, transparent);
+}
+.report-profile-category-picker > span { color: var(--school-primary, #d7b879); font-size: .78rem; letter-spacing: .035em; }
+.report-profile-category-picker > input { animation: report-category-reveal 150ms ease-out both; }
+@keyframes report-category-reveal { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 .report-profile-save-kicker { color: var(--school-primary, #d7b879); font-size: 0.72rem; font-weight: 900; letter-spacing: 0.16em; }
 .report-profile-save-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
 .report-profile-save-toast {

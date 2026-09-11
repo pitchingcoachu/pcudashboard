@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { resolveSchoolBrand } from '../../../lib/school-brand';
@@ -2309,6 +2310,13 @@ type CustomReportsSuiteProps = {
 };
 
 export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomReportsSuiteProps) {
+  const searchParams = useSearchParams();
+  const automationRenderMode = searchParams.get('automationRender') === '1';
+  const automationId = Number(searchParams.get('automationId') ?? 0);
+  const automationPlayerId = Number(searchParams.get('playerId') ?? 0);
+  const automationReportDate = String(searchParams.get('reportDate') ?? '');
+  const [automationRenderApplied,setAutomationRenderApplied] = useState(false);
+  const [automationAiReady,setAutomationAiReady] = useState(true);
   const [chartHover, setChartHover] = useState<{ x: number; y: number; text: string; bg?: string; textColor?: string } | null>(null);
   const reportCanvasRef = useRef<HTMLElement | null>(null);
   const [isExporting, setIsExporting] = useState(false);
@@ -4313,6 +4321,33 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     );
   };
 
+  useEffect(() => {
+    if (!automationRenderMode) return;
+    if (automationId <= 0 || automationPlayerId <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(automationReportDate)) {
+      setError('The automated report render request is invalid.');
+      return;
+    }
+    const controller = new AbortController();
+    const params = new URLSearchParams({automationId:String(automationId),playerId:String(automationPlayerId),reportDate:automationReportDate});
+    fetch(`/api/report-automations/render-context?${params.toString()}`,{cache:'no-store',signal:controller.signal})
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({})) as {templateId?:number;payload?:ReportPayload;error?:string};
+        if (!response.ok || !payload.payload) throw new Error(payload.error ?? 'Could not prepare the saved report template.');
+        applyPayload(payload.payload);
+        setSelectedReportId(Number(payload.templateId) || null);
+        setSidebarVisible(false);
+        setAutomationAiReady(!payload.payload.showAiSummary);
+        setAutomationRenderApplied(true);
+      })
+      .catch((caught) => {
+        if (controller.signal.aborted) return;
+        setError(caught instanceof Error ? caught.message : 'Could not prepare the saved report template.');
+      });
+    return () => controller.abort();
+  // This render-only URL is immutable for the lifetime of the headless page.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[automationRenderMode,automationId,automationPlayerId,automationReportDate]);
+
   const currentPayload = (): ReportPayload => ({
     title: reportTitle,
     subtitle: reportSubtitle,
@@ -4934,6 +4969,22 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     return panels;
   },new Map<string,AutomationPanelSeed>()).values());
 
+  const automationPanelStates = automationRenderMode && automationRenderApplied
+    ? visibleCellKeys.flatMap((cellId) => {
+        const config = effectiveCellConfigForScope(cellId,reportScope,cellConfigs);
+        if (!normalizePanelType(config.panelType) || normalizePanelType(config.panelType) === 'Note Section') return [];
+        if (normalizePanelType(config.panelType) === 'Intended Target Miss' || normalizePanelType(config.panelType) === 'Intended Target Map') {
+          return [intendedTargetMissData[cellId]?.status ?? 'idle'];
+        }
+        return [cellLoadStates[cellId]?.status ?? 'idle'];
+      })
+    : [];
+  const automationHasPanelError = automationPanelStates.includes('error');
+  const automationPanelsReady = automationPanelStates.length > 0 && automationPanelStates.every((status) => status === 'ready');
+  const automationRenderState = !automationRenderApplied || !automationPanelsReady || !automationAiReady
+    ? automationHasPanelError ? 'error' : 'loading'
+    : 'ready';
+
   return (
     <section className="portal-panel portal-admin-panel" style={{ padding: '1rem' }}>
       <div className="portal-custom-reports-download-row">
@@ -4949,6 +5000,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           reportKey={`${reportType.toLowerCase()}-custom-report`}
           includeAiSummaryByDefault={showAiSummary}
           automationPanels={automationPanelSeeds}
+          customReportId={selectedReportId}
           disabled={isExporting}
         />
       </div>
@@ -5400,6 +5452,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             <article
               ref={reportCanvasRef}
               className={`portal-day-card portal-custom-reports-canvas${isExporting ? ' portal-custom-reports-canvas--export' : ''}`}
+              data-automation-render-state={automationRenderMode ? automationRenderState : undefined}
             >
               <div className="portal-custom-reports-brandbar">
                 <img
@@ -7934,6 +7987,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   }
                   reportStart={globalStartDate}
                   reportEnd={globalEndDate}
+                  autoGenerate={automationRenderMode && automationPanelsReady}
+                  onReady={setAutomationAiReady}
                   panels={Object.entries(cellsData).map(([cellId, payload]) => {
                     const config = reportScope === 'Team'
                       ? normalizeCellConfig(cellConfigs[sourceCellIdForTeamScope(cellId, reportRows)])

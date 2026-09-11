@@ -1,8 +1,13 @@
 import { createSessionToken } from './auth';
 import { getDbPool } from './auth-db';
+import { existsSync } from 'node:fs';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { uploadPlayerMediaToR2 } from './biomechanics-storage';
 import { sendPushNotificationToUsers } from './push-notifications';
 import { claimAutomationRun, finishAutomationRun, type ReportAutomationPanel, type ReportAutomationRow } from './report-automations-db';
+import { buildAutomationRenderContext, resolvePanelDateRange } from './report-automation-render-context';
 import { createPlayerMedia, getPlayerNotificationContext, listPlayerSummariesByOrganization, notifyPlayerForStaffActivity } from './training-db';
 
 function localDate(now: Date, timeZone: string): string {
@@ -46,7 +51,68 @@ async function automationSession(automation: ReportAutomationRow) {
   return {
     token:createSessionToken({ userId:automation.createdByUserId ?? undefined, email:user?.email ?? 'report-automation@pitchingcoachu.com', name:user?.name ?? 'Report Automation', role:user?.role === 'coach' ? 'coach' : 'admin', organizationId:automation.organizationId, playerId:null, dashboardSchoolCode, appUrl:user?.app_url ?? 'https://pitchingcoachu.shinyapps.io/TMdata/', apps:[{name:'Dashboard',url:user?.app_url ?? 'https://pitchingcoachu.shinyapps.io/TMdata/'}] }),
     actorName:user?.name ?? 'Report Automation', actorRole:user?.role === 'admin' ? 'admin' as const : 'coach' as const,
+    dashboardSchoolCode,
   };
+}
+
+async function waitForDownloadedPdf(directory:string,timeoutMs=240_000):Promise<Buffer> {
+  const deadline = Date.now()+timeoutMs;
+  while (Date.now()<deadline) {
+    const files = await readdir(directory).catch(() => []);
+    const pdf = files.find((file) => file.toLowerCase().endsWith('.pdf'));
+    if (pdf) {
+      const first = await readFile(join(directory,pdf));
+      await new Promise((resolve) => setTimeout(resolve,250));
+      const second = await readFile(join(directory,pdf));
+      if (first.length > 0 && first.length === second.length) return second;
+    }
+    await new Promise((resolve) => setTimeout(resolve,250));
+  }
+  throw new Error('Timed out while downloading the rendered report PDF.');
+}
+
+async function buildRenderedCustomReportPdf(args:{origin:string;token:string;automation:ReportAutomationRow;playerId:number;reportDate:string}):Promise<Buffer> {
+  const [{default:puppeteer},{default:chromium}] = await Promise.all([import('puppeteer-core'),import('@sparticuz/chromium')]);
+  const localChrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  const executablePath = process.env.CHROME_EXECUTABLE_PATH || (existsSync(localChrome) ? localChrome : await chromium.executablePath());
+  const downloadDirectory = await mkdtemp(join(tmpdir(),'pcu-automated-report-'));
+  const browser = await puppeteer.launch({
+    executablePath,
+    args:existsSync(localChrome) && executablePath === localChrome ? ['--no-sandbox','--disable-setuid-sandbox'] : chromium.args,
+    headless:true,
+    defaultViewport:{width:1440,height:1200,deviceScaleFactor:1},
+  });
+  try {
+    const page = await browser.newPage();
+    await page.setCookie({name:'pcu_session_v3',value:args.token,url:args.origin,httpOnly:true,sameSite:'Lax'});
+    const cdp = await page.createCDPSession();
+    await cdp.send('Page.setDownloadBehavior',{behavior:'allow',downloadPath:downloadDirectory});
+    const url = new URL('/portal/dashboard',args.origin);
+    url.searchParams.set('suite','custom-reports');
+    url.searchParams.set('automationRender','1');
+    url.searchParams.set('automationId',String(args.automation.id));
+    url.searchParams.set('playerId',String(args.playerId));
+    url.searchParams.set('reportDate',args.reportDate);
+    await page.goto(url.toString(),{waitUntil:'networkidle2',timeout:240_000});
+    await page.waitForSelector('[data-automation-render-state]',{timeout:120_000});
+    await page.waitForFunction(() => {
+      const node = document.querySelector('[data-automation-render-state]');
+      const state = node?.getAttribute('data-automation-render-state');
+      return state === 'ready' || state === 'error';
+    },{timeout:300_000});
+    const renderState = await page.$eval('[data-automation-render-state]',(node) => node.getAttribute('data-automation-render-state'));
+    if (renderState !== 'ready') {
+      const detail = await page.$$eval('.portal-error-text,.auth-error',(nodes) => nodes.map((node) => node.textContent?.trim() ?? '')).catch(() => [] as string[]);
+      throw new Error(detail.find(Boolean) || 'One or more custom-report panels failed to render.');
+    }
+    await page.$eval('.report-actions-dropdown > button',(button) => (button as HTMLButtonElement).click());
+    await page.waitForSelector('[data-report-download-pdf="true"]',{visible:true,timeout:10_000});
+    await page.$eval('[data-report-download-pdf="true"]',(button) => (button as HTMLButtonElement).click());
+    return await waitForDownloadedPdf(downloadDirectory);
+  } finally {
+    await browser.close().catch(() => undefined);
+    await rm(downloadDirectory,{recursive:true,force:true}).catch(() => undefined);
+  }
 }
 
 function rowsFromPayload(payload: Record<string, unknown>, preferredKeys: string[]): {columns:string[];rows:Record<string,unknown>[]} {
@@ -63,36 +129,6 @@ function rowsFromPayload(payload: Record<string, unknown>, preferredKeys: string
 }
 
 type ResolvedReportPanel = { title:string; startDate:string; endDate:string; columns:string[]; rows:Record<string,unknown>[] };
-
-function isoDate(year:number, monthIndex:number, day:number):string {
-  return `${year}-${String(monthIndex+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
-}
-
-function dateParts(value:string):{year:number;monthIndex:number;day:number} {
-  const [year,month,day] = value.split('-').map(Number);
-  return {year,monthIndex:month-1,day};
-}
-
-function shiftIsoDate(value:string, days:number):string {
-  const {year,monthIndex,day} = dateParts(value);
-  const shifted = new Date(Date.UTC(year,monthIndex,day+days));
-  return isoDate(shifted.getUTCFullYear(),shifted.getUTCMonth(),shifted.getUTCDate());
-}
-
-export function resolvePanelDateRange(panel:ReportAutomationPanel, reportDate:string):{startDate:string;endDate:string} {
-  const {year,monthIndex,day} = dateParts(reportDate);
-  if (panel.dateMode === 'fixed' && panel.fixedStart && panel.fixedEnd) return {startDate:panel.fixedStart,endDate:panel.fixedEnd};
-  if (panel.dateMode === 'rolling_days') return {startDate:shiftIsoDate(reportDate,-Math.max(1,panel.rollingDays)+1),endDate:reportDate};
-  if (panel.dateMode === 'month_to_date') return {startDate:isoDate(year,monthIndex,1),endDate:reportDate};
-  if (panel.dateMode === 'previous_month' || panel.dateMode === 'previous_month_to_date') {
-    const previousEnd = new Date(Date.UTC(year,monthIndex,0));
-    const previousYear = previousEnd.getUTCFullYear();
-    const previousMonth = previousEnd.getUTCMonth();
-    const endDay = panel.dateMode === 'previous_month' ? previousEnd.getUTCDate() : Math.min(day,previousEnd.getUTCDate());
-    return {startDate:isoDate(previousYear,previousMonth,1),endDate:isoDate(previousYear,previousMonth,endDay)};
-  }
-  return {startDate:reportDate,endDate:reportDate};
-}
 
 function setQueryValue(params:URLSearchParams, names:string[], value:string, fallback:string):void {
   const existing = names.filter((name) => params.has(name));
@@ -260,7 +296,7 @@ async function buildReportPdf(title: string, playerName: string, date: string, p
   return Buffer.from(pdf.output('arraybuffer'));
 }
 
-export async function executeReportAutomation(automation: ReportAutomationRow, origin: string, now = new Date()): Promise<{saved:number;skipped:number;failed:number}> {
+export async function executeReportAutomation(automation: ReportAutomationRow, origin: string, now = new Date(), options:{force?:boolean}={}): Promise<{saved:number;skipped:number;failed:number}> {
   const reportDate = localDate(now, automation.timeZone);
   const allPlayers = await listPlayerSummariesByOrganization({ organizationId:automation.organizationId, assignedCoachUserId:null });
   const selectedSet = new Set(automation.playerIds);
@@ -268,7 +304,7 @@ export async function executeReportAutomation(automation: ReportAutomationRow, o
   const session = await automationSession(automation);
   const counts = { saved:0, skipped:0, failed:0 };
   for (const player of players) {
-    const runId = await claimAutomationRun(automation.id, player.playerId, reportDate);
+    const runId = await claimAutomationRun(automation.id, player.playerId, reportDate,options.force === true);
     if (!runId) continue;
     try {
       const panels:ResolvedReportPanel[] = automation.reportPanels.length
@@ -280,7 +316,13 @@ export async function executeReportAutomation(automation: ReportAutomationRow, o
       }
       let aiSummary = '';
       let aiSummaryError = '';
-      if (automation.includeAiSummary) {
+      const customReportContext = automation.reportKey.includes('custom-report')
+        ? await buildAutomationRenderContext({automation,dashboardSchoolCode:session.dashboardSchoolCode,playerName:player.fullName,reportDate})
+        : null;
+      if (automation.reportKey.includes('custom-report') && !customReportContext) {
+        throw new Error('The saved custom-report template could not be identified. Open the report and save this automation again.');
+      }
+      if (automation.includeAiSummary && !customReportContext) {
         try {
           aiSummary = await generateAiSummary(origin, session.token, automation, player.fullName, reportDate, panels);
         } catch (error) {
@@ -289,11 +331,13 @@ export async function executeReportAutomation(automation: ReportAutomationRow, o
         }
       }
       const title = `${automation.reportTitle} - ${player.fullName} - ${reportDate}`;
-      const pdfBody = await buildReportPdf(automation.reportTitle, player.fullName, reportDate, panels, aiSummary);
+      const pdfBody = customReportContext
+        ? await buildRenderedCustomReportPdf({origin,token:session.token,automation,playerId:player.playerId,reportDate})
+        : await buildReportPdf(automation.reportTitle, player.fullName, reportDate, panels, aiSummary);
       const fileName = `${safeFileName(automation.reportTitle)}-${reportDate}.pdf`;
       const r2Key = await uploadPlayerMediaToR2({ organizationId:automation.organizationId, playerId:player.playerId, fileName, contentType:'application/pdf', body:pdfBody });
       if (!r2Key) throw new Error('Could not store the generated PDF.');
-      const created = await createPlayerMedia({ organizationId:automation.organizationId, playerId:player.playerId, mediaType:'pdf', title, category:'Reports', fileName, contentType:'application/pdf', sizeBytes:pdfBody.length, r2Key, sourceType:'automated_report', sourceLabel:automation.reportTitle, createdByUserId:automation.createdByUserId!, processingStatus:'ready' });
+      const created = await createPlayerMedia({ organizationId:automation.organizationId, playerId:player.playerId, mediaType:'pdf', title, category:automation.profileCategory, fileName, contentType:'application/pdf', sizeBytes:pdfBody.length, r2Key, sourceType:'automated_report', sourceLabel:automation.reportTitle, createdByUserId:automation.createdByUserId!, processingStatus:'ready' });
       if (!created.ok) throw new Error(created.error);
       if (automation.notifyPlayers) {
         const context = await getPlayerNotificationContext({ organizationId:automation.organizationId, playerId:player.playerId });

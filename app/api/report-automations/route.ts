@@ -34,6 +34,8 @@ export async function POST(request: Request) {
   const timeZone = String(body.timeZone ?? '').trim() || 'America/Phoenix';
   try { new Intl.DateTimeFormat('en-US', { timeZone }).format(new Date()); } catch { return NextResponse.json({ error:'Invalid timezone.' }, { status:400 }); }
   if (!title) return NextResponse.json({ error:'Report title is required.' }, { status:400 });
+  const profileCategory = String(body.profileCategory ?? 'Reports').trim();
+  if (!profileCategory || profileCategory.length > 80) return NextResponse.json({error:'Profile category must be between 1 and 80 characters.'},{status:400});
   if (!scope.session.userId) return NextResponse.json({ error:'Your staff account must be linked before creating automations.' }, { status:403 });
   const reportPanels = (Array.isArray(body.reportPanels) ? body.reportPanels : []).flatMap((value):ReportAutomationPanel[] => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
@@ -52,7 +54,8 @@ export async function POST(request: Request) {
     organizationId: scope.organizationId,
     createdByUserId: scope.session.userId,
     reportKey: String(body.reportKey ?? 'report').trim() || 'report', reportTitle:title,
-    sourcePath:String(body.sourcePath ?? '').slice(0,1000), cadence:body.cadence === 'weekly' ? 'weekly' : 'daily',
+    sourcePath:String(body.sourcePath ?? '').slice(0,1000), customReportId:Number(body.customReportId) > 0 ? Number(body.customReportId) : null, profileCategory,
+    cadence:body.cadence === 'weekly' ? 'weekly' : 'daily',
     weekdays:Array.isArray(body.weekdays) ? body.weekdays.map(Number).filter((day) => day >= 0 && day <= 6) : [0,1,2,3,4,5,6],
     localTime, timeZone, playerScope:body.playerScope === 'selected' ? 'selected' : 'all',
     playerIds:Array.isArray(body.playerIds) ? body.playerIds.map(Number).filter((id) => id > 0) : [],

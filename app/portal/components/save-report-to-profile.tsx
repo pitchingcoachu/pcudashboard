@@ -12,8 +12,8 @@ type PendingReport = { file: File; title: string; preferredPlayerId: number | nu
 type AutomationDateMode = 'automation_day'|'fixed'|'rolling_days'|'month_to_date'|'previous_month_to_date'|'previous_month';
 export type AutomationPanelSeed = { id:string; title:string; requestUrl:string };
 type AutomationPanel = AutomationPanelSeed & { dateMode:AutomationDateMode; fixedStart:string; fixedEnd:string; rollingDays:number };
-type AutomationRequest = { reportTitle: string; reportKey: string; sourcePath: string; preferredPlayerId?: number | null; preferredPlayerName?: string; includeAiSummaryByDefault?: boolean; reportPanels?:AutomationPanelSeed[] };
-type Automation = { id:number; reportKey:string; reportTitle:string; sourcePath:string; cadence:'daily'|'weekly'; weekdays:number[]; localTime:string; timeZone:string; playerScope:'all'|'selected'; playerIds:number[]; reportPanels:AutomationPanel[]; onlyWhenData:boolean; includeAiSummary:boolean; notifyPlayers:boolean; active:boolean; lastRunAt:string|null };
+type AutomationRequest = { reportTitle: string; reportKey: string; sourcePath: string; customReportId?:number|null; preferredPlayerId?: number | null; preferredPlayerName?: string; includeAiSummaryByDefault?: boolean; reportPanels?:AutomationPanelSeed[] };
+type Automation = { id:number; reportKey:string; reportTitle:string; sourcePath:string; customReportId:number|null; profileCategory:string; cadence:'daily'|'weekly'; weekdays:number[]; localTime:string; timeZone:string; playerScope:'all'|'selected'; playerIds:number[]; reportPanels:AutomationPanel[]; onlyWhenData:boolean; includeAiSummary:boolean; notifyPlayers:boolean; active:boolean; lastRunAt:string|null };
 type AutomationRun = { id:number; automationId:number; reportDate:string; status:'running'|'saved'|'skipped'|'failed'; detail:string; createdAt:string };
 
 let staffCheck: Promise<boolean> | null = null;
@@ -54,6 +54,19 @@ function initializeAutomationPanel(panel:AutomationPanelSeed):AutomationPanel {
     fixedEnd:panelDateValue(panel.requestUrl,['end_date','endDate','end']),
     rollingDays:30,
   };
+}
+
+async function loadPdfCategories(playerId:number):Promise<string[]> {
+  if (playerId <= 0) return ['Reports'];
+  const response = await fetch(`/api/player/media?playerId=${playerId}&mediaType=pdf`,{cache:'no-store'});
+  const payload = await response.json().catch(() => ({})) as {categories?:string[]};
+  if (!response.ok) return ['Reports'];
+  return Array.from(new Set(['Reports',...(payload.categories ?? []).map((value) => String(value).trim()).filter(Boolean)]));
+}
+
+function ProfileCategoryPicker({categories,value,isNew,onValueChange,onNewChange}:{categories:string[];value:string;isNew:boolean;onValueChange:(value:string)=>void;onNewChange:(value:boolean)=>void}) {
+  const choices = Array.from(new Set(['Reports',...categories,value].filter(Boolean)));
+  return <label className="report-profile-category-picker"><span>Profile category</span><select value={isNew?'__new__':value} onChange={(event) => {if (event.target.value === '__new__') {onNewChange(true);onValueChange('');} else {onNewChange(false);onValueChange(event.target.value);}}}>{choices.map((category) => <option key={category} value={category}>{category}</option>)}<option value="__new__">＋ Create new category</option></select>{isNew ? <input autoFocus value={value} maxLength={80} placeholder="Name the new category" onChange={(event) => onValueChange(event.target.value)} /> : null}</label>;
 }
 
 export function SaveReportToProfileButton({
@@ -108,6 +121,7 @@ export function ReportActionsDropdown({
   reportKey,
   includeAiSummaryByDefault = false,
   automationPanels = [],
+  customReportId,
   disabled = false,
   className = 'btn btn-primary',
 }: {
@@ -119,6 +133,7 @@ export function ReportActionsDropdown({
   reportKey?: string;
   includeAiSummaryByDefault?: boolean;
   automationPanels?: AutomationPanelSeed[];
+  customReportId?: number | null;
   disabled?: boolean;
   className?: string;
 }) {
@@ -160,7 +175,7 @@ export function ReportActionsDropdown({
     setOpen(false);
     window.dispatchEvent(new CustomEvent('pearl:report-automation-open', { detail: {
       reportTitle:title || 'Report', reportKey:reportKey || reportKeyFromTitle(title || 'Report'),
-      sourcePath:`${window.location.pathname}${window.location.search}`, preferredPlayerId, preferredPlayerName, includeAiSummaryByDefault, reportPanels:automationPanels,
+      sourcePath:`${window.location.pathname}${window.location.search}`, customReportId, preferredPlayerId, preferredPlayerName, includeAiSummaryByDefault, reportPanels:automationPanels,
     } satisfies AutomationRequest }));
   };
 
@@ -171,7 +186,7 @@ export function ReportActionsDropdown({
       </button>
       {open ? (
         <div className="report-actions-menu" role="menu" style={{ display: 'flex', flexDirection: 'column' }}>
-          <button type="button" role="menuitem" onClick={() => { setOpen(false); void generate(); }}>Download PDF</button>
+          <button type="button" role="menuitem" data-report-download-pdf="true" onClick={() => { setOpen(false); void generate(); }}>Download PDF</button>
           {downloadPng ? <button type="button" role="menuitem" onClick={() => { setOpen(false); void downloadPng(); }}>Download PNG</button> : null}
           <button type="button" role="menuitem" onClick={() => void saveToProfile()}>Save to Player Profile</button>
           {canAutomate ? <button type="button" role="menuitem" onClick={automate}>Automate Report</button> : null}
@@ -185,6 +200,9 @@ export default function ReportProfileSaveManager() {
   const [pending, setPending] = useState<PendingReport | null>(null);
   const [players, setPlayers] = useState<OrgPlayer[]>([]);
   const [selectedPlayerId, setSelectedPlayerId] = useState(0);
+  const [profileCategories,setProfileCategories] = useState<string[]>(['Reports']);
+  const [pendingCategory,setPendingCategory] = useState('Reports');
+  const [pendingCategoryIsNew,setPendingCategoryIsNew] = useState(false);
   const [loadingPlayers, setLoadingPlayers] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -206,12 +224,15 @@ export default function ReportProfileSaveManager() {
   const [onlyWhenData, setOnlyWhenData] = useState(true);
   const [includeAiSummary, setIncludeAiSummary] = useState(false);
   const [notifyPlayers, setNotifyPlayers] = useState(true);
+  const [automationCategory,setAutomationCategory] = useState('Reports');
+  const [automationCategoryIsNew,setAutomationCategoryIsNew] = useState(false);
 
   useEffect(() => {
     const onReady = (event: Event) => {
       const detail = (event as CustomEvent<PendingReport>).detail;
       if (!detail?.file) return;
       setPending(detail);
+      setPendingCategory('Reports'); setPendingCategoryIsNew(false);
       setError('');
       setLoadingPlayers(true);
       fetch('/api/dashboard/player-plans/players', { cache: 'no-store' })
@@ -227,7 +248,9 @@ export default function ReportProfileSaveManager() {
           const preferredByName = preferredNameKey
             ? nextPlayers.find((player) => personNameKey(player.fullName) === preferredNameKey)
             : undefined;
-          setSelectedPlayerId((preferredById ?? preferredByName ?? nextPlayers[0])?.playerId ?? 0);
+          const nextPlayerId = (preferredById ?? preferredByName ?? nextPlayers[0])?.playerId ?? 0;
+          setSelectedPlayerId(nextPlayerId);
+          setProfileCategories(await loadPdfCategories(nextPlayerId));
         })
         .catch((loadError) => setError(loadError instanceof Error ? loadError.message : 'Unable to load players.'))
         .finally(() => setLoadingPlayers(false));
@@ -240,6 +263,7 @@ export default function ReportProfileSaveManager() {
       const detail = (event as CustomEvent<AutomationRequest>).detail;
       if (!detail?.reportTitle) return;
       setAutomationRequest(detail); setAutomationTitle(detail.reportTitle); setError(''); setAutomationLoading(true);
+      setAutomationCategory('Reports'); setAutomationCategoryIsNew(false);
       setIncludeAiSummary(Boolean(detail.includeAiSummaryByDefault));
       setAutomationPanels((detail.reportPanels ?? []).map(initializeAutomationPanel));
       const readJson = async (response: Response) => {
@@ -251,13 +275,14 @@ export default function ReportProfileSaveManager() {
       Promise.all([
         fetch('/api/dashboard/player-plans/players', {cache:'no-store'}).then(readJson),
         fetch('/api/report-automations', {cache:'no-store'}).then(readJson),
-      ]).then(([playerData, automationData]:[{players?:OrgPlayer[]},{automations?:Automation[];runs?:AutomationRun[]}]) => {
+      ]).then(async ([playerData, automationData]:[{players?:OrgPlayer[]},{automations?:Automation[];runs?:AutomationRun[]}]) => {
         const nextPlayers = Array.isArray(playerData.players) ? playerData.players : [];
         setPlayers(nextPlayers); setAutomations(Array.isArray(automationData.automations) ? automationData.automations : []);
         setAutomationRuns(Array.isArray(automationData.runs) ? automationData.runs : []); setEditingAutomationId(null);
         const preferredKey = personNameKey(detail.preferredPlayerName ?? '');
         const preferred = nextPlayers.find((player) => player.playerId === detail.preferredPlayerId) ?? nextPlayers.find((player) => preferredKey && personNameKey(player.fullName) === preferredKey);
         setAutomationPlayerIds(preferred ? [preferred.playerId] : []);
+        setProfileCategories(await loadPdfCategories((preferred ?? nextPlayers[0])?.playerId ?? 0));
       }).catch((loadError) => setError(loadError instanceof Error ? loadError.message : 'Unable to load automation settings.')).finally(() => setAutomationLoading(false));
     };
     window.addEventListener(REPORT_PDF_READY_EVENT, onReady);
@@ -292,7 +317,7 @@ export default function ReportProfileSaveManager() {
       playerId: selectedPlayerId,
       file: pending.file,
       title: pending.title,
-      category: 'Reports',
+      category: pendingCategory.trim(),
       sourceType: 'generated_report',
       sourceLabel: pending.title,
     });
@@ -311,7 +336,7 @@ export default function ReportProfileSaveManager() {
     if (!automationRequest) return;
     setAutomationSaving(true); setError('');
     const existing = editingAutomationId ? automations.find((item) => item.id === editingAutomationId) : null;
-    const response = await fetch('/api/report-automations', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ id:editingAutomationId,reportKey:automationRequest.reportKey,reportTitle:automationTitle,sourcePath:automationRequest.sourcePath,cadence,weekdays,localTime,timeZone,playerScope,playerIds:automationPlayerIds,reportPanels:automationPanels,onlyWhenData,includeAiSummary,notifyPlayers,active:existing?.active ?? true })});
+    const response = await fetch('/api/report-automations', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ id:editingAutomationId,reportKey:automationRequest.reportKey,reportTitle:automationTitle,sourcePath:automationRequest.sourcePath,customReportId:automationRequest.customReportId ?? null,profileCategory:automationCategory.trim(),cadence,weekdays,localTime,timeZone,playerScope,playerIds:automationPlayerIds,reportPanels:automationPanels,onlyWhenData,includeAiSummary,notifyPlayers,active:existing?.active ?? true })});
     const payload = await response.json().catch(() => ({})) as {automation?:Automation;error?:string};
     if (!response.ok || !payload.automation) { setError(payload.error ?? 'Could not save automation.'); setAutomationSaving(false); return; }
     setAutomations((current) => editingAutomationId ? current.map((item) => item.id === editingAutomationId ? payload.automation! : item) : [payload.automation!, ...current]); setAutomationSaving(false); setAutomationRequest(null); setEditingAutomationId(null); setToast(editingAutomationId ? 'Report automation updated.' : 'Report automation enabled.');
@@ -332,9 +357,10 @@ export default function ReportProfileSaveManager() {
   };
 
   const editAutomation = (item:Automation, duplicate=false) => {
-    setAutomationRequest({reportTitle:item.reportTitle,reportKey:item.reportKey,sourcePath:item.sourcePath});
+    setAutomationRequest({reportTitle:item.reportTitle,reportKey:item.reportKey,sourcePath:item.sourcePath,customReportId:item.customReportId});
     setEditingAutomationId(duplicate ? null : item.id); setAutomationTitle(duplicate ? `${item.reportTitle} Copy` : item.reportTitle);
     setCadence(item.cadence); setWeekdays(item.weekdays); setLocalTime(item.localTime); setTimeZone(item.timeZone); setPlayerScope(item.playerScope); setAutomationPlayerIds(item.playerIds); setAutomationPanels(item.reportPanels ?? []); setOnlyWhenData(item.onlyWhenData); setIncludeAiSummary(item.includeAiSummary); setNotifyPlayers(item.notifyPlayers); setError('');
+    setAutomationCategory(item.profileCategory || 'Reports'); setAutomationCategoryIsNew(false);
   };
 
   const toggleAutomation = async (item:Automation) => {
@@ -353,7 +379,7 @@ export default function ReportProfileSaveManager() {
           <section className="report-profile-save-dialog" role="dialog" aria-modal="true" aria-labelledby="report-profile-save-title">
             <div className="report-profile-save-kicker">REPORT LIBRARY</div>
             <h2 id="report-profile-save-title">Save to player profile</h2>
-            <p className="portal-muted-text">This PDF will appear in the player’s profile under <strong>Reports</strong>.</p>
+            <p className="portal-muted-text">Choose where this PDF appears in the player’s profile.</p>
             <label>
               Report name
               <input
@@ -370,10 +396,11 @@ export default function ReportProfileSaveManager() {
                 {players.map((player) => <option key={player.playerId} value={player.playerId}>{player.fullName}</option>)}
               </select>
             </label>
+            <ProfileCategoryPicker categories={profileCategories} value={pendingCategory} isNew={pendingCategoryIsNew} onValueChange={setPendingCategory} onNewChange={setPendingCategoryIsNew}/>
             {error ? <p className="auth-error" role="alert">{error}</p> : null}
             <div className="report-profile-save-actions">
               <button type="button" className="btn btn-ghost" onClick={close} disabled={saving}>Cancel</button>
-              <button type="button" className="btn btn-primary" onClick={() => void save()} disabled={saving || loadingPlayers || selectedPlayerId <= 0 || !pending.title.trim()}>
+              <button type="button" className="btn btn-primary" onClick={() => void save()} disabled={saving || loadingPlayers || selectedPlayerId <= 0 || !pending.title.trim() || !pendingCategory.trim()}>
                 {saving ? 'Saving…' : 'Save Report'}
               </button>
             </div>
@@ -385,7 +412,7 @@ export default function ReportProfileSaveManager() {
           <section className="report-profile-save-dialog report-automation-dialog" role="dialog" aria-modal="true" aria-labelledby="report-automation-title">
             <div className="report-profile-save-kicker">AUTOMATED DELIVERY</div>
             <h2 id="report-automation-title">Automate this report</h2>
-            <p className="portal-muted-text">Fresh data will be checked on schedule and qualifying PDFs will be saved under <strong>Reports</strong>.</p>
+            <p className="portal-muted-text">Fresh data will be checked on schedule and qualifying PDFs will be saved to your selected profile category.</p>
             <label>Automation name<input value={automationTitle} maxLength={180} onChange={(event) => setAutomationTitle(event.target.value)} /></label>
             <div className="report-automation-grid">
               <label>Schedule<select value={cadence} onChange={(event) => setCadence(event.target.value as 'daily'|'weekly')}><option value="daily">Daily</option><option value="weekly">Weekly</option></select></label>
@@ -396,12 +423,13 @@ export default function ReportProfileSaveManager() {
             {automationPanels.length ? <fieldset className="report-automation-panel-dates"><legend>Panel date behavior</legend><div className="report-automation-panel-toolbar"><span>Choose how each panel moves when the automation runs.</span><button type="button" className="btn btn-ghost" onClick={() => setAutomationPanels((current) => current.map((panel) => ({...panel,dateMode:'automation_day'})))}>Use Run Date for All</button></div>{automationPanels.map((panel,index) => <div className="report-automation-panel-date-row" key={`${panel.id}-${index}`}><strong>{panel.title || `Panel ${index+1}`}</strong><select aria-label={`${panel.title} date behavior`} value={panel.dateMode} onChange={(event) => setAutomationPanels((current) => current.map((item,itemIndex) => itemIndex === index ? {...item,dateMode:event.target.value as AutomationDateMode} : item))}><option value="automation_day">Automation date</option><option value="fixed">Fixed date range</option><option value="rolling_days">Rolling number of days</option><option value="month_to_date">Month to date</option><option value="previous_month_to_date">Previous month to same day</option><option value="previous_month">Full previous month</option></select>{panel.dateMode === 'fixed' ? <div className="report-automation-panel-range"><input type="date" aria-label={`${panel.title} fixed start`} value={panel.fixedStart} onChange={(event) => setAutomationPanels((current) => current.map((item,itemIndex) => itemIndex === index ? {...item,fixedStart:event.target.value} : item))}/><span>to</span><input type="date" aria-label={`${panel.title} fixed end`} value={panel.fixedEnd} onChange={(event) => setAutomationPanels((current) => current.map((item,itemIndex) => itemIndex === index ? {...item,fixedEnd:event.target.value} : item))}/></div> : null}{panel.dateMode === 'rolling_days' ? <label className="report-automation-rolling-days">Days<input type="number" min="1" max="365" value={panel.rollingDays} onChange={(event) => setAutomationPanels((current) => current.map((item,itemIndex) => itemIndex === index ? {...item,rollingDays:Math.max(1,Math.min(365,Number(event.target.value)||1))} : item))}/></label> : null}</div>)}</fieldset> : null}
             <label>Players<select value={playerScope} onChange={(event) => setPlayerScope(event.target.value as 'all'|'selected')}><option value="all">All players</option><option value="selected">Selected players</option></select></label>
             {playerScope === 'selected' ? <div className="report-automation-player-list">{automationLoading ? <span>Loading players…</span> : players.map((player) => <label key={player.playerId}><input type="checkbox" checked={automationPlayerIds.includes(player.playerId)} onChange={() => setAutomationPlayerIds((current) => current.includes(player.playerId) ? current.filter((id) => id !== player.playerId) : [...current,player.playerId])}/>{player.fullName}</label>)}</div> : null}
+            <ProfileCategoryPicker categories={profileCategories} value={automationCategory} isNew={automationCategoryIsNew} onValueChange={setAutomationCategory} onNewChange={setAutomationCategoryIsNew}/>
             <label className="report-automation-check"><input type="checkbox" checked={onlyWhenData} onChange={(event) => setOnlyWhenData(event.target.checked)}/><span>Only save when qualifying data exists</span></label>
             <label className="report-automation-check"><input type="checkbox" checked={includeAiSummary} onChange={(event) => setIncludeAiSummary(event.target.checked)}/><span>Include a fresh AI summary in each PDF</span></label>
             <label className="report-automation-check"><input type="checkbox" checked={notifyPlayers} onChange={(event) => setNotifyPlayers(event.target.checked)}/><span>Notify players when a report is saved</span></label>
             {error ? <p className="auth-error" role="alert">{error}</p> : null}
-            <div className="report-profile-save-actions"><button type="button" className="btn btn-ghost" disabled={automationSaving} onClick={() => {setAutomationRequest(null);setEditingAutomationId(null);}}>Cancel</button><button type="button" className="btn btn-primary" disabled={automationSaving || automationLoading || hasInvalidPanelDates || !automationTitle.trim() || (playerScope === 'selected' && !automationPlayerIds.length) || (cadence === 'weekly' && !weekdays.length)} onClick={() => void saveAutomation()}>{automationSaving ? 'Saving…' : editingAutomationId ? 'Save Changes' : 'Enable Automation'}</button></div>
-            {automations.length ? <details className="report-automation-existing"><summary>Manage existing automations ({automations.length})</summary>{automations.map((item) => <div key={item.id}><span><strong>{item.reportTitle}</strong><small>{item.cadence} at {item.localTime} · {item.active ? 'Active' : 'Paused'}{item.lastRunAt ? ` · Last run ${new Date(item.lastRunAt).toLocaleDateString()}` : ''}</small></span><span className="report-automation-row-actions"><button type="button" className="btn btn-ghost" disabled={automationSaving} onClick={() => editAutomation(item)}>Edit</button><button type="button" className="btn btn-ghost" disabled={automationSaving} onClick={() => editAutomation(item,true)}>Duplicate</button><button type="button" className="btn btn-ghost" disabled={automationSaving} onClick={() => void toggleAutomation(item)}>{item.active?'Pause':'Resume'}</button><button type="button" className="btn btn-ghost" disabled={automationSaving} onClick={() => void runAutomation(item.id)}>Run now</button><button type="button" className="btn btn-ghost" disabled={automationSaving} onClick={() => void deleteAutomation(item.id)}>Delete</button></span></div>)}{automationRuns.length ? <div className="report-automation-run-history"><strong>Recent runs</strong>{automationRuns.slice(0,8).map((run) => <small key={run.id} data-status={run.status}>{run.reportDate} · {run.status} · {run.detail || 'Processing'}</small>)}</div> : null}</details> : null}
+            <div className="report-profile-save-actions"><button type="button" className="btn btn-ghost" disabled={automationSaving} onClick={() => {setAutomationRequest(null);setEditingAutomationId(null);}}>Cancel</button><button type="button" className="btn btn-primary" disabled={automationSaving || automationLoading || hasInvalidPanelDates || !automationTitle.trim() || !automationCategory.trim() || (playerScope === 'selected' && !automationPlayerIds.length) || (cadence === 'weekly' && !weekdays.length)} onClick={() => void saveAutomation()}>{automationSaving ? 'Saving…' : editingAutomationId ? 'Save Changes' : 'Enable Automation'}</button></div>
+            {automations.length ? <details className="report-automation-existing"><summary>Manage existing automations ({automations.length})</summary>{automations.map((item) => <div key={item.id}><span><strong>{item.reportTitle}</strong><small>{item.cadence} at {item.localTime} · {item.active ? 'Active' : 'Paused'} · {item.profileCategory || 'Reports'}{item.lastRunAt ? ` · Last run ${new Date(item.lastRunAt).toLocaleDateString()}` : ''}</small></span><span className="report-automation-row-actions"><button type="button" className="btn btn-ghost" disabled={automationSaving} onClick={() => editAutomation(item)}>Edit</button><button type="button" className="btn btn-ghost" disabled={automationSaving} onClick={() => editAutomation(item,true)}>Duplicate</button><button type="button" className="btn btn-ghost" disabled={automationSaving} onClick={() => void toggleAutomation(item)}>{item.active?'Pause':'Resume'}</button><button type="button" className="btn btn-ghost" disabled={automationSaving} onClick={() => void runAutomation(item.id)}>Run now</button><button type="button" className="btn btn-ghost" disabled={automationSaving} onClick={() => void deleteAutomation(item.id)}>Delete</button></span></div>)}{automationRuns.length ? <div className="report-automation-run-history"><strong>Recent runs</strong>{automationRuns.slice(0,8).map((run) => <small key={run.id} data-status={run.status}>{run.reportDate} · {run.status} · {run.detail || 'Processing'}</small>)}</div> : null}</details> : null}
           </section>
         </div>
       ) : null}

@@ -10,7 +10,7 @@ const nextConfig: NextConfig = {
   // server-only (video-export route), so exclude them from bundling
   // entirely and let Node's own require() resolve them at runtime instead,
   // same as any other native/binary-bearing package.
-  serverExternalPackages: ['@ffmpeg-installer/ffmpeg', '@resvg/resvg-js'],
+  serverExternalPackages: ['@ffmpeg-installer/ffmpeg', '@resvg/resvg-js', '@sparticuz/chromium', 'puppeteer-core'],
   // public/ video assets and the local .motion-capture-uploads/ dev storage dir (252MB,
   // untracked local file storage -- not meant for production at all) were being swept
   // into every API route's serverless function bundle by Next's default file tracing,

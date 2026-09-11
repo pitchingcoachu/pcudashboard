@@ -18,6 +18,8 @@ export type ReportAutomationRow = {
   reportKey: string;
   reportTitle: string;
   sourcePath: string;
+  customReportId: number | null;
+  profileCategory: string;
   cadence: 'daily' | 'weekly';
   weekdays: number[];
   localTime: string;
@@ -66,6 +68,8 @@ async function runReportAutomationSchemaMigration(): Promise<void> {
       report_key TEXT NOT NULL,
       report_title TEXT NOT NULL,
       source_path TEXT NOT NULL DEFAULT '',
+      custom_report_id BIGINT,
+      profile_category TEXT NOT NULL DEFAULT 'Reports',
       cadence TEXT NOT NULL DEFAULT 'daily' CHECK (cadence IN ('daily', 'weekly')),
       weekdays INTEGER[] NOT NULL DEFAULT ARRAY[1,2,3,4,5,6,0],
       local_time TIME NOT NULL DEFAULT '17:00',
@@ -98,6 +102,8 @@ async function runReportAutomationSchemaMigration(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_report_automation_runs_automation ON report_automation_runs (automation_id, created_at DESC);
     ALTER TABLE report_automations ADD COLUMN IF NOT EXISTS report_panels JSONB NOT NULL DEFAULT '[]'::jsonb;
     ALTER TABLE report_automations ADD COLUMN IF NOT EXISTS include_ai_summary BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE report_automations ADD COLUMN IF NOT EXISTS custom_report_id BIGINT;
+    ALTER TABLE report_automations ADD COLUMN IF NOT EXISTS profile_category TEXT NOT NULL DEFAULT 'Reports';
   `);
   ready = true;
 }
@@ -121,7 +127,7 @@ function mapAutomation(row: Record<string, unknown>): ReportAutomationRow {
   }).slice(0, 36);
   return {
     id: Number(row.id), organizationId: Number(row.organization_id), createdByUserId: row.created_by_user_id == null ? null : Number(row.created_by_user_id),
-    reportKey: String(row.report_key), reportTitle: String(row.report_title), sourcePath: String(row.source_path ?? ''),
+    reportKey: String(row.report_key), reportTitle: String(row.report_title), sourcePath: String(row.source_path ?? ''), customReportId: row.custom_report_id == null ? null : Number(row.custom_report_id), profileCategory:String(row.profile_category ?? 'Reports').trim() || 'Reports',
     cadence: row.cadence === 'weekly' ? 'weekly' : 'daily', weekdays: Array.isArray(row.weekdays) ? row.weekdays.map(Number) : [],
     localTime: String(row.local_time ?? '17:00').slice(0, 5), timeZone: String(row.time_zone),
     playerScope: row.player_scope === 'selected' ? 'selected' : 'all', playerIds: Array.isArray(row.player_ids) ? row.player_ids.map(Number) : [], reportPanels,
@@ -138,10 +144,10 @@ export async function listReportAutomations(organizationId: number): Promise<Rep
 
 export async function saveReportAutomation(input: Omit<ReportAutomationRow, 'id' | 'lastRunAt' | 'createdAt' | 'updatedAt'> & { id?: number }): Promise<ReportAutomationRow> {
   await ensureReportAutomationSchema();
-  const values = [input.organizationId, input.createdByUserId, input.reportKey, input.reportTitle, input.sourcePath, input.cadence, input.weekdays, input.localTime, input.timeZone, input.playerScope, input.playerIds, JSON.stringify(input.reportPanels), input.onlyWhenData, input.includeAiSummary, input.notifyPlayers, input.active];
+  const values = [input.organizationId, input.createdByUserId, input.reportKey, input.reportTitle, input.sourcePath, input.customReportId, input.profileCategory, input.cadence, input.weekdays, input.localTime, input.timeZone, input.playerScope, input.playerIds, JSON.stringify(input.reportPanels), input.onlyWhenData, input.includeAiSummary, input.notifyPlayers, input.active];
   const result = input.id
-    ? await getDbPool().query(`UPDATE report_automations SET report_key=$3,report_title=$4,source_path=$5,cadence=$6,weekdays=$7,local_time=$8,time_zone=$9,player_scope=$10,player_ids=$11,report_panels=$12::jsonb,only_when_data=$13,include_ai_summary=$14,notify_players=$15,is_active=$16,updated_at=NOW() WHERE id=$17 AND organization_id=$1 RETURNING *`, [...values, input.id])
-    : await getDbPool().query(`INSERT INTO report_automations (organization_id,created_by_user_id,report_key,report_title,source_path,cadence,weekdays,local_time,time_zone,player_scope,player_ids,report_panels,only_when_data,include_ai_summary,notify_players,is_active) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16) RETURNING *`, values);
+    ? await getDbPool().query(`UPDATE report_automations SET report_key=$3,report_title=$4,source_path=$5,custom_report_id=$6,profile_category=$7,cadence=$8,weekdays=$9,local_time=$10,time_zone=$11,player_scope=$12,player_ids=$13,report_panels=$14::jsonb,only_when_data=$15,include_ai_summary=$16,notify_players=$17,is_active=$18,updated_at=NOW() WHERE id=$19 AND organization_id=$1 RETURNING *`, [...values, input.id])
+    : await getDbPool().query(`INSERT INTO report_automations (organization_id,created_by_user_id,report_key,report_title,source_path,custom_report_id,profile_category,cadence,weekdays,local_time,time_zone,player_scope,player_ids,report_panels,only_when_data,include_ai_summary,notify_players,is_active) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16,$17,$18) RETURNING *`, values);
   if (!result.rows[0]) throw new Error('Automation was not found.');
   return mapAutomation(result.rows[0]);
 }
@@ -169,17 +175,18 @@ export async function listDueReportAutomations(now: Date): Promise<ReportAutomat
   });
 }
 
-export async function claimAutomationRun(automationId: number, playerId: number, reportDate: string): Promise<number | null> {
+export async function claimAutomationRun(automationId: number, playerId: number, reportDate: string, force=false): Promise<number | null> {
   await ensureReportAutomationSchema();
   const result = await getDbPool().query(`
     INSERT INTO report_automation_runs (automation_id,player_id,report_date,status)
     VALUES ($1,$2,$3,'running')
     ON CONFLICT (automation_id,player_id,report_date) DO UPDATE
       SET status='running', detail='', completed_at=NULL, created_at=NOW()
-      WHERE report_automation_runs.status IN ('failed','skipped')
-        AND report_automation_runs.completed_at < NOW() - INTERVAL '4 minutes'
+      WHERE ($4::boolean AND report_automation_runs.status <> 'running')
+         OR (report_automation_runs.status IN ('failed','skipped')
+             AND report_automation_runs.completed_at < NOW() - INTERVAL '4 minutes')
     RETURNING id
-  `, [automationId, playerId, reportDate]);
+  `, [automationId, playerId, reportDate, force]);
   return result.rows[0] ? Number(result.rows[0].id) : null;
 }
 

@@ -14,6 +14,6 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => ({})) as {id?:number};
   const automation = (await listReportAutomations(organizationId)).find((item) => item.id === Number(body.id));
   if (!automation) return NextResponse.json({error:'Automation not found.'}, {status:404});
-  const result = await executeReportAutomation(automation, new URL(request.url).origin);
+  const result = await executeReportAutomation(automation, new URL(request.url).origin,new Date(),{force:true});
   return NextResponse.json({ok:true, ...result});
 }
