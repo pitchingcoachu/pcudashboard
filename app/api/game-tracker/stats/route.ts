@@ -19,6 +19,7 @@ export async function GET(request: Request) {
       batterHand: params.get('batterHand') as Handedness | null,
       pitcherHand: params.get('pitcherHand') as ThrowingHand | null,
       playerId: playerRaw ? Number(playerRaw) : null,
+      playerKey: params.get('playerKey'),
     });
     return Response.json(stats);
   } catch (error) {

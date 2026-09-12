@@ -15,6 +15,9 @@ __pycache__/
 private_exports/
 # Personal contact data (names/phone numbers) -- never commit.
 contacts_names_phone_numbers.csv
+# Generated data exports (player/coach/admin rosters, athlete-import
+# spreadsheets) -- disposable output containing real people's info, not source.
+output/
 
 # Python virtualenv for the dashboard_api service -- machine-specific, regenerable.
 dashboard_api/.venv/

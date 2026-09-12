@@ -85,6 +85,9 @@ export type GameTrackerGame = {
   id: number;
   organizationId: number;
   schoolCode: string;
+  usTeamId: number | null;
+  opponentTeamId: number | null;
+  usTeamName: string;
   gameType: GameType;
   gameDate: string;
   season: string;
@@ -105,6 +108,8 @@ export type GameTrackerPlayer = {
   gameId: number;
   teamSide: TeamSide;
   playerId: number | null;
+  rosterPersonId: number | null;
+  statTeamId: number | null;
   displayName: string;
   jerseyNumber: string | null;
   bats: Handedness;
@@ -113,6 +118,29 @@ export type GameTrackerPlayer = {
   position: string | null;
   isStarter: boolean;
   isActive: boolean;
+};
+
+export type GameTrackerTeam = {
+  id: number;
+  organizationId: number;
+  name: string;
+  shortName: string | null;
+  teamType: 'organization' | 'intrasquad' | 'opponent';
+  statSourceTeamId: number | null;
+  isPrimary: boolean;
+  memberCount: number;
+};
+
+export type GameTrackerRosterMember = {
+  id: number;
+  teamId: number;
+  rosterPersonId: number;
+  playerId: number | null;
+  displayName: string;
+  jerseyNumber: string | null;
+  bats: Handedness;
+  throws: ThrowingHand;
+  position: string | null;
 };
 
 export type BaseRunners = {
@@ -178,7 +206,12 @@ export type RunnerEventInput = {
   note?: string;
 };
 
-export type GameEventInput = PitchEventInput | RunnerEventInput;
+export type HalfInningEventInput = {
+  type: 'half_inning';
+  note?: string;
+};
+
+export type GameEventInput = PitchEventInput | RunnerEventInput | HalfInningEventInput;
 
 export type GameSituation = {
   inning: number;
@@ -216,6 +249,7 @@ export type ScenarioFilters = {
   batterHand?: Handedness | null;
   pitcherHand?: ThrowingHand | null;
   playerId?: number | null;
+  playerKey?: string | null;
 };
 
 export function initialGameState(): GameState {

@@ -1018,7 +1018,14 @@ export default function IntendedZonePanel({
         if (label === 'Yes') inZoneN += 1;
         if (label === 'Yes' || label === 'Competitive') competitiveN += 1;
       }
-      return { inZoneN, competitiveN, total: list.length };
+      const missDistances = list.map((p) => p.missDistanceFt).filter((d): d is number => d !== null).sort((a, b) => a - b);
+      const avgMissFt = missDistances.length ? missDistances.reduce((sum, d) => sum + d, 0) / missDistances.length : null;
+      const medianMissFt = missDistances.length
+        ? missDistances.length % 2 === 1
+          ? missDistances[(missDistances.length - 1) / 2]
+          : (missDistances[missDistances.length / 2 - 1] + missDistances[missDistances.length / 2]) / 2
+        : null;
+      return { inZoneN, competitiveN, total: list.length, avgMissFt, medianMissFt };
     }
 
     const byType = new Map<string, ReturnType<typeof tally>>();
@@ -1923,6 +1930,8 @@ export default function IntendedZonePanel({
                           <th>Pitches</th>
                           <th>In Zone</th>
                           <th>Competitive</th>
+                          <th>Avg Miss</th>
+                          <th>Median Miss</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1937,6 +1946,8 @@ export default function IntendedZonePanel({
                           <td>
                             {zoneTallies.overall.competitiveN}/{zoneTallies.overall.total} ({((zoneTallies.overall.competitiveN / zoneTallies.overall.total) * 100).toFixed(0)}%)
                           </td>
+                          <td>{zoneTallies.overall.avgMissFt !== null ? `${(zoneTallies.overall.avgMissFt * 12).toFixed(1)}"` : '—'}</td>
+                          <td>{zoneTallies.overall.medianMissFt !== null ? `${(zoneTallies.overall.medianMissFt * 12).toFixed(1)}"` : '—'}</td>
                         </tr>
                         {Array.from(zoneTallies.byType.entries()).map(([pitchType, tally]) => (
                           <tr key={pitchType}>
@@ -1953,6 +1964,8 @@ export default function IntendedZonePanel({
                             <td>
                               {tally.competitiveN}/{tally.total} ({((tally.competitiveN / tally.total) * 100).toFixed(0)}%)
                             </td>
+                            <td>{tally.avgMissFt !== null ? `${(tally.avgMissFt * 12).toFixed(1)}"` : '—'}</td>
+                            <td>{tally.medianMissFt !== null ? `${(tally.medianMissFt * 12).toFixed(1)}"` : '—'}</td>
                           </tr>
                         ))}
                       </tbody>

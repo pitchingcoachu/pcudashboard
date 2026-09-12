@@ -51,6 +51,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   const canAccessClientManagement = session.role === 'admin' ? schoolAccess?.clientManagement !== false : clientManagementAllowed;
   const canAccessGameTracker = session.role === 'admin' ? schoolAccess?.gameTracker !== false : gameTrackerAllowed;
   const isProSchool = String(selectedSchool).trim().toUpperCase() === 'PRO';
+  const canAccessSessionBooking = ['PCU', 'GUND'].includes(String(selectedSchool).trim().toUpperCase());
   const showCoachClientTabs = canAccessClientManagement && !(session.role === 'coach' && isProSchool);
   const isLeagueSchool = String(selectedSchool || '').toUpperCase() === 'LEAGUE';
   const isTrialSchool = String(selectedSchool || '').toUpperCase() === 'TRIAL';
@@ -67,6 +68,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     role: session.role,
     selectedSchool,
     canAccessProgramming,
+    canAccessSessionBooking,
     canAccessClientManagement: showCoachClientTabs,
     canAccessGameTracker,
     canAccessActivityTracker,

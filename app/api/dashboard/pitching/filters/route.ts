@@ -140,6 +140,14 @@ export async function GET(request: Request) {
         ...payload.pitchers.map((value) => String(value ?? '').trim()),
         ...additions.pitchers,
       ]);
+      const teamMap = payload.pitchers_by_team_code && typeof payload.pitchers_by_team_code === 'object'
+        ? { ...(payload.pitchers_by_team_code as Record<string, unknown>) }
+        : {};
+      const schoolPitchers = Array.isArray(teamMap[schoolCode])
+        ? (teamMap[schoolCode] as unknown[]).map((value) => String(value ?? '').trim())
+        : [];
+      teamMap[schoolCode] = uniqueNames([...schoolPitchers, ...additions.pitchers]);
+      payload.pitchers_by_team_code = teamMap;
     }
     canonicalizeDashboardFilterPlayers({ payload, schoolCode, playerField: 'pitchers', mapField: 'pitchers_by_team_code' });
     let scopedPitcher: string | null = null;

@@ -5,6 +5,7 @@ import MediaBreakdownViewer, { type BreakdownAnnotation } from '../components/me
 import NativeDateInput from '../components/native-date-input';
 import { NOTE_ATTACHMENT_DATA_URL_MAX_LENGTH, formatNoteAttachmentLimit } from '../../../lib/note-attachment-limits';
 import { uploadPlayerMediaFile } from '../../../lib/upload-player-media';
+import { PlayerAssessmentForm, type PlayerAssessmentAnswers } from '../components/player-assessment-form';
 
 type Domain = 'Pitching' | 'Hitting' | 'Catching' | 'General';
 
@@ -108,7 +109,7 @@ function MediaTilePreview({ url, title, mimeType }: { url: string; title: string
   return <MediaTileFallback label="File" />;
 }
 
-const DEFAULT_NOTE_CATEGORIES = ['Player Plan', 'Weight Room', 'Nutrition', 'Mental Training', 'Grips', 'Questionnaires'];
+const DEFAULT_NOTE_CATEGORIES = ['Player Plan', 'Weight Room', 'Nutrition', 'Mental Training', 'Grips', 'Questionnaires', 'Assessment'];
 const MULTI_ATTACHMENT_MIME = 'application/x.pcu-note-attachments+json';
 const NOTE_ATTACHMENT_LIMIT_LABEL = formatNoteAttachmentLimit();
 const PLAYER_MEDIA_LIMIT_BYTES = 350 * 1024 * 1024;
@@ -205,6 +206,7 @@ function categoryBadgeStyle(category: string): React.CSSProperties {
   if (category === 'Nutrition') return { background: 'rgba(34,197,94,0.2)', color: '#86efac' };
   if (category === 'Mental Training') return { background: 'rgba(168,85,247,0.2)', color: '#d8b4fe' };
   if (category === 'Questionnaires') return { background: 'rgba(20,184,166,0.2)', color: '#5eead4' };
+  if (category === 'Assessment') return { background: 'rgba(220,38,38,0.2)', color: '#fca5a5' };
   return { background: 'rgba(14,165,233,0.2)', color: '#7dd3fc' };
 }
 
@@ -320,6 +322,11 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
   const [noteDate, setNoteDate] = useState(todayIsoDate());
   const [noteCategory, setNoteCategory] = useState('Player Plan');
   const [noteText, setNoteText] = useState('');
+  const [assessmentAnswers, setAssessmentAnswers] = useState<PlayerAssessmentAnswers>({});
+  const [savingAssessment, setSavingAssessment] = useState(false);
+  const [editingAssessmentId, setEditingAssessmentId] = useState<number | null>(null);
+  const [editingAssessmentAnswers, setEditingAssessmentAnswers] = useState<PlayerAssessmentAnswers>({});
+  const [loadingAssessmentForNoteId, setLoadingAssessmentForNoteId] = useState<number | null>(null);
   const [noteVisibleToPlayer, setNoteVisibleToPlayer] = useState(false);
   const [noteFiles, setNoteFiles] = useState<File[]>([]);
   const [filterCategory, setFilterCategory] = useState('All');
@@ -602,6 +609,84 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
       setMessage('Note saved.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Failed to save note.');
+    }
+  }
+
+  async function saveAssessment() {
+    if (selectedLinkedPlayerId <= 0) {
+      setMessage('Assessment requires a linked player -- select a player with a full profile.');
+      return;
+    }
+    setMessage('');
+    setSavingAssessment(true);
+    try {
+      const response = await fetch('/api/player/assessments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          playerId: selectedLinkedPlayerId,
+          assessmentDate: noteDate,
+          answers: assessmentAnswers,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string; notes?: PlayerPlanNote[] };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to save assessment.');
+      setNotes(Array.isArray(payload.notes) ? payload.notes : []);
+      setAssessmentAnswers({});
+      setMessage('Assessment saved.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to save assessment.');
+    } finally {
+      setSavingAssessment(false);
+    }
+  }
+
+  async function startEditAssessment(note: PlayerPlanNote) {
+    if (!note.playerId) return;
+    setLoadingAssessmentForNoteId(note.id);
+    setMessage('');
+    try {
+      const response = await fetch(`/api/player/assessments?playerId=${note.playerId}`, { cache: 'no-store' });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string; assessments?: Array<{ id: number; assessmentDate: string; answers: PlayerAssessmentAnswers }> };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to load assessment.');
+      const match = (payload.assessments ?? []).find((entry) => entry.assessmentDate === note.noteDate);
+      if (!match) throw new Error('Could not find the underlying assessment for this note.');
+      setEditingAssessmentId(match.id);
+      setEditingAssessmentAnswers(match.answers);
+      setEditingNoteId(note.id);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to load assessment.');
+    } finally {
+      setLoadingAssessmentForNoteId(null);
+    }
+  }
+
+  async function saveEditedAssessment(note: PlayerPlanNote) {
+    if (!note.playerId || editingAssessmentId === null) return;
+    setMessage('');
+    setSavingAssessment(true);
+    try {
+      const response = await fetch('/api/player/assessments', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          playerId: note.playerId,
+          assessmentId: editingAssessmentId,
+          assessmentDate: note.noteDate,
+          answers: editingAssessmentAnswers,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string; notes?: PlayerPlanNote[] };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to update assessment.');
+      setNotes(Array.isArray(payload.notes) ? payload.notes : []);
+      setEditingNoteId(null);
+      setEditingAssessmentId(null);
+      setEditingAssessmentAnswers({});
+      setMessage('Assessment updated.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to update assessment.');
+    } finally {
+      setSavingAssessment(false);
     }
   }
 
@@ -1012,7 +1097,15 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
             </div>
           ) : null}
         </div>
-        {editingNoteId === note.id ? (
+        {editingNoteId === note.id && note.category === 'Assessment' ? (
+          <div style={{ margin: '12px 0 18px 0' }}>
+            {editingAssessmentId === null ? (
+              <p className="portal-muted-text">Loading assessment…</p>
+            ) : (
+              <PlayerAssessmentForm answers={editingAssessmentAnswers} onChange={setEditingAssessmentAnswers} disabled={savingAssessment} />
+            )}
+          </div>
+        ) : editingNoteId === note.id ? (
           <textarea
             rows={5}
             value={editingText}
@@ -1059,7 +1152,29 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
           </span>
         ) : null}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-          {editingNoteId === note.id ? (
+          {editingNoteId === note.id && note.category === 'Assessment' ? (
+            <>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => void saveEditedAssessment(note)}
+                disabled={editingAssessmentId === null || savingAssessment}
+              >
+                {savingAssessment ? 'Saving…' : 'Save'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => {
+                  setEditingNoteId(null);
+                  setEditingAssessmentId(null);
+                  setEditingAssessmentAnswers({});
+                }}
+              >
+                Cancel
+              </button>
+            </>
+          ) : editingNoteId === note.id ? (
             <>
               <button type="button" className="btn btn-primary" onClick={() => void saveEditedNote(note)}>
                 Save
@@ -1068,6 +1183,15 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
                 Cancel
               </button>
             </>
+          ) : note.category === 'Assessment' ? (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => void startEditAssessment(note)}
+              disabled={loadingAssessmentForNoteId === note.id}
+            >
+              {loadingAssessmentForNoteId === note.id ? 'Loading…' : 'Edit'}
+            </button>
           ) : (
             <button
               type="button"
@@ -1315,7 +1439,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
         </article>
 
         <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'minmax(420px, 560px) minmax(0, 1fr)', alignItems: 'start' }}>
-          <article className="portal-admin-card" style={{ position: 'sticky', top: 8 }}>
+          <article className="portal-admin-card" style={{ position: 'sticky', top: 8, maxHeight: 'calc(100vh - 16px)', overflowY: 'auto' }}>
             <h3 style={{ marginTop: 0 }}>New Note</h3>
             <div className="portal-form-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
               <label>
@@ -1382,10 +1506,21 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
                 }}
               />
             </label>
-            <label className="portal-inline-filter" style={{ marginTop: 8 }}>
-              Note
-              <textarea rows={8} value={noteText} onChange={(event) => setNoteText(event.target.value)} placeholder="Write note..." />
-            </label>
+            {noteCategory === 'Assessment' ? (
+              <div style={{ marginTop: 8 }}>
+                {selectedLinkedPlayerId <= 0 ? (
+                  <p className="portal-muted-text" style={{ margin: '0 0 8px' }}>
+                    Assessment requires a linked player profile -- select a real player, not a roster-only name.
+                  </p>
+                ) : null}
+                <PlayerAssessmentForm answers={assessmentAnswers} onChange={setAssessmentAnswers} disabled={selectedLinkedPlayerId <= 0} />
+              </div>
+            ) : (
+              <label className="portal-inline-filter" style={{ marginTop: 8 }}>
+                Note
+                <textarea rows={8} value={noteText} onChange={(event) => setNoteText(event.target.value)} placeholder="Write note..." />
+              </label>
+            )}
             <label className="portal-inline-filter" style={{ marginTop: 8 }}>
               <input
                 type="checkbox"
@@ -1395,14 +1530,25 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
               Visible to player
             </label>
             <div className="portal-choice-line-actions">
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={() => void saveNote()}
-                disabled={!selectedPlayerName.trim() || selectedPlayerName === 'All' || !noteText.trim()}
-              >
-                Save Note
-              </button>
+              {noteCategory === 'Assessment' ? (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => void saveAssessment()}
+                  disabled={selectedLinkedPlayerId <= 0 || savingAssessment}
+                >
+                  {savingAssessment ? 'Saving…' : 'Save Assessment'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => void saveNote()}
+                  disabled={!selectedPlayerName.trim() || selectedPlayerName === 'All' || !noteText.trim()}
+                >
+                  Save Note
+                </button>
+              )}
             </div>
             {!selectedPlayerName.trim() ? <p className="portal-muted-text" style={{ margin: 0 }}>Select a player to save notes.</p> : null}
             {selectedPlayerName === 'All' ? <p className="portal-muted-text" style={{ margin: 0 }}>Select a specific player to save notes.</p> : null}

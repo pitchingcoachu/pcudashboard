@@ -13,14 +13,17 @@ export async function resolveStaffPrimaryNavigation(session: PortalSession): Pro
   ]);
   const school = selectedSchool.trim().toUpperCase();
   const isTrial = school === 'TRIAL';
+  const canAccessSessionBooking = school === 'PCU' || school === 'GUND';
 
   return {
     canAccessSchedule,
+    canAccessSessionBooking,
     canAccessPlayerNotes: school !== 'LEAGUE' && school !== 'INDY',
     moreItems: buildStaffMoreNavItems({
       role: session.role,
       selectedSchool,
       canAccessProgramming: canAccessSchedule,
+      canAccessSessionBooking,
       canAccessClientManagement,
       canAccessGameTracker,
       canAccessActivityTracker: !isTrial && canViewPortalActivity(session),

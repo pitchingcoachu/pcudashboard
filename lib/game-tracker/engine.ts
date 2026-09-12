@@ -26,7 +26,20 @@ function cloneState(state: GameState): GameState {
 function lineupForSide(players: GameTrackerPlayer[], side: TeamSide): GameTrackerPlayer[] {
   return players
     .filter((player) => player.teamSide === side && player.isActive && player.battingOrder !== null)
-    .toSorted((a, b) => Number(a.battingOrder) - Number(b.battingOrder));
+    .toSorted((a, b) => Number(a.battingOrder) - Number(b.battingOrder) || a.id - b.id);
+}
+
+export function battingIndexForPlayer(
+  currentBattingIndex: number,
+  players: GameTrackerPlayer[],
+  side: TeamSide,
+  playerId: number
+): number | null {
+  const lineup = lineupForSide(players, side);
+  const playerIndex = lineup.findIndex((player) => player.id === playerId);
+  if (playerIndex < 0) return null;
+  const completedTurns = Math.floor(currentBattingIndex / Math.max(1, lineup.length));
+  return (completedTurns * lineup.length) + playerIndex;
 }
 
 export function currentSituation(
@@ -125,8 +138,8 @@ function completePlateAppearance(state: GameState, side: TeamSide) {
   state.completedPlateAppearances += 1;
 }
 
-function advanceHalfInning(state: GameState) {
-  if (state.outs < 3) return;
+function advanceHalfInning(state: GameState, force = false) {
+  if (!force && state.outs < 3) return;
   state.outs = 0;
   state.balls = 0;
   state.strikes = 0;
@@ -191,6 +204,11 @@ export function applyGameEvent(
 ): { state: GameState; situation: GameSituation; input: GameEventInput } {
   const state = cloneState(current);
   const situation = currentSituation(state, players, homeAway);
+
+  if (input.type === 'half_inning') {
+    advanceHalfInning(state, true);
+    return { state, situation, input };
+  }
 
   if (input.type === 'runner') {
     clearRunner(state.runners, input.fromBase);

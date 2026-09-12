@@ -49,20 +49,25 @@ export async function POST(request: Request) {
   if (reportPanels.some((panel) => panel.dateMode === 'fixed' && (!/^\d{4}-\d{2}-\d{2}$/.test(panel.fixedStart) || !/^\d{4}-\d{2}-\d{2}$/.test(panel.fixedEnd) || panel.fixedStart > panel.fixedEnd))) {
     return NextResponse.json({error:'Each fixed panel range needs a valid start and end date.'},{status:400});
   }
-  const automation = await saveReportAutomation({
-    id: Number(body.id) || undefined,
-    organizationId: scope.organizationId,
-    createdByUserId: scope.session.userId,
-    reportKey: String(body.reportKey ?? 'report').trim() || 'report', reportTitle:title,
-    sourcePath:String(body.sourcePath ?? '').slice(0,1000), customReportId:Number(body.customReportId) > 0 ? Number(body.customReportId) : null, profileCategory,
-    cadence:body.cadence === 'weekly' ? 'weekly' : 'daily',
-    weekdays:Array.isArray(body.weekdays) ? body.weekdays.map(Number).filter((day) => day >= 0 && day <= 6) : [0,1,2,3,4,5,6],
-    localTime, timeZone, playerScope:body.playerScope === 'selected' ? 'selected' : 'all',
-    playerIds:Array.isArray(body.playerIds) ? body.playerIds.map(Number).filter((id) => id > 0) : [],
-    reportPanels,
-    onlyWhenData:body.onlyWhenData !== false, includeAiSummary:body.includeAiSummary === true, notifyPlayers:body.notifyPlayers !== false, active:body.active !== false,
-  });
-  return NextResponse.json({ ok:true, automation });
+  try {
+    const automation = await saveReportAutomation({
+      id: Number(body.id) || undefined,
+      organizationId: scope.organizationId,
+      createdByUserId: scope.session.userId,
+      reportKey: String(body.reportKey ?? 'report').trim() || 'report', reportTitle:title,
+      sourcePath:String(body.sourcePath ?? '').slice(0,1000), customReportId:Number(body.customReportId) > 0 ? Number(body.customReportId) : null, profileCategory,
+      cadence:body.cadence === 'weekly' ? 'weekly' : 'daily',
+      weekdays:Array.isArray(body.weekdays) ? body.weekdays.map(Number).filter((day) => day >= 0 && day <= 6) : [0,1,2,3,4,5,6],
+      localTime, timeZone, playerScope:body.playerScope === 'selected' ? 'selected' : 'all',
+      playerIds:Array.isArray(body.playerIds) ? body.playerIds.map(Number).filter((id) => id > 0) : [],
+      reportPanels,
+      onlyWhenData:body.onlyWhenData !== false, includeAiSummary:body.includeAiSummary === true, notifyPlayers:body.notifyPlayers !== false, active:body.active !== false,
+    });
+    return NextResponse.json({ ok:true, automation });
+  } catch (error) {
+    console.error('Unable to save report automation.', error);
+    return NextResponse.json({ error: error instanceof Error ? error.message : 'Could not save automation.' }, { status:500 });
+  }
 }
 
 export async function DELETE(request: Request) {

@@ -157,7 +157,8 @@ school_config <- list(
   "Rankin, Beckett",
   "O’Brasky, Jack",
   "Lugo, Alejandro",
-  "Alfonseca, Pedro"
+  "Alfonseca, Pedro",
+  "Morris, Patrick"
 
   ),
   allowed_hitters = c(
@@ -305,7 +306,8 @@ school_config <- list(
   "Twichel, Ryan",
   "Rodriguez, Diego",
   "O’Brasky, Jack",
-  "Alfonseca, Pedro"
+  "Alfonseca, Pedro",
+  "Morris, Patrick"
   ),
   allowed_campers = character(0),
   colors = list(

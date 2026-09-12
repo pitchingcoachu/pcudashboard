@@ -5,6 +5,7 @@ import PortalNavOverflowMenu from './nav-overflow-menu';
 type StaffPrimaryNavProps = {
   activeHref?: string;
   canAccessSchedule: boolean;
+  canAccessSessionBooking: boolean;
   canAccessPlayerNotes: boolean;
   moreItems: PortalPrimaryNavItem[];
 };

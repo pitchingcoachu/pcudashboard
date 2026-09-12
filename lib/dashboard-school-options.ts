@@ -89,6 +89,7 @@ function schoolFromOrganizationName(name: string | null | undefined): string | n
   if (upper.includes('UNIVERSITY OF NORTHWESTERN OHIO')) return 'UNOH';
   if (upper.includes('UNIVERSITY OF ARIZONA')) return 'ARIZONA';
   if (upper.includes('LAKE ERIE COLLEGE')) return 'LEC';
+  if (upper.includes('GUNDERSON BASEBALL')) return 'GUND';
   if (upper.includes('LONG ISLAND DUCKS')) return 'LI';
   if (upper.includes('ATLANTIC LEAGUE')) return 'INDY';
   const compact = upper.replace(/[^A-Z0-9]/g, '');

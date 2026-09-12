@@ -50,8 +50,8 @@
 .shell :global(.game-tracker-eyebrow) { margin: 0 0 13px; color: var(--gt-accent); font-size: 0.64rem; font-weight: 850; letter-spacing: 0.18em; }
 .shell :global(.game-tracker-hero h1) { margin: 0 0 13px; font-size: clamp(3.4rem, 7vw, 6.7rem); font-weight: 900; letter-spacing: -0.07em; line-height: 0.82; }
 .shell :global(.game-tracker-hero div > p:last-child) { max-width: 690px; margin: 0; color: var(--gt-muted); font-size: 0.94rem; line-height: 1.6; }
-.shell :global(.game-tracker-hero-actions) { display: flex; justify-content: flex-end; padding-top: 14px; }
-.shell :global(.game-tracker-hero-actions > a) { min-width: 180px; }
+.shell :global(.game-tracker-hero-actions) { display: flex; justify-content: center; gap: 9px; padding-top: 14px; }
+.shell :global(.game-tracker-hero-actions > a) { display: inline-flex; align-items: center; justify-content: center; min-width: 180px; text-align: center; }
 
 .shell :global(.game-tracker-grid) {
   display: grid;
@@ -125,6 +125,7 @@
   .shell :global(.game-tracker-hero) { align-items: flex-start; flex-direction: column; min-height: 0; padding: 28px 22px; }
   .shell :global(.game-tracker-hero-logo) { right: -18px; width: 210px; opacity: 0.11; }
   .shell :global(.game-tracker-hero h1) { font-size: 4rem; }
+  .shell :global(.game-tracker-hero-actions) { flex-direction: column; }
   .shell :global(.game-tracker-hero-actions > a) { width: 100%; }
   .shell :global(.game-tracker-form) { grid-template-columns: 1fr; }
   .shell :global(.game-tracker-game-row) { grid-template-columns: 68px minmax(0, 1fr) auto; }

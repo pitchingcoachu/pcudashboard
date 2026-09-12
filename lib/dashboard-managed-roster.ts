@@ -51,6 +51,11 @@ export async function applyManagedRosterTeamScope(input: {
 
   // Keep All as every observed TrackMan player. The school bucket is driven
   // by Manage Players, while Opponents is the remaining observed data.
+  // PCU's dashboard roster is managed in Manage Players, so keep every roster
+  // entry available even before that athlete has an observed TrackMan row.
+  if (schoolCode === 'PCU') {
+    input.payload[input.playerField] = mergePlayerNames([...observedNames, ...managedNames]);
+  }
   teamMap[schoolCode] = mergePlayerNames([...teamNames, ...managedNames]);
   teamMap.Opponents = mergePlayerNames(opponentNames);
   input.payload[input.mapField] = teamMap;

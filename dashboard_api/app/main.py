@@ -6899,6 +6899,7 @@ def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
         "ARIZONA": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "ARIZONA", "school_config.R"),
         "UNOH": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "UNOH", "school_config.R"),
         "LEC": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "LEC", "school_config.R"),
+        "GUND": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "GUND", "school_config.R"),
         "SEMO": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "SEMO", "school_config.R"),
         "CREIGHTON": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "CREIGHTON", "school_config.R"),
         "HARVARD": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "HARVARD", "school_config.R"),
@@ -6961,6 +6962,7 @@ def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
             "Bates, Tyler",
             "Hicks, Jackson",
             "Lugo, Alejandro",
+            "Morris, Patrick",
         ]
         allowed_pitchers = sorted({*allowed_pitchers, *pcu_additions})
         allowed_hitters = sorted({*allowed_hitters, *pcu_additions})

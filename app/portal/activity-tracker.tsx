@@ -18,6 +18,7 @@ const PAGE_LABELS: Array<{ pattern: RegExp; label: string; section: string }> = 
   { pattern: /^\/portal\/admin\/master-calendar\b/, label: 'Master Calendar', section: 'Admin' },
   { pattern: /^\/portal\/admin\/questionnaires\b/, label: 'Questionnaires', section: 'Admin' },
   { pattern: /^\/portal\/admin\/schedule\b/, label: 'Schedule Builder', section: 'Admin' },
+  { pattern: /^\/portal\/scheduling\b/, label: 'Session Scheduling', section: 'Portal' },
   { pattern: /^\/portal\/admin\/testing\b/, label: 'Testing Data', section: 'Admin' },
   { pattern: /^\/portal\/admin\/workouts\b/, label: 'Workout Builder', section: 'Admin' },
   { pattern: /^\/portal\/admin\b/, label: 'Admin Home', section: 'Admin' },

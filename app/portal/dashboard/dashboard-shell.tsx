@@ -204,10 +204,12 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
       }
     : undefined;
   const suiteOptions: SuiteName[] = useMemo(() => {
-    const base: SuiteName[] = ['Home', 'Pitching', 'Hitting'];
+    const isPcu = String(selectedSchoolCode || '').trim().toUpperCase() === 'PCU';
+    const base: SuiteName[] = ['Home'];
+    base.push('Pitching', 'Hitting');
     if (!isPro) base.push('Catching');
     base.push('Custom Reports', 'Comparison Tool');
-    if (String(selectedSchoolCode || '').trim().toUpperCase() === 'PCU') base.push('Biomechanics');
+    if (isPcu) base.push('Biomechanics');
     if (!isLeague) base.push('Player Plans');
     if (!isLeague) base.push('Stuff+ Calculator');
     if (role !== 'player') base.push('Flags');

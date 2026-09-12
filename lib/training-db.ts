@@ -4,6 +4,7 @@ import { resolveHomeDashboardSchoolCode } from './dashboard-home-school';
 import { pitchLocationLabel } from './pitch-location';
 import { intendedTargetLocation } from './intended-target-location';
 import type { PortalActivityEventType } from './portal-activity';
+import { PLAYER_ASSESSMENT_FIELDS, PLAYER_ASSESSMENT_FIELD_IDS } from './player-assessment-fields';
 export { intendedTargetLocation } from './intended-target-location';
 const DEFAULT_DASHBOARD_URL = 'https://pitchingcoachu.shinyapps.io/TMdata/';
 const DASHBOARD_TRIAL_ORG_PREFIX = 'Dashboard Trial - ';
@@ -54,7 +55,7 @@ const TRIAL_FAKE_LAST_NAMES = [
   'Brooks',
 ];
 
-const TRAINING_DB_VERSION = '2026-09-09-strikes-count';
+const TRAINING_DB_VERSION = '2026-09-11-player-assessments';
 
 declare global {
   var __pcuTrainingDbReady: boolean | string | undefined;
@@ -695,6 +696,19 @@ export async function ensureTrainingDbReady(): Promise<void> {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_plan_notes_player_date ON player_plan_notes (player_id, note_date DESC, created_at DESC);`);
     await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_player_plan_notes_source ON player_plan_notes (player_id, source_type, source_id);`);
     await pool.query(`
+    CREATE TABLE IF NOT EXISTS player_assessments (
+      id BIGSERIAL PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      assessment_date DATE NOT NULL,
+      answers_json JSONB NOT NULL,
+      created_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_assessments_player ON player_assessments (player_id, assessment_date DESC);`);
+    await pool.query(`
     CREATE TABLE IF NOT EXISTS player_media (
       id BIGSERIAL PRIMARY KEY,
       organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -1227,6 +1241,36 @@ export function classifyMissDirection(input: {
   return `${vertical}-${horizontal}` as IntendedZoneMissDirection;
 }
 
+/** Live-tracked sessions never link to pitch_events (they're matched by
+ * trackman_play_id, not pitch_events_id), and TrackMan's live webhook
+ * payload doesn't reliably carry PitchingHandedness on ball-tracking
+ * events -- so pitcherThrows is often unavailable at classification time
+ * for a live session, silently falling back to classifyMissDirection's
+ * right-handed default. players.throws_hand is populated correctly for
+ * every roster player and doesn't depend on TrackMan sending it, so use
+ * it as a fallback source, matched by the session's pitcher_name. */
+async function resolveSessionPitcherThrows(input: {
+  organizationId: number;
+  sessionId: number;
+}): Promise<string | null> {
+  if (!isDatabaseConfigured()) return null;
+  const pool = getDbPool();
+  const session = await pool.query<{ pitcher_name: string | null }>(
+    `SELECT pitcher_name FROM intended_zone_sessions WHERE id = $1 AND organization_id = $2 LIMIT 1`,
+    [input.sessionId, input.organizationId]
+  );
+  const pitcherName = session.rows[0]?.pitcher_name;
+  if (!pitcherName) return null;
+  const nameVariants = nameOrderingVariants(pitcherName);
+  if (!nameVariants.length) return null;
+  const player = await pool.query<{ throws_hand: string | null }>(
+    `SELECT throws_hand FROM players WHERE organization_id = $1 AND full_name = ANY($2::text[]) LIMIT 2`,
+    [input.organizationId, nameVariants]
+  );
+  if ((player.rowCount ?? 0) !== 1) return null;
+  return player.rows[0].throws_hand;
+}
+
 export async function startIntendedZoneSession(input: {
   organizationId: number;
   pitcherName: string | null;
@@ -1686,8 +1730,8 @@ export async function updateMatchedIntendedZoneTarget(input: {
   await ensureIntendedZoneSchema();
   const pool = getDbPool();
 
-  const existing = await pool.query<{ plate_loc_side: string | null; plate_loc_height: string | null; pitcherthrows: string | null }>(
-    `SELECT izp.plate_loc_side, izp.plate_loc_height, pe.pitcherthrows
+  const existing = await pool.query<{ session_id: number; plate_loc_side: string | null; plate_loc_height: string | null; pitcherthrows: string | null }>(
+    `SELECT izp.session_id, izp.plate_loc_side, izp.plate_loc_height, pe.pitcherthrows
      FROM intended_zone_pitches izp
      LEFT JOIN pitch_events pe ON pe.id = izp.pitch_events_id
      WHERE izp.id = $1 AND izp.organization_id = $2
@@ -1701,15 +1745,20 @@ export async function updateMatchedIntendedZoneTarget(input: {
   const plateLocHeight = row.plate_loc_height !== null ? Number(row.plate_loc_height) : null;
   let missDistanceFt: number | null = null;
   let missDirection: IntendedZoneMissDirection | null = null;
+  let resolvedPitcherThrows = row.pitcherthrows;
   if (plateLocSide !== null && plateLocHeight !== null) {
     const missSideFt = plateLocSide - input.intendedSideFt;
     const missHeightFt = plateLocHeight - input.intendedHeightFt;
     missDistanceFt = Math.sqrt(missSideFt * missSideFt + missHeightFt * missHeightFt);
+    resolvedPitcherThrows = row.pitcherthrows ?? await resolveSessionPitcherThrows({
+      organizationId: input.organizationId,
+      sessionId: row.session_id,
+    });
     missDirection = classifyMissDirection({
       missSideFt,
       missHeightFt,
       targetRadiusFt: input.targetRadiusFt,
-      pitcherThrows: row.pitcherthrows,
+      pitcherThrows: resolvedPitcherThrows,
     });
   }
 
@@ -1750,7 +1799,7 @@ export async function updateMatchedIntendedZoneTarget(input: {
       pitchEventsId: updatedRow.pitch_events_id,
       thrownAt: updatedRow.thrown_at,
       taggedPitcherName: updatedRow.tagged_pitcher_name,
-      pitcherThrows: row.pitcherthrows,
+      pitcherThrows: resolvedPitcherThrows,
       confirmedAt: updatedRow.confirmed_at,
       isStrike: updatedRow.is_strike,
       countAtPitch: updatedRow.count_at_pitch,
@@ -1876,15 +1925,20 @@ export async function matchIntendedZonePitch(input: {
       : null;
   let missDistanceFt = INTENDED_ZONE_MISSING_LOCATION_MISS_DISTANCE_FT;
   let missDirection: IntendedZoneMissDirection | null = null;
+  let resolvedPitcherThrows = input.pitcherThrows;
   if (plateLocSide !== null && plateLocHeight !== null) {
     const missSideFt = plateLocSide - target.intended_side_ft;
     const missHeightFt = plateLocHeight - target.intended_height_ft;
     missDistanceFt = Math.sqrt(missSideFt * missSideFt + missHeightFt * missHeightFt);
+    resolvedPitcherThrows = input.pitcherThrows ?? await resolveSessionPitcherThrows({
+      organizationId: input.organizationId,
+      sessionId: input.sessionId,
+    });
     missDirection = classifyMissDirection({
       missSideFt,
       missHeightFt,
       targetRadiusFt: target.target_radius_ft,
-      pitcherThrows: input.pitcherThrows,
+      pitcherThrows: resolvedPitcherThrows,
     });
   }
 
@@ -1946,7 +2000,7 @@ export async function matchIntendedZonePitch(input: {
       pitchEventsId: row.pitch_events_id,
       thrownAt: row.thrown_at,
       taggedPitcherName: row.tagged_pitcher_name,
-      pitcherThrows: input.pitcherThrows,
+      pitcherThrows: resolvedPitcherThrows,
       confirmedAt: row.confirmed_at,
       isStrike: row.is_strike,
       countAtPitch: row.count_at_pitch,
@@ -2075,6 +2129,13 @@ export async function listIntendedZonePitches(input: { organizationId: number; s
      ORDER BY izp.pitch_index ASC`,
     [input.sessionId, input.organizationId]
   );
+  // Rows with no linked pitch_events (live/manual sessions) have no
+  // pitcherthrows -- fall back to the roster's players.throws_hand via
+  // the session's pitcher_name, same convention as classifyMissDirection.
+  const needsFallback = result.rows.some((row) => !row.pitcherthrows);
+  const fallbackThrows = needsFallback
+    ? await resolveSessionPitcherThrows({ organizationId: input.organizationId, sessionId: input.sessionId })
+    : null;
   return result.rows.map((row) => ({
     id: row.id,
     sessionId: row.session_id,
@@ -2098,7 +2159,7 @@ export async function listIntendedZonePitches(input: { organizationId: number; s
     pitchEventsId: row.pitch_events_id,
     thrownAt: row.thrown_at,
     taggedPitcherName: row.tagged_pitcher_name,
-    pitcherThrows: row.pitcherthrows,
+    pitcherThrows: row.pitcherthrows ?? fallbackThrows,
     confirmedAt: row.confirmed_at,
     isStrike: row.is_strike,
     countAtPitch: row.count_at_pitch,
@@ -2251,6 +2312,32 @@ export async function listIntendedZonePitchLog(input: {
     params
   );
 
+  // Rows with no linked pitch_events (live/manual sessions) have no
+  // pitcherthrows -- fall back to the roster's players.throws_hand,
+  // batched by distinct pitcher name rather than per-row.
+  const namesNeedingFallback = Array.from(new Set(
+    result.rows.filter((row) => !row.pitcherthrows && row.pitcher_name).map((row) => String(row.pitcher_name))
+  ));
+  const throwsHandByName = new Map<string, string | null>();
+  if (namesNeedingFallback.length) {
+    const rosterResult = await pool.query<{ full_name: string; throws_hand: string | null }>(
+      `SELECT full_name, throws_hand FROM players WHERE organization_id = $1`,
+      [input.organizationId]
+    );
+    const rosterByVariant = new Map<string, string | null>();
+    for (const player of rosterResult.rows) {
+      for (const variant of nameOrderingVariants(player.full_name)) {
+        rosterByVariant.set(variant.toLowerCase(), player.throws_hand);
+      }
+    }
+    for (const name of namesNeedingFallback) {
+      for (const variant of nameOrderingVariants(name)) {
+        const match = rosterByVariant.get(variant.toLowerCase());
+        if (match !== undefined) { throwsHandByName.set(name, match); break; }
+      }
+    }
+  }
+
   return result.rows.map((row) => {
     const targetRadiusFt = Number(row.target_radius_ft);
     const missDistanceFt = row.miss_distance_ft !== null ? Number(row.miss_distance_ft) : null;
@@ -2275,7 +2362,7 @@ export async function listIntendedZonePitchLog(input: {
       pitchEventsId: row.pitch_events_id !== null ? Number(row.pitch_events_id) : null,
       thrownAt: row.thrown_at,
       taggedPitcherName: row.tagged_pitcher_name,
-      pitcherThrows: row.pitcherthrows,
+      pitcherThrows: row.pitcherthrows ?? throwsHandByName.get(String(row.pitcher_name)) ?? null,
       confirmedAt: row.confirmed_at,
       isStrike: row.is_strike,
       countAtPitch: row.count_at_pitch,
@@ -2818,6 +2905,32 @@ async function fetchIntendedZoneStatRows(input: {
     params
   );
 
+  // Rows with no linked pitch_events (live/manual sessions) have no
+  // pitcherthrows -- fall back to the roster's players.throws_hand,
+  // batched by distinct pitcher name rather than per-row.
+  const namesNeedingFallback = Array.from(new Set(
+    result.rows.filter((row) => !row.pitcherthrows && row.pitcher_name).map((row) => String(row.pitcher_name))
+  ));
+  const throwsHandByName = new Map<string, string | null>();
+  if (namesNeedingFallback.length) {
+    const rosterResult = await pool.query<{ full_name: string; throws_hand: string | null }>(
+      `SELECT full_name, throws_hand FROM players WHERE organization_id = $1`,
+      [input.organizationId]
+    );
+    const rosterByVariant = new Map<string, string | null>();
+    for (const player of rosterResult.rows) {
+      for (const variant of nameOrderingVariants(player.full_name)) {
+        rosterByVariant.set(variant.toLowerCase(), player.throws_hand);
+      }
+    }
+    for (const name of namesNeedingFallback) {
+      for (const variant of nameOrderingVariants(name)) {
+        const match = rosterByVariant.get(variant.toLowerCase());
+        if (match !== undefined) { throwsHandByName.set(name, match); break; }
+      }
+    }
+  }
+
   return result.rows
     .filter((row) => row.pitcher_name)
     .map((row) => {
@@ -2839,10 +2952,11 @@ async function fetchIntendedZoneStatRows(input: {
         targetRadiusFt,
         targetLocation: intendedTargetLocation(intendedSideFt, intendedHeightFt),
         targetHit: missDistanceFt <= targetRadiusFt,
-        // Same 'starts with l' check classifyMissDirection uses -- defaults
-        // to right-handed framing when unknown (unlinked pitch_events row,
-        // e.g. manual-mode sessions), matching that function's convention.
-        throwsLeft: String(row.pitcherthrows ?? '').trim().toLowerCase().startsWith('l'),
+        // Same 'starts with l' check classifyMissDirection uses -- falls
+        // back to players.throws_hand (resolved above) when this pitch has
+        // no linked pitch_events row, then to right-handed framing if the
+        // player can't be matched either, matching that function's convention.
+        throwsLeft: String(row.pitcherthrows ?? throwsHandByName.get(String(row.pitcher_name)) ?? '').trim().toLowerCase().startsWith('l'),
         missSideFt: plateLocSide === null ? null : plateLocSide - intendedSideFt,
         missHeightFt: plateLocHeight === null ? null : plateLocHeight - intendedHeightFt,
       };
@@ -4896,6 +5010,7 @@ function orgNameLikelyMatchesSchoolCode(orgName: string, schoolCode: string): bo
 
 const ORGANIZATION_NAME_ALIASES_BY_SCHOOL: Record<string, readonly string[]> = {
   ARIZONA: ['UNIVERSITY OF ARIZONA'],
+  GUND: ['GUNDERSON BASEBALL'],
 };
 
 export async function getLoginOrganizationIdForUser(userId: number): Promise<number> {
@@ -14432,6 +14547,219 @@ export async function upsertQuestionnaireResponsePlayerNote(input: {
         created_by_user_id = COALESCE(EXCLUDED.created_by_user_id, player_plan_notes.created_by_user_id)
     `,
     [row.player_id, noteDate, noteText, sourceType, sourceId, input.createdByUserId ?? null]
+  );
+
+  return { ok: true };
+}
+
+export type PlayerAssessmentRow = {
+  id: number;
+  playerId: number;
+  assessmentDate: string;
+  answers: Record<string, string>;
+  createdByUserId: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+function cleanAssessmentAnswers(rawAnswers: Record<string, unknown>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(rawAnswers ?? {})
+      .map(([key, value]) => [String(key).trim(), String(value ?? '').trim()])
+      .filter(([key, value]) => PLAYER_ASSESSMENT_FIELD_IDS.has(key) && value.length > 0)
+  );
+}
+
+/** Formal PCU physical assessment -- create a new one, or update an
+ * existing one when assessmentId is given (re-opened from its mirrored
+ * note, same pattern as saveQuestionnaireResponse's upsert-by-id). Always
+ * keeps the mirrored player_plan_notes row (category 'Assessment') in
+ * sync via upsertPlayerAssessmentPlayerNote. */
+export async function saveOrUpdatePlayerAssessment(input: {
+  organizationId: number;
+  playerId: number;
+  assessmentDate: string;
+  answers: Record<string, unknown>;
+  createdByUserId?: number | null;
+  assessmentId?: number | null;
+}): Promise<{ ok: true; id: number } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.assessmentDate)) return { ok: false, error: 'Invalid assessment date.' };
+  const pool = getDbPool();
+  const cleanAnswers = cleanAssessmentAnswers(input.answers);
+
+  const player = await pool.query<{ id: number }>(
+    `SELECT id FROM players WHERE id = $1 AND organization_id = $2 LIMIT 1`,
+    [input.playerId, input.organizationId]
+  );
+  if (!player.rowCount) return { ok: false, error: 'Player not found.' };
+
+  let assessmentId: number;
+  if (input.assessmentId) {
+    const updated = await pool.query<{ id: number }>(
+      `UPDATE player_assessments
+       SET assessment_date = $1::date, answers_json = $2::jsonb, updated_at = NOW()
+       WHERE id = $3 AND player_id = $4 AND organization_id = $5
+       RETURNING id`,
+      [input.assessmentDate, JSON.stringify(cleanAnswers), input.assessmentId, input.playerId, input.organizationId]
+    );
+    if (!updated.rowCount) return { ok: false, error: 'Assessment not found.' };
+    assessmentId = updated.rows[0].id;
+  } else {
+    const created = await pool.query<{ id: number }>(
+      `INSERT INTO player_assessments (organization_id, player_id, assessment_date, answers_json, created_by_user_id)
+       VALUES ($1, $2, $3::date, $4::jsonb, $5)
+       RETURNING id`,
+      [input.organizationId, input.playerId, input.assessmentDate, JSON.stringify(cleanAnswers), input.createdByUserId ?? null]
+    );
+    assessmentId = created.rows[0].id;
+  }
+
+  await upsertPlayerAssessmentPlayerNote({
+    organizationId: input.organizationId,
+    assessmentId,
+    createdByUserId: input.createdByUserId ?? null,
+  });
+
+  return { ok: true, id: assessmentId };
+}
+
+export async function getPlayerAssessmentById(input: {
+  organizationId: number;
+  playerId: number;
+  assessmentId: number;
+}): Promise<PlayerAssessmentRow | null> {
+  if (!isDatabaseConfigured()) return null;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{
+    id: number;
+    player_id: number;
+    assessment_date: string;
+    answers_json: unknown;
+    created_by_user_id: number | null;
+    created_at: string;
+    updated_at: string;
+  }>(
+    `SELECT id, player_id, assessment_date::text AS assessment_date, answers_json, created_by_user_id, created_at::text AS created_at, updated_at::text AS updated_at
+     FROM player_assessments
+     WHERE id = $1 AND player_id = $2 AND organization_id = $3
+     LIMIT 1`,
+    [input.assessmentId, input.playerId, input.organizationId]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  const answers = row.answers_json && typeof row.answers_json === 'object' && !Array.isArray(row.answers_json) ? (row.answers_json as Record<string, string>) : {};
+  return {
+    id: row.id,
+    playerId: row.player_id,
+    assessmentDate: row.assessment_date,
+    answers,
+    createdByUserId: row.created_by_user_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export async function listPlayerAssessments(input: {
+  organizationId: number;
+  playerId: number;
+}): Promise<PlayerAssessmentRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{
+    id: number;
+    player_id: number;
+    assessment_date: string;
+    answers_json: unknown;
+    created_by_user_id: number | null;
+    created_at: string;
+    updated_at: string;
+  }>(
+    `SELECT id, player_id, assessment_date::text AS assessment_date, answers_json, created_by_user_id, created_at::text AS created_at, updated_at::text AS updated_at
+     FROM player_assessments
+     WHERE player_id = $1 AND organization_id = $2
+     ORDER BY assessment_date DESC, created_at DESC`,
+    [input.playerId, input.organizationId]
+  );
+  return result.rows.map((row) => {
+    const answers = row.answers_json && typeof row.answers_json === 'object' && !Array.isArray(row.answers_json) ? (row.answers_json as Record<string, string>) : {};
+    return {
+      id: row.id,
+      playerId: row.player_id,
+      assessmentDate: row.assessment_date,
+      answers,
+      createdByUserId: row.created_by_user_id,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  });
+}
+
+function formatPlayerAssessmentNote(answers: Record<string, string>): string {
+  const lines: string[] = [];
+  for (const field of PLAYER_ASSESSMENT_FIELDS) {
+    const answer = String(answers[field.id] ?? '').trim();
+    lines.push(field.label);
+    lines.push(answer || 'No answer');
+    lines.push('');
+  }
+  return lines.join('\n').trim();
+}
+
+export async function upsertPlayerAssessmentPlayerNote(input: {
+  organizationId: number;
+  assessmentId: number;
+  createdByUserId?: number | null;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const assessment = await pool.query<{
+    id: string;
+    player_id: number;
+    assessment_date: string;
+    answers_json: unknown;
+  }>(
+    `SELECT a.id::text AS id, a.player_id, a.assessment_date::text AS assessment_date, a.answers_json
+     FROM player_assessments a
+     JOIN players p ON p.id = a.player_id
+     WHERE a.id = $1 AND a.organization_id = $2 AND p.organization_id = $2
+     LIMIT 1`,
+    [input.assessmentId, input.organizationId]
+  );
+  if ((assessment.rowCount ?? 0) !== 1) return { ok: false, error: 'Assessment not found.' };
+
+  const row = assessment.rows[0];
+  const answers = row.answers_json && typeof row.answers_json === 'object' && !Array.isArray(row.answers_json) ? (row.answers_json as Record<string, string>) : {};
+  const noteText = formatPlayerAssessmentNote(answers);
+  const sourceType = 'player_assessment';
+  const sourceId = String(row.id);
+
+  await pool.query(
+    `
+      INSERT INTO player_plan_notes (
+        player_id,
+        domain,
+        note_date,
+        category,
+        note_text,
+        source_type,
+        source_id,
+        created_by_user_id
+      )
+      VALUES ($1, 'General', $2::date, 'Assessment', $3, $4, $5, $6)
+      ON CONFLICT (player_id, source_type, source_id)
+      DO UPDATE SET
+        note_date = EXCLUDED.note_date,
+        category = EXCLUDED.category,
+        note_text = EXCLUDED.note_text,
+        updated_at = NOW(),
+        created_by_user_id = COALESCE(EXCLUDED.created_by_user_id, player_plan_notes.created_by_user_id)
+    `,
+    [row.player_id, row.assessment_date, noteText, sourceType, sourceId, input.createdByUserId ?? null]
   );
 
   return { ok: true };

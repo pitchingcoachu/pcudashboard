@@ -1,0 +1,52 @@
+.shell { --gt-accent: rgb(var(--portal-accent-rgb, 220,193,161)); --gt-on-accent: var(--portal-accent-contrast,#090a0b); --gt-ink:#f7f6f2; --gt-muted:#989a9e; --gt-line:rgba(255,255,255,.11); box-sizing:border-box; width:100%; max-width:1240px; min-height:calc(100vh - 150px); margin:0 auto; padding:34px clamp(18px,4vw,52px) 60px; color:var(--gt-ink); }
+.shell *, .shell *::before, .shell *::after { box-sizing:border-box; }
+.shell :global(.game-tracker-back) { margin-bottom:22px; }
+.shell :global(.game-tracker-back a) { color:var(--gt-accent); font-size:.84rem; font-weight:800; text-decoration:none; }
+.shell :global(.game-tracker-rosters-hero) { display:flex; align-items:flex-end; justify-content:space-between; gap:24px; margin-bottom:18px; padding:34px clamp(24px,4vw,46px); overflow:hidden; border:1px solid var(--gt-line); border-radius:22px; background:radial-gradient(circle at 84% 12%,rgba(var(--portal-accent-rgb,220,193,161),.17),transparent 28%),linear-gradient(120deg,#17191b,#090a0b 68%); }
+.shell :global(.game-tracker-rosters-hero p) { margin:0 0 10px; color:var(--gt-accent); font-size:.61rem; font-weight:900; letter-spacing:.17em; }
+.shell :global(.game-tracker-rosters-hero h1) { margin:0 0 10px; font-size:clamp(2.6rem,5vw,5.2rem); letter-spacing:-.06em; line-height:.88; }
+.shell :global(.game-tracker-rosters-hero span) { color:var(--gt-muted); font-size:.88rem; }
+.shell :global(.game-tracker-rosters-hero > strong) { display:grid; color:var(--gt-accent); font-size:3.3rem; line-height:.8; text-align:right; }
+.shell :global(.game-tracker-rosters-hero > strong small) { margin-top:9px; color:var(--gt-muted); font-size:.57rem; letter-spacing:.12em; text-transform:uppercase; }
+.shell :global(.game-tracker-rosters-layout) { display:grid; grid-template-columns:300px minmax(0,1fr); gap:18px; }
+.shell :global(.game-tracker-rosters-sidebar), .shell :global(.game-tracker-rosters-main) { min-width:0; border:1px solid var(--gt-line); border-radius:18px; background:linear-gradient(145deg,#131517,#0b0c0d 72%); }
+.shell :global(.game-tracker-rosters-sidebar) { padding:14px; }
+.shell :global(.game-tracker-rosters-team-list) { display:grid; gap:6px; }
+.shell :global(.game-tracker-rosters-team-list button) { display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; padding:13px; border:1px solid transparent; border-radius:11px; background:#090a0b; color:var(--gt-ink); text-align:left; cursor:pointer; }
+.shell :global(.game-tracker-rosters-team-list button.is-active) { border-color:var(--gt-accent); background:rgba(var(--portal-accent-rgb,220,193,161),.09); }
+.shell :global(.game-tracker-rosters-team-list span) { display:grid; gap:3px; }
+.shell :global(.game-tracker-rosters-team-list small) { color:var(--gt-muted); font-size:.59rem; text-transform:uppercase; }
+.shell :global(.game-tracker-rosters-team-list b) { color:var(--gt-accent); font-variant-numeric:tabular-nums; }
+.shell :global(.game-tracker-rosters-create) { display:grid; gap:10px; margin-top:16px; padding:17px 8px 4px; border-top:1px solid var(--gt-line); }
+.shell :global(.game-tracker-rosters-create h2) { margin:0 0 4px; font-size:1rem; }
+.shell :global(.game-tracker-rosters-create label), .shell :global(.game-tracker-rosters-player-form label) { display:grid; gap:6px; color:var(--gt-muted); font-size:.58rem; font-weight:850; letter-spacing:.09em; text-transform:uppercase; }
+.shell input, .shell select, .shell textarea { width:100%; min-width:0; padding:10px 11px; border:1px solid var(--gt-line); border-radius:9px; background:#08090a; color:var(--gt-ink); font:650 .8rem/1.2 inherit; }
+.shell :global(.game-tracker-rosters-main) { padding:clamp(18px,3vw,30px); }
+.shell :global(.game-tracker-rosters-main > header) { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; margin-bottom:20px; padding-bottom:17px; border-bottom:1px solid var(--gt-line); }
+.shell :global(.game-tracker-rosters-main header small) { color:var(--gt-accent); font-size:.58rem; font-weight:900; letter-spacing:.12em; text-transform:uppercase; }
+.shell :global(.game-tracker-rosters-main header h2) { margin:3px 0 0; font-size:1.75rem; }
+.shell :global(.game-tracker-rosters-main header > span) { color:var(--gt-muted); font-size:.62rem; font-weight:850; letter-spacing:.1em; }
+.shell :global(.game-tracker-rosters-player-form) { display:grid; grid-template-columns:minmax(210px,1fr) 58px 72px 76px 82px auto; align-items:end; gap:8px; margin-bottom:18px; }
+.shell :global(.game-tracker-rosters-player-form button) { min-height:39px; }
+.shell :global(.game-tracker-rosters-table) { overflow:hidden; border:1px solid var(--gt-line); border-radius:12px; }
+.shell :global(.game-tracker-rosters-row) { display:grid; grid-template-columns:58px minmax(190px,1fr) 70px 70px 82px; align-items:center; gap:10px; min-height:52px; padding:8px 12px; border-bottom:1px solid rgba(255,255,255,.07); font-size:.78rem; }
+.shell :global(.game-tracker-rosters-row:last-child) { border-bottom:0; }
+.shell :global(.game-tracker-rosters-row.is-head) { min-height:34px; background:#0a0b0c; color:var(--gt-muted); font-size:.55rem; font-weight:850; letter-spacing:.09em; text-transform:uppercase; }
+.shell :global(.game-tracker-rosters-row > span:nth-child(2)) { display:grid; gap:2px; }
+.shell :global(.game-tracker-rosters-row small) { color:var(--gt-muted); font-size:.59rem; }
+.shell :global(.game-tracker-rosters-row button) { border:0; background:transparent; color:#ef796d; font-size:1.25rem; cursor:pointer; }
+.shell :global(.game-tracker-rosters-row-actions) { display:flex; align-items:center; justify-content:flex-end; gap:4px; }
+.shell :global(.game-tracker-rosters-row-actions button.is-link) { padding:5px 7px; border:1px solid rgba(var(--portal-accent-rgb,220,193,161),.35); border-radius:7px; color:var(--gt-accent); font-size:.6rem; font-weight:850; }
+.shell :global(.game-tracker-rosters-link) { display:grid; grid-template-columns:minmax(150px,1fr) minmax(210px,1fr) auto auto; align-items:center; gap:9px; margin-top:12px; padding:13px; border:1px solid rgba(var(--portal-accent-rgb,220,193,161),.3); border-radius:11px; background:rgba(var(--portal-accent-rgb,220,193,161),.06); }
+.shell :global(.game-tracker-rosters-link>span) { display:grid; gap:3px; }
+.shell :global(.game-tracker-rosters-link small) { color:var(--gt-accent); font-size:.52rem; font-weight:900; letter-spacing:.1em; }
+.shell :global(.game-tracker-rosters-import) { margin-top:16px; padding:15px; border:1px solid var(--gt-line); border-radius:11px; background:#090a0b; }
+.shell :global(.game-tracker-rosters-import summary) { color:var(--gt-accent); font-size:.78rem; font-weight:850; cursor:pointer; }
+.shell :global(.game-tracker-rosters-import p) { color:var(--gt-muted); font-size:.7rem; }
+.shell :global(.game-tracker-rosters-import textarea) { min-height:130px; margin:9px 0; resize:vertical; }
+.shell :global(.game-tracker-rosters-empty) { display:grid; min-height:130px; place-items:center; color:var(--gt-muted); font-size:.8rem; text-align:center; }
+.shell :global(.game-tracker-rosters-error), .shell :global(.game-tracker-rosters-notice) { margin:0 0 14px; padding:11px 13px; border-radius:9px; font-size:.78rem; }
+.shell :global(.game-tracker-rosters-error) { border:1px solid rgba(255,100,83,.3); background:rgba(175,42,28,.14); color:#ff9286; }
+.shell :global(.game-tracker-rosters-notice) { border:1px solid rgba(100,220,145,.25); background:rgba(45,145,84,.12); color:#89dea9; }
+@media(max-width:900px){.shell :global(.game-tracker-rosters-layout){grid-template-columns:1fr}.shell :global(.game-tracker-rosters-player-form){grid-template-columns:repeat(4,minmax(0,1fr))}.shell :global(.game-tracker-rosters-player-form .is-name){grid-column:span 3}.shell :global(.game-tracker-rosters-link){grid-template-columns:1fr 1fr}.shell :global(.game-tracker-rosters-link>span){grid-column:1/-1}}
+@media(max-width:600px){.shell{padding:22px 14px 42px}.shell :global(.game-tracker-rosters-hero){align-items:flex-start;flex-direction:column}.shell :global(.game-tracker-rosters-player-form){grid-template-columns:repeat(2,minmax(0,1fr))}.shell :global(.game-tracker-rosters-player-form .is-name){grid-column:1/-1}.shell :global(.game-tracker-rosters-row){grid-template-columns:44px minmax(130px,1fr) 52px 76px}.shell :global(.game-tracker-rosters-row>span:nth-child(4)){display:none}.shell :global(.game-tracker-rosters-link){grid-template-columns:1fr}.shell :global(.game-tracker-rosters-link>span){grid-column:auto}}

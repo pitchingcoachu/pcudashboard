@@ -14,7 +14,7 @@ export type GameStatSource = {
   events: StoredGameEvent[];
 };
 
-type CommonLine = { gamePlayerId: number; playerId: number | null; playerName: string; games: Set<number> };
+type CommonLine = { gamePlayerId: number; playerId: number | null; playerKey: string; playerName: string; games: Set<number> };
 type BattingAccumulator = CommonLine & {
   pa: number; ab: number; runs: number; hits: number; singles: number; doubles: number; triples: number; homeRuns: number;
   rbi: number; walks: number; intentionalWalks: number; hbp: number; strikeouts: number; sacFlies: number; sacBunts: number;
@@ -91,7 +91,7 @@ function eventMatches(source: GameStatSource, event: StoredGameEvent, filters: S
 }
 
 function common(player: GameTrackerPlayer): CommonLine {
-  return { gamePlayerId: player.id, playerId: player.playerId, playerName: player.displayName, games: new Set<number>() };
+  return { gamePlayerId: player.id, playerId: player.playerId, playerKey: gameTrackerPlayerIdentityKey(player), playerName: player.displayName, games: new Set<number>() };
 }
 
 function battingBase(player: GameTrackerPlayer): BattingAccumulator {
@@ -114,12 +114,12 @@ function fieldingBase(player: GameTrackerPlayer): FieldingAccumulator {
   return { ...common(player), putouts: 0, assists: 0, errors: 0, doublePlays: 0 };
 }
 
-function identityKey(player: GameTrackerPlayer): string {
-  return player.playerId ? `player:${player.playerId}` : `game-player:${player.id}`;
+export function gameTrackerPlayerIdentityKey(player: GameTrackerPlayer): string {
+  return player.playerId ? `player:${player.playerId}` : player.rosterPersonId ? `roster:${player.rosterPersonId}` : `game-player:${player.id}`;
 }
 
 function getLine<T extends CommonLine>(map: Map<string, T>, player: GameTrackerPlayer, create: () => T): T {
-  const key = identityKey(player);
+  const key = gameTrackerPlayerIdentityKey(player);
   const current = map.get(key);
   if (current) return current;
   const next = create();
@@ -188,6 +188,7 @@ function addRunsScoredByOtherRunners(
   input: PitchEventInput,
   players: Map<number, GameTrackerPlayer>,
   batting: Map<string, BattingAccumulator>,
+  selectedPlayerKey?: string | null,
   selectedPlayerId?: number | null
 ) {
   const batterId = event.situation.batterGamePlayerId;
@@ -203,7 +204,7 @@ function addRunsScoredByOtherRunners(
   }
   for (const runnerId of scoredRunnerIds) {
     const runner = players.get(runnerId);
-    if (!runner || (selectedPlayerId && runner.playerId !== selectedPlayerId)) continue;
+    if (!runner || (selectedPlayerKey && gameTrackerPlayerIdentityKey(runner) !== selectedPlayerKey) || (selectedPlayerId && runner.playerId !== selectedPlayerId)) continue;
     const line = getLine(batting, runner, () => battingBase(runner));
     line.games.add(source.game.id);
     line.runs += 1;
@@ -293,9 +294,10 @@ export function calculateGameTrackerStats(sources: GameStatSource[], filters: Sc
     const players = new Map(source.players.map((player) => [player.id, player]));
     for (const event of source.events) {
       if (event.isVoided || !eventMatches(source, event, filters)) continue;
+      if (event.input.type === 'half_inning') continue;
       if (event.input.type === 'runner') {
         const runner = players.get(event.input.runnerGamePlayerId);
-        if (!runner || (filters.playerId && runner.playerId !== filters.playerId)) continue;
+        if (!runner || (filters.playerKey && gameTrackerPlayerIdentityKey(runner) !== filters.playerKey) || (filters.playerId && runner.playerId !== filters.playerId)) continue;
         const line = getLine(batting, runner, () => battingBase(runner));
         line.games.add(source.game.id);
         if (event.input.reason === 'stolen_base' && !event.input.isOut) line.stolenBases += 1;
@@ -307,8 +309,8 @@ export function calculateGameTrackerStats(sources: GameStatSource[], filters: Sc
       const batter = event.situation.batterGamePlayerId ? players.get(event.situation.batterGamePlayerId) : null;
       const pitcher = event.situation.pitcherGamePlayerId ? players.get(event.situation.pitcherGamePlayerId) : null;
       if (!batter || !pitcher) continue;
-      const batterSelected = !filters.playerId || batter.playerId === filters.playerId;
-      const pitcherSelected = !filters.playerId || pitcher.playerId === filters.playerId;
+      const batterSelected = (!filters.playerKey || gameTrackerPlayerIdentityKey(batter) === filters.playerKey) && (!filters.playerId || batter.playerId === filters.playerId);
+      const pitcherSelected = (!filters.playerKey || gameTrackerPlayerIdentityKey(pitcher) === filters.playerKey) && (!filters.playerId || pitcher.playerId === filters.playerId);
       const batterLine = getLine(batting, batter, () => battingBase(batter));
       const pitcherLine = getLine(pitching, pitcher, () => pitchingBase(pitcher));
       if (batterSelected) batterLine.games.add(source.game.id);
@@ -336,7 +338,7 @@ export function calculateGameTrackerStats(sources: GameStatSource[], filters: Sc
       }
 
       if (event.input.plateAppearanceResult) {
-        addRunsScoredByOtherRunners(source, event, event.input, players, batting, filters.playerId);
+        addRunsScoredByOtherRunners(source, event, event.input, players, batting, filters.playerKey, filters.playerId);
         if (batterSelected && pitcherSelected) addTerminalStats(batterLine, pitcherLine, event.input);
         else if (batterSelected) addTerminalStats(batterLine, pitchingBase(pitcher), event.input);
         else if (pitcherSelected) addTerminalStats(battingBase(batter), pitcherLine, event.input);
@@ -344,7 +346,7 @@ export function calculateGameTrackerStats(sources: GameStatSource[], filters: Sc
 
       for (const credit of event.input.fielderCredits ?? []) {
         const fielder = players.get(credit.gamePlayerId);
-        if (!fielder || (filters.playerId && fielder.playerId !== filters.playerId)) continue;
+        if (!fielder || (filters.playerKey && gameTrackerPlayerIdentityKey(fielder) !== filters.playerKey) || (filters.playerId && fielder.playerId !== filters.playerId)) continue;
         const line = getLine(fielding, fielder, () => fieldingBase(fielder));
         line.games.add(source.game.id);
         if (credit.credit === 'putout') line.putouts += 1;

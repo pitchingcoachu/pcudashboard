@@ -92,6 +92,7 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
   ]);
 
   const isProSchool = String(selectedSchool ?? '').trim().toUpperCase() === 'PRO';
+  const canAccessSessionBooking = ['PCU', 'GUND'].includes(String(selectedSchool ?? '').trim().toUpperCase());
   const isLeagueSchool = ['LEAGUE', 'INDY'].includes(String(selectedSchool ?? '').trim().toUpperCase());
   const isTrialSchool = String(selectedSchool ?? '').trim().toUpperCase() === 'TRIAL';
   const isStaff = session.role === 'admin' || session.role === 'coach';
@@ -105,6 +106,7 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
     role: session.role,
     selectedSchool,
     canAccessProgramming,
+    canAccessSessionBooking,
     canAccessClientManagement,
     canAccessGameTracker,
     canAccessActivityTracker,
@@ -146,6 +148,7 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
                 <Link href="/portal/player/program" className="portal-nav-link">Program</Link>
               </>
             ) : null}
+            {canAccessSessionBooking ? <Link href="/portal/scheduling" className="portal-nav-link">Booking</Link> : null}
             <Link href="/portal/dashboard" className="portal-nav-link active">Dashboard</Link>
           </>
         )
@@ -159,6 +162,7 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
           : session.role === 'player'
           ? [...(canAccessProgramming ? [{ href: '/portal/player', label: 'Profile' }, { href: '/portal/player/program', label: 'Program' }] : [])]
           : []),
+        ...(!isStaff && canAccessSessionBooking ? [{ href: '/portal/scheduling', label: 'Booking' }] : []),
         { href: '/portal/dashboard', label: 'Dashboard' },
         ...(canAccessPlayerNotes ? [{ href: '/portal/admin/player-notes', label: 'Player Notes' }] : []),
         ...(isStaff ? moreItems : []),

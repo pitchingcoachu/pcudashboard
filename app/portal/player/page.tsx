@@ -66,6 +66,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
   const session = await requirePortalSession();
   const schoolOptions = await resolveSessionDashboardSchoolOptions(session);
   const selectedSchool = resolveDashboardSchoolCode(session);
+  const canAccessSessionBooking = ['PCU', 'GUND'].includes(String(selectedSchool).trim().toUpperCase());
   const canAccessProgramming = await canUseProgrammingData(session);
   if (session.role === 'player' && !canAccessProgramming) {
     redirect('/portal/dashboard');
@@ -116,6 +117,11 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
             {canAccessProgramming ? (
               <Link href="/portal/player/program" className="portal-nav-link">
                 Program
+              </Link>
+            ) : null}
+            {session.role === 'player' && canAccessSessionBooking ? (
+              <Link href="/portal/scheduling" className="portal-nav-link">
+                Booking
               </Link>
             ) : null}
             <Link href="/portal/dashboard" className="portal-nav-link">
@@ -269,6 +275,11 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
               {session.role === 'admin' || session.role === 'coach' ? 'Schedule' : 'Program'}
             </Link>
           ) : null}
+          {session.role === 'player' && canAccessSessionBooking ? (
+            <Link href="/portal/scheduling" className="portal-nav-link">
+              Booking
+            </Link>
+          ) : null}
           {session.role === 'player' ? (
             <Link href="/portal/dashboard" className="portal-nav-link">
               Dashboard
@@ -292,6 +303,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
                 : { href: fullProgramHref, label: 'Program' },
             ]
           : []),
+        ...(session.role === 'player' && canAccessSessionBooking ? [{ href: '/portal/scheduling', label: 'Booking' }] : []),
         ...(session.role === 'player'
           ? [{ href: '/portal/dashboard', label: 'Dashboard' }]
           : [{ href: '/profiles', label: 'Profiles' }]),

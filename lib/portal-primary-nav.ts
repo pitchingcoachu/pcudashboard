@@ -5,6 +5,7 @@ export type PortalPrimaryNavItem = {
 
 export type StaffPrimaryNavigation = {
   canAccessSchedule: boolean;
+  canAccessSessionBooking: boolean;
   canAccessPlayerNotes: boolean;
   moreItems: PortalPrimaryNavItem[];
 };
@@ -13,6 +14,7 @@ export function buildStaffMoreNavItems(input: {
   role: string;
   selectedSchool: string;
   canAccessProgramming: boolean;
+  canAccessSessionBooking: boolean;
   canAccessClientManagement: boolean;
   canAccessGameTracker: boolean;
   canAccessActivityTracker: boolean;
@@ -29,6 +31,7 @@ export function buildStaffMoreNavItems(input: {
     ...(isStaff ? [{ href: '/portal/admin/ai-sessions', label: 'Transcription' }] : []),
     ...(!isTrial && !isLeague && !isPro ? [{ href: '/portal/admin/pulse', label: 'PULSE' }] : []),
     ...(input.canAccessGameTracker ? [{ href: '/portal/admin/game-tracker', label: 'Game Tracker' }] : []),
+    ...(input.canAccessSessionBooking ? [{ href: '/portal/scheduling', label: 'Booking' }] : []),
     { href: '/profiles', label: 'Profiles' },
     ...(showClientManagement ? [{ href: '/portal/admin/clients', label: 'Players' }] : []),
     ...(showClientManagement ? [{ href: '/portal/admin/clients/groups', label: 'Player Groups' }] : []),

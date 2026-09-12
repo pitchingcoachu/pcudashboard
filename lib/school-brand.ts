@@ -144,6 +144,15 @@ const SCHOOL_BRANDS: Record<string, SchoolBrand> = {
     accentRgb: '0, 79, 61',
     accentRgbSecondary: '255, 255, 255',
   },
+  GUND: {
+    schoolCode: 'GUND',
+    logoSrc: '/gunderson-logo.png',
+    logoAlt: 'Gunderson Baseball logo',
+    accent: '#f15a24',
+    accentSoft: '#5f6065',
+    accentRgb: '241, 90, 36',
+    accentRgbSecondary: '95, 96, 101',
+  },
   LEAGUE: {
     schoolCode: 'LEAGUE',
     logoSrc: '/ncaa-logo.png',

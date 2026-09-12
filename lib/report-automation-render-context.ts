@@ -4,6 +4,13 @@ import type { ReportAutomationPanel, ReportAutomationRow } from './report-automa
 type ReportCell = Record<string, unknown> & { title?:unknown; panelType?:unknown; filterSelect?:unknown; dateStart?:unknown; dateEnd?:unknown; player?:unknown };
 type CustomReportPayload = Record<string, unknown> & { cells?:Record<string,ReportCell> };
 
+export function formatAutomationReportDate(reportDate:string):string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(reportDate.trim());
+  if (!match) return '';
+  const [,year,month,day] = match;
+  return `${Number(month)}/${Number(day)}/${year.slice(-2)}`;
+}
+
 function isoDate(year:number,monthIndex:number,day:number):string {
   return `${year}-${String(monthIndex+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
 }
@@ -81,6 +88,7 @@ export async function buildAutomationRenderContext(args:{
   const reportStart = allRanges.map((range) => range.startDate).sort()[0] ?? args.reportDate;
   const reportEnd = allRanges.map((range) => range.endDate).sort().at(-1) ?? args.reportDate;
   payload.title = args.automation.reportTitle;
+  if (!String(payload.subtitle ?? '').trim()) payload.subtitle = formatAutomationReportDate(args.reportDate);
   payload.scope = 'Single Player';
   payload.players = [args.playerName];
   payload.rowPlayers = [args.playerName];

@@ -5,6 +5,7 @@ import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../..
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, shouldScopeDashboardPlayer } from '../../../../../lib/dashboard-player-scope';
 import { appendRosterNames, schoolRosterAdditions } from '../../../../../lib/dashboard-roster-additions';
+import { applyManagedRosterTeamScope } from '../../../../../lib/dashboard-managed-roster';
 
 type FiltersPayload = {
   min_date?: string | null;
@@ -43,7 +44,7 @@ type HomeSearchBaseSnapshot = {
 
 const homeSearchBaseCache = new Map<string, { at: number; payload: HomeSearchBaseSnapshot }>();
 const homeSearchBaseInflight = new Map<string, Promise<HomeSearchBaseSnapshot>>();
-const HOME_SEARCH_ROSTER_CACHE_VERSION = 'pcu-roster-2026-09-08-atlantic-window';
+const HOME_SEARCH_ROSTER_CACHE_VERSION = 'managed-roster-team-labels-2026-09-11-v2';
 
 function resolveHomeSearchBaseTtlMs(schoolCode: string): number {
   const upper = String(schoolCode ?? '').trim().toUpperCase();
@@ -121,15 +122,16 @@ function normalizedNameKey(value: string): string {
   return raw.replace(/[^a-z0-9]/g, '');
 }
 
-function mergePlayerTeamMap(target: Map<string, string>, byTeamCode?: Record<string, string[]>) {
+function mergePlayerTeamMap(target: Map<string, string>, byTeamCode?: Record<string, string[]>, preferredTeamCode?: string) {
   if (!byTeamCode) return;
+  const preferred = normalizeTeamKey(preferredTeamCode ?? '');
   for (const [teamCodeRaw, names] of Object.entries(byTeamCode)) {
     const teamCode = normalizeText(teamCodeRaw).toUpperCase();
     if (!teamCode || !Array.isArray(names)) continue;
     for (const rawName of names) {
       const key = normalizedNameKey(rawName);
       if (!key) continue;
-      if (!target.has(key)) target.set(key, teamCode);
+      if (!target.has(key) || teamCode === preferred) target.set(key, teamCode);
     }
   }
 }
@@ -221,7 +223,7 @@ async function fetchJsonWithCache(url: URL, cacheKey: string, timeoutMs = 20000,
   });
 }
 
-async function fetchFilters(apiBase: string, schoolCode: string): Promise<{ pitching: FiltersPayload; hitting: FiltersPayload }> {
+async function fetchFilters(apiBase: string, schoolCode: string, fallbackOrganizationId: number): Promise<{ pitching: FiltersPayload; hitting: FiltersPayload }> {
   const pitchingUrl = new URL(`${apiBase}/v1/pitching/filters`);
   pitchingUrl.searchParams.set('school_code', schoolCode);
   const hittingUrl = new URL(`${apiBase}/v1/hitting/filters`);
@@ -240,6 +242,23 @@ async function fetchFilters(apiBase: string, schoolCode: string): Promise<{ pitc
   }
 
   const pitching = pitchingResult.payload as FiltersPayload;
+  const hitting = hittingResult.payload as FiltersPayload;
+  await Promise.all([
+    applyManagedRosterTeamScope({
+      payload: pitching as Record<string, unknown>,
+      schoolCode,
+      fallbackOrganizationId,
+      playerField: 'pitchers',
+      mapField: 'pitchers_by_team_code',
+    }),
+    applyManagedRosterTeamScope({
+      payload: hitting as Record<string, unknown>,
+      schoolCode,
+      fallbackOrganizationId,
+      playerField: 'hitters',
+      mapField: 'hitters_by_team_code',
+    }),
+  ]);
   const additions = schoolRosterAdditions(schoolCode);
   if (Array.isArray(pitching.pitchers) && additions.pitchers.length > 0) {
     pitching.pitchers = appendRosterNames(pitching.pitchers, additions.pitchers);
@@ -247,7 +266,7 @@ async function fetchFilters(apiBase: string, schoolCode: string): Promise<{ pitc
 
   return {
     pitching,
-    hitting: hittingResult.payload as FiltersPayload,
+    hitting,
   };
 }
 
@@ -418,18 +437,18 @@ export async function GET(request: Request) {
                 pitching: { pitchers: uniqueStrings([scopedPitcher]) } as FiltersPayload,
                 hitting: { hitters: uniqueStrings([scopedHitter]) } as FiltersPayload,
               }
-            : await fetchFilters(apiBase, schoolCode);
+            : await fetchFilters(apiBase, schoolCode, Number(session.organizationId ?? 0));
 
           const pitchingPlayers = shouldScopePlayer ? uniqueStrings([scopedPitcher]) : uniqueStrings(pitching.pitchers ?? []);
           const hittingPlayers = shouldScopePlayer ? uniqueStrings([scopedHitter]) : uniqueStrings(hitting.hitters ?? []);
           const playerTeamByName = new Map<string, string>();
-          mergePlayerTeamMap(playerTeamByName, pitching.pitchers_by_team_code);
-          mergePlayerTeamMap(playerTeamByName, hitting.hitters_by_team_code);
+          mergePlayerTeamMap(playerTeamByName, pitching.pitchers_by_team_code, schoolCode);
+          mergePlayerTeamMap(playerTeamByName, hitting.hitters_by_team_code, schoolCode);
 
           const playerMap = new Map<string, { value: string; inPitching: boolean; inHitting: boolean; team_code?: string }>();
           for (const name of pitchingPlayers) {
-            const key = name.toLowerCase();
             const normalizedKey = normalizedNameKey(name);
+            const key = normalizedKey || name.toLowerCase();
             const current = playerMap.get(key) ?? { value: name, inPitching: false, inHitting: false };
             current.value = current.value || name;
             current.inPitching = true;
@@ -437,8 +456,8 @@ export async function GET(request: Request) {
             playerMap.set(key, current);
           }
           for (const name of hittingPlayers) {
-            const key = name.toLowerCase();
             const normalizedKey = normalizedNameKey(name);
+            const key = normalizedKey || name.toLowerCase();
             const current = playerMap.get(key) ?? { value: name, inPitching: false, inHitting: false };
             current.value = current.value || name;
             current.inHitting = true;

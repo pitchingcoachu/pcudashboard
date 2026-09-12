@@ -6,11 +6,12 @@ import styles from './game-tracker-live.module.css';
 import {
   BATTED_BALL_TYPES, PA_RESULTS, PITCH_TYPES, RUNNER_REASONS, battingSideForHalf, fieldingSideForHalf,
   type BattedBallType, type GameEventInput, type GameTrackerGame, type GameTrackerPlayer,
-  type Handedness, type PlateAppearanceResult, type RunnerReason, type StoredGameEvent, type ThrowingHand,
+  type GameTrackerRosterMember, type GameTrackerTeam, type Handedness, type PlateAppearanceResult,
+  type RunnerReason, type StoredGameEvent, type TeamSide, type ThrowingHand,
 } from '../../lib/game-tracker/types';
 
 type RosterPlayer = { playerId: number; fullName: string; bats: Handedness | null; throws: ThrowingHand | null; position: string | null };
-type Bundle = { game: GameTrackerGame; players: GameTrackerPlayer[]; events: StoredGameEvent[]; roster: RosterPlayer[] };
+type Bundle = { game: GameTrackerGame; players: GameTrackerPlayer[]; events: StoredGameEvent[]; roster: RosterPlayer[]; teams: GameTrackerTeam[]; rosterMembers: GameTrackerRosterMember[] };
 type DraftPlayer = Omit<GameTrackerPlayer, 'id' | 'gameId'> & { id?: number; gameId?: number };
 
 const RESULT_LABELS: Record<string, string> = {
@@ -19,21 +20,113 @@ const RESULT_LABELS: Record<string, string> = {
   sacrifice_fly: 'Sac fly', sacrifice_bunt: 'Sac bunt', double_play: 'Double play', triple_play: 'Triple play', other: 'Other',
 };
 const IN_PLAY_RESULTS = PA_RESULTS.filter((value) => !['walk', 'intentional_walk', 'strikeout', 'hit_by_pitch', 'catcher_interference', 'dropped_third_strike'].includes(value));
+const POSITION_OPTIONS = ['P', 'C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH', 'EH', 'PH'] as const;
+const STARTING_POSITIONS = ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH'] as const;
 
-function blankOpponent(order: number): DraftPlayer {
-  return { teamSide: 'opponent', playerId: null, displayName: '', jerseyNumber: null, bats: 'R', throws: 'R', battingOrder: order, position: order === 1 ? 'P' : null, isStarter: true, isActive: true };
+function blankPlayer(teamSide: TeamSide, battingOrder: number | null, position: string | null, statTeamId: number | null = null): DraftPlayer {
+  return { teamSide, playerId: null, rosterPersonId: null, statTeamId, displayName: '', jerseyNumber: null, bats: 'R', throws: 'R', battingOrder, position, isStarter: true, isActive: true };
 }
 
-function LineupEditor({ bundle, onSaved }: { bundle: Bundle; onSaved: () => Promise<void> }) {
-  const initial = bundle.players.length ? bundle.players : [
-    ...bundle.roster.map((player, index) => ({ teamSide: 'us' as const, playerId: player.playerId, displayName: player.fullName, jerseyNumber: null, bats: player.bats ?? 'R' as Handedness, throws: player.throws ?? 'R' as ThrowingHand, battingOrder: index + 1, position: player.position, isStarter: true, isActive: true })),
-    blankOpponent(1),
+function defaultLineup(teamSide: TeamSide, statTeamId: number | null): DraftPlayer[] {
+  return [
+    ...STARTING_POSITIONS.map((position, index) => blankPlayer(teamSide, index + 1, position, statTeamId)),
+    blankPlayer(teamSide, null, 'P', statTeamId),
+  ];
+}
+
+function lineupFromTeam(bundle: Bundle, teamSide: TeamSide, teamId: number | null): DraftPlayer[] {
+  const team = bundle.teams.find((candidate) => candidate.id === teamId);
+  const statTeamId = team?.statSourceTeamId ?? teamId;
+  const slots = defaultLineup(teamSide, statTeamId);
+  const members = bundle.rosterMembers.filter((member) => member.teamId === teamId);
+  const used = new Set<number>();
+  function fill(slot: DraftPlayer, member?: GameTrackerRosterMember): DraftPlayer {
+    if (!member) return slot;
+    used.add(member.id);
+    return {
+      ...slot, playerId: member.playerId, rosterPersonId: member.rosterPersonId, displayName: member.displayName,
+      jerseyNumber: member.jerseyNumber, bats: member.bats, throws: member.throws,
+    };
+  }
+  const battingSlots = slots.slice(0, 9).map((slot) => {
+    const exact = members.find((member) => !used.has(member.id) && member.position === slot.position && member.position !== 'P');
+    const available = exact ?? members.find((member) => !used.has(member.id) && member.position !== 'P');
+    return fill(slot, available);
+  });
+  const pitcherSlot = fill(slots[9], members.find((member) => !used.has(member.id) && member.position === 'P'));
+  return [...battingSlots, pitcherSlot];
+}
+
+function LineupEditor({ bundle, onSaved, locked = false }: { bundle: Bundle; onSaved: () => Promise<void>; locked?: boolean }) {
+  const initial = bundle.players.length ? bundle.players.filter((player) => player.isActive) : [
+    ...lineupFromTeam(bundle, 'us', bundle.game.usTeamId), ...lineupFromTeam(bundle, 'opponent', bundle.game.opponentTeamId),
   ];
   const [players, setPlayers] = useState<DraftPlayer[]>(initial);
+  const [draggedPlayerIndex, setDraggedPlayerIndex] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
   function patchPlayer(index: number, patch: Partial<DraftPlayer>) { setPlayers((current) => current.map((player, i) => i === index ? { ...player, ...patch } : player)); }
+  function setPlayerName(index: number, name: string) {
+    const current = players[index];
+    const sideTeamId = current.teamSide === 'us' ? bundle.game.usTeamId : bundle.game.opponentTeamId;
+    const rosterMember = bundle.rosterMembers.find((member) => member.teamId === sideTeamId && member.displayName.localeCompare(name.trim(), undefined, { sensitivity: 'accent' }) === 0)
+      ?? bundle.rosterMembers.find((member) => member.displayName.localeCompare(name.trim(), undefined, { sensitivity: 'accent' }) === 0);
+    const rosterPlayer = bundle.roster.find((player) => player.fullName.localeCompare(name.trim(), undefined, { sensitivity: 'accent' }) === 0);
+    patchPlayer(index, rosterMember ? {
+      displayName: name, playerId: rosterMember.playerId, rosterPersonId: rosterMember.rosterPersonId,
+      statTeamId: bundle.teams.find((team) => team.id === rosterMember.teamId)?.statSourceTeamId ?? rosterMember.teamId,
+      bats: rosterMember.bats, throws: rosterMember.throws,
+    } : rosterPlayer ? {
+      displayName: name,
+      playerId: rosterPlayer.playerId,
+      rosterPersonId: null,
+      bats: rosterPlayer.bats ?? 'R',
+      throws: rosterPlayer.throws ?? 'R',
+    } : { displayName: name, playerId: null, rosterPersonId: null });
+  }
+  function reorderPlayers(side: TeamSide, sourceIndex: number, targetIndex: number) {
+    if (sourceIndex === targetIndex) return;
+    setPlayers((current) => {
+      const battingRows = current
+        .map((player, index) => ({ player, index }))
+        .filter(({ player }) => player.teamSide === side && player.battingOrder !== null)
+        .sort((a, b) => Number(a.player.battingOrder) - Number(b.player.battingOrder));
+      const sourcePosition = battingRows.findIndex(({ index }) => index === sourceIndex);
+      const targetPosition = battingRows.findIndex(({ index }) => index === targetIndex);
+      if (sourcePosition < 0 || targetPosition < 0) return current;
+      const reordered = [...battingRows];
+      const [moved] = reordered.splice(sourcePosition, 1);
+      reordered.splice(targetPosition, 0, moved);
+      const battingOrderByIndex = new Map(reordered.map(({ index }, order) => [index, order + 1]));
+      return current.map((player, index) => battingOrderByIndex.has(index)
+        ? { ...player, battingOrder: battingOrderByIndex.get(index) ?? player.battingOrder }
+        : player);
+    });
+  }
+  function movePlayerWithKeyboard(side: TeamSide, index: number, direction: -1 | 1) {
+    const battingRows = players
+      .map((player, playerIndex) => ({ player, index: playerIndex }))
+      .filter(({ player }) => player.teamSide === side && player.battingOrder !== null)
+      .sort((a, b) => Number(a.player.battingOrder) - Number(b.player.battingOrder));
+    const position = battingRows.findIndex((row) => row.index === index);
+    const target = battingRows[position + direction];
+    if (target) reorderPlayers(side, index, target.index);
+  }
+  function removePlayer(side: TeamSide, removedIndex: number) {
+    setPlayers((current) => {
+      const remaining = current.filter((_, index) => index !== removedIndex);
+      const orderedPlayerIndexes = remaining
+        .map((player, index) => ({ player, index }))
+        .filter(({ player }) => player.teamSide === side && player.battingOrder !== null)
+        .sort((a, b) => Number(a.player.battingOrder) - Number(b.player.battingOrder))
+        .map(({ index }) => index);
+      const battingOrderByIndex = new Map(orderedPlayerIndexes.map((index, order) => [index, order + 1]));
+      return remaining.map((player, index) => battingOrderByIndex.has(index)
+        ? { ...player, battingOrder: battingOrderByIndex.get(index) ?? player.battingOrder }
+        : player);
+    });
+  }
   async function save() {
     setSaving(true); setError('');
     const active = players.filter((player) => player.displayName.trim());
@@ -44,27 +137,153 @@ function LineupEditor({ bundle, onSaved }: { bundle: Bundle; onSaved: () => Prom
   }
 
   return <section className="game-tracker-card game-tracker-lineup">
-    <div className="game-tracker-card-heading"><span className="game-tracker-step">01</span><div><h2>Lineups & defense</h2><p>Batting and throwing hand are required and remain editable.</p></div></div>
+    <datalist id="game-tracker-roster-options">{Array.from(new Set([...bundle.roster.map((player) => player.fullName), ...bundle.rosterMembers.map((member) => member.displayName)])).sort().map((name) => <option key={name} value={name} />)}</datalist>
+    <div className="game-tracker-card-heading"><span className="game-tracker-step">01</span><div><h2>Lineups & defense</h2><p>{locked ? 'The game is underway. Use substitutions from the scoring screen to protect player history.' : 'Both teams can use your roster for intersquad games. Drag the grip beside a lineup number to reorder.'}</p></div></div>
     {(['us', 'opponent'] as const).map((side) => <div key={side} className="game-tracker-lineup-side">
-      <div className="game-tracker-section-title"><h3>{side === 'us' ? bundle.game.schoolCode : bundle.game.opponentName}</h3><button type="button" className="btn btn-ghost" onClick={() => setPlayers((current) => [...current, side === 'opponent' ? blankOpponent(current.filter((p) => p.teamSide === side).length + 1) : { ...blankOpponent(current.filter((p) => p.teamSide === side).length + 1), teamSide: 'us' }])}>+ Player</button></div>
+      <div className="game-tracker-section-title"><h3>{side === 'us' ? bundle.game.usTeamName : bundle.game.opponentName}</h3>{!locked ? <button type="button" className="btn btn-ghost" onClick={() => setPlayers((current) => {
+        const nextOrder = Math.max(0, ...current.filter((player) => player.teamSide === side).map((player) => player.battingOrder ?? 0)) + 1;
+        return [...current, blankPlayer(side, nextOrder, 'EH', side === 'us' ? bundle.game.usTeamId : bundle.game.opponentTeamId)];
+      })}>+ Add player</button> : null}</div>
       <div className="game-tracker-lineup-table">
-        <div className="game-tracker-lineup-head"><span>#</span><span>Player</span><span>Bats</span><span>Throws</span><span>Pos</span><span /></div>
-        {players.map((player, index) => player.teamSide === side ? <div className="game-tracker-lineup-row" key={`${side}-${player.id ?? index}`}>
-          <input aria-label="Batting order" type="number" min="1" max="99" value={player.battingOrder ?? ''} onChange={(e) => patchPlayer(index, { battingOrder: e.target.value ? Number(e.target.value) : null })} />
-          <input aria-label="Player name" value={player.displayName} placeholder="Player name" onChange={(e) => patchPlayer(index, { displayName: e.target.value })} />
-          <select aria-label="Bats" value={player.bats} onChange={(e) => patchPlayer(index, { bats: e.target.value as Handedness })}><option value="R">R</option><option value="L">L</option><option value="S">S</option></select>
-          <select aria-label="Throws" value={player.throws} onChange={(e) => patchPlayer(index, { throws: e.target.value as ThrowingHand })}><option value="R">R</option><option value="L">L</option></select>
-          <select aria-label="Position" value={player.position ?? ''} onChange={(e) => patchPlayer(index, { position: e.target.value || null })}><option value="">—</option>{['P','C','1B','2B','3B','SS','LF','CF','RF','DH','EH'].map((pos) => <option key={pos}>{pos}</option>)}</select>
-          <button type="button" aria-label={`Remove ${player.displayName || 'player'}`} onClick={() => setPlayers((current) => current.filter((_, i) => i !== index))}>×</button>
-        </div> : null)}
+        <div className="game-tracker-lineup-head"><span>#</span><span>Player</span><span>Bats</span><span>Throws</span><span>Pos</span><span>Stats team</span><span /></div>
+        {players.map((player, index) => ({ player, index })).filter(({ player }) => player.teamSide === side).sort((a, b) => {
+          if (a.player.position === 'P' && a.player.battingOrder === null) return 1;
+          if (b.player.position === 'P' && b.player.battingOrder === null) return -1;
+          return Number(a.player.battingOrder ?? 999) - Number(b.player.battingOrder ?? 999);
+        }).map(({ player, index }) => <div
+          className={`game-tracker-lineup-row ${player.position === 'P' && player.battingOrder === null ? 'is-pitcher-row' : ''} ${draggedPlayerIndex === index ? 'is-dragging' : ''}`}
+          key={`${side}-${player.id ?? index}`}
+          onDragOver={(event) => { if (!locked && player.battingOrder !== null) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; } }}
+          onDrop={(event) => { event.preventDefault(); if (draggedPlayerIndex !== null) reorderPlayers(side, draggedPlayerIndex, index); setDraggedPlayerIndex(null); }}
+        >
+          <div className="game-tracker-order-cell"><strong>{player.battingOrder ?? 'P'}</strong>{!locked && player.battingOrder !== null ? <button
+            type="button"
+            className="game-tracker-drag-handle"
+            draggable
+            aria-label={`Drag ${player.displayName || `lineup spot ${player.battingOrder}`} to reorder`}
+            title="Drag to reorder"
+            onDragStart={(event) => { setDraggedPlayerIndex(index); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', String(index)); }}
+            onDragEnd={() => setDraggedPlayerIndex(null)}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+                event.preventDefault();
+                movePlayerWithKeyboard(side, index, event.key === 'ArrowUp' ? -1 : 1);
+              }
+            }}
+          >⠿</button> : null}</div>
+          <input aria-label="Player name" disabled={locked} list="game-tracker-roster-options" value={player.displayName} placeholder="Select roster player or type a name" onChange={(e) => setPlayerName(index, e.target.value)} />
+          <select aria-label="Bats" disabled={locked} value={player.bats} onChange={(e) => patchPlayer(index, { bats: e.target.value as Handedness })}><option value="R">R</option><option value="L">L</option><option value="S">S</option></select>
+          <select aria-label="Throws" disabled={locked} value={player.throws} onChange={(e) => patchPlayer(index, { throws: e.target.value as ThrowingHand })}><option value="R">R</option><option value="L">L</option></select>
+          <select aria-label="Position" disabled={locked} value={player.position ?? ''} onChange={(e) => patchPlayer(index, { position: e.target.value || null })}><option value="">—</option>{POSITION_OPTIONS.map((pos) => <option key={pos}>{pos}</option>)}</select>
+          <select aria-label="Stats team" disabled={locked} value={player.statTeamId ?? ''} onChange={(e) => patchPlayer(index, { statTeamId: e.target.value ? Number(e.target.value) : null })}><option value="">Game only</option>{bundle.teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select>
+          {!locked ? <button type="button" className="game-tracker-remove-player" aria-label={`Remove ${player.displayName || 'player'}`} onClick={() => removePlayer(side, index)}>×</button> : <span />}
+        </div>)}
       </div>
     </div>)}
     {error ? <p className="game-tracker-error">{error}</p> : null}
-    <button type="button" className="btn btn-primary" disabled={saving} onClick={save}>{saving ? 'Saving…' : 'Save lineups'}</button>
+    {!locked ? <button type="button" className="btn btn-primary" disabled={saving} onClick={save}>{saving ? 'Saving…' : 'Save lineups'}</button> : null}
   </section>;
 }
 
 function playerName(players: GameTrackerPlayer[], id: number | null) { return players.find((player) => player.id === id)?.displayName ?? 'Not set'; }
+
+function SubstitutionPanel({ bundle, onClose, onSaved }: { bundle: Bundle; onClose: () => void; onSaved: () => Promise<void> }) {
+  const [mode, setMode] = useState<'substitute' | 'change_position'>('substitute');
+  const liveBattingSide = battingSideForHalf(bundle.game.homeAway, bundle.game.state.half);
+  const liveLineup = bundle.players
+    .filter((player) => player.teamSide === liveBattingSide && player.isActive && player.battingOrder !== null)
+    .sort((a, b) => Number(a.battingOrder) - Number(b.battingOrder) || a.id - b.id);
+  const liveBatter = liveLineup.length
+    ? liveLineup[bundle.game.state.battingIndex[liveBattingSide] % liveLineup.length]
+    : null;
+  const [side, setSide] = useState<TeamSide>(liveBattingSide);
+  const activePlayers = bundle.players.filter((player) => player.teamSide === side && player.isActive);
+  const [selectedPlayerId, setSelectedPlayerId] = useState(() => liveBatter?.id ?? activePlayers[0]?.id ?? 0);
+  const selectedPlayer = bundle.players.find((player) => player.id === selectedPlayerId);
+  const [name, setName] = useState('');
+  const [rosterPlayerId, setRosterPlayerId] = useState<number | null>(null);
+  const [rosterPersonId, setRosterPersonId] = useState<number | null>(null);
+  const [statTeamId, setStatTeamId] = useState<number | null>(liveBattingSide === 'us' ? bundle.game.usTeamId : bundle.game.opponentTeamId);
+  const [bats, setBats] = useState<Handedness>('R');
+  const [throws, setThrows] = useState<ThrowingHand>('R');
+  const [position, setPosition] = useState('PH');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  function changeSide(nextSide: TeamSide) {
+    const first = nextSide === liveBattingSide && liveBatter
+      ? liveBatter
+      : bundle.players.find((player) => player.teamSide === nextSide && player.isActive);
+    setSide(nextSide);
+    setSelectedPlayerId(first?.id ?? 0);
+    setPosition(mode === 'change_position' ? first?.position ?? '' : 'PH');
+    setStatTeamId(nextSide === 'us' ? bundle.game.usTeamId : bundle.game.opponentTeamId);
+  }
+
+  function changeSelectedPlayer(id: number) {
+    const player = bundle.players.find((candidate) => candidate.id === id);
+    setSelectedPlayerId(id);
+    setPosition(mode === 'change_position' ? player?.position ?? '' : 'PH');
+  }
+
+  function changeName(value: string) {
+    setName(value);
+    const sideTeamId = side === 'us' ? bundle.game.usTeamId : bundle.game.opponentTeamId;
+    const member = bundle.rosterMembers.find((player) => player.teamId === sideTeamId && player.displayName.localeCompare(value.trim(), undefined, { sensitivity: 'accent' }) === 0)
+      ?? bundle.rosterMembers.find((player) => player.displayName.localeCompare(value.trim(), undefined, { sensitivity: 'accent' }) === 0);
+    const rosterPlayer = bundle.roster.find((player) => player.fullName.localeCompare(value.trim(), undefined, { sensitivity: 'accent' }) === 0);
+    setRosterPlayerId(member?.playerId ?? rosterPlayer?.playerId ?? null);
+    setRosterPersonId(member?.rosterPersonId ?? null);
+    if (member) {
+      setBats(member.bats); setThrows(member.throws);
+      setStatTeamId(bundle.teams.find((team) => team.id === member.teamId)?.statSourceTeamId ?? member.teamId);
+    } else if (rosterPlayer) {
+      setBats(rosterPlayer.bats ?? 'R'); setThrows(rosterPlayer.throws ?? 'R');
+    }
+  }
+
+  async function submit() {
+    if (!selectedPlayerId) return setError('Choose an active player.');
+    if (mode === 'substitute' && !name.trim()) return setError('Enter the replacement player name.');
+    setSaving(true); setError('');
+    const body = mode === 'substitute'
+      ? { action: mode, outgoingPlayerId: selectedPlayerId, incoming: { playerId: rosterPlayerId, rosterPersonId, statTeamId, displayName: name, bats, throws, position } }
+      : { action: mode, playerId: selectedPlayerId, position };
+    const response = await fetch(`/api/game-tracker/games/${bundle.game.id}/lineup`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const result = await response.json();
+    setSaving(false);
+    if (!response.ok) return setError(result.error ?? 'Could not update the lineup.');
+    await onSaved();
+    onClose();
+  }
+
+  return <section className="game-tracker-card game-tracker-substitution">
+    <div className="game-tracker-substitution-heading"><div><small>LIVE ROSTER MOVE</small><h2>Substitutions & positions</h2></div><button type="button" aria-label="Close substitutions" onClick={onClose}>×</button></div>
+    <div className="game-tracker-segmented" role="group" aria-label="Lineup change type">
+      <button type="button" className={mode === 'substitute' ? 'is-active' : ''} onClick={() => { setMode('substitute'); setPosition('PH'); }}>Pinch hit / replace</button>
+      <button type="button" className={mode === 'change_position' ? 'is-active' : ''} onClick={() => { setMode('change_position'); setPosition(selectedPlayer?.position ?? ''); }}>Change position</button>
+    </div>
+    <div className="game-tracker-substitution-grid">
+      <label>Game team<select value={side} onChange={(event) => changeSide(event.target.value as TeamSide)}><option value="us">{bundle.game.usTeamName}</option><option value="opponent">{bundle.game.opponentName}</option></select></label>
+      <label>{mode === 'substitute' ? 'Player leaving' : 'Player'}<select value={selectedPlayerId || ''} onChange={(event) => changeSelectedPlayer(Number(event.target.value))}><option value="">Choose player</option>{activePlayers.map((player) => <option key={player.id} value={player.id}>{player.battingOrder ? `${player.battingOrder}. ` : ''}{player.displayName} · {player.position ?? '—'}</option>)}</select></label>
+      {mode === 'substitute' ? <>
+        <label className="is-wide">Replacement player<input list="game-tracker-substitution-roster" value={name} placeholder="Select roster player or type a name" onChange={(event) => changeName(event.target.value)} /></label>
+        <datalist id="game-tracker-substitution-roster">{Array.from(new Set([...bundle.roster.map((player) => player.fullName), ...bundle.rosterMembers.map((member) => member.displayName)])).sort().map((playerName) => <option key={playerName} value={playerName} />)}</datalist>
+        <label>Bats<select value={bats} onChange={(event) => setBats(event.target.value as Handedness)}><option value="R">Right</option><option value="L">Left</option><option value="S">Switch</option></select></label>
+        <label>Throws<select value={throws} onChange={(event) => setThrows(event.target.value as ThrowingHand)}><option value="R">Right</option><option value="L">Left</option></select></label>
+        <label>Stats team<select value={statTeamId ?? ''} onChange={(event) => setStatTeamId(event.target.value ? Number(event.target.value) : null)}><option value="">Game only</option>{bundle.teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label>
+      </> : null}
+      <label>New position<select value={position} onChange={(event) => setPosition(event.target.value)}>{POSITION_OPTIONS.map((value) => <option key={value}>{value}</option>)}</select></label>
+    </div>
+    {mode === 'substitute' ? <p className="game-tracker-substitution-note">{selectedPlayer?.id === liveBatter?.id
+      ? `The replacement takes over the current at-bat immediately at ${bundle.game.state.balls}–${bundle.game.state.strikes}. The outgoing player’s earlier plays stay intact.`
+      : `The replacement takes over batting spot ${selectedPlayer?.battingOrder ?? '—'} the next time that spot comes up. The outgoing player’s earlier plays and stats stay intact.`}</p> : null}
+    {error ? <p className="game-tracker-error">{error}</p> : null}
+    <div className="game-tracker-inline-actions"><button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button><button type="button" className="btn btn-primary" disabled={saving} onClick={submit}>{saving ? 'Saving…' : mode === 'substitute' ? 'Confirm substitution' : 'Update position'}</button></div>
+  </section>;
+}
 
 function BaseballFieldGraphic() {
   return (
@@ -131,6 +350,7 @@ export default function GameTrackerLive({ gameId }: { gameId: number }) {
   const [runnerReason, setRunnerReason] = useState<RunnerReason>('manual');
   const [busy, setBusy] = useState(false);
   const [lineupOpen, setLineupOpen] = useState(false);
+  const [substitutionOpen, setSubstitutionOpen] = useState(false);
   const [error, setError] = useState('');
 
   const load = useCallback(async () => {
@@ -144,10 +364,10 @@ export default function GameTrackerLive({ gameId }: { gameId: number }) {
     if (!bundle) return null;
     const battingSide = battingSideForHalf(bundle.game.homeAway, bundle.game.state.half);
     const fieldingSide = fieldingSideForHalf(bundle.game.homeAway, bundle.game.state.half);
-    const lineup = bundle.players.filter((p) => p.teamSide === battingSide && p.isActive && p.battingOrder !== null).sort((a, b) => Number(a.battingOrder) - Number(b.battingOrder));
+    const lineup = bundle.players.filter((p) => p.teamSide === battingSide && p.isActive && p.battingOrder !== null).sort((a, b) => Number(a.battingOrder) - Number(b.battingOrder) || a.id - b.id);
     const batter = lineup.length ? lineup[bundle.game.state.battingIndex[battingSide] % lineup.length] : null;
     const pitcherId = bundle.game.state.pitcherIds[fieldingSide];
-    const pitcher = bundle.players.find((p) => p.id === pitcherId) ?? bundle.players.find((p) => p.teamSide === fieldingSide && p.position === 'P');
+    const pitcher = bundle.players.find((p) => p.id === pitcherId && p.isActive) ?? bundle.players.find((p) => p.teamSide === fieldingSide && p.isActive && p.position === 'P');
     return { battingSide, fieldingSide, batter, pitcher };
   }, [bundle]);
 
@@ -164,6 +384,15 @@ export default function GameTrackerLive({ gameId }: { gameId: number }) {
   async function undo() {
     setBusy(true); const response = await fetch(`/api/game-tracker/games/${gameId}/events`, { method: 'DELETE' }); const body = await response.json(); setBusy(false);
     if (!response.ok) return setError(body.error ?? 'Could not undo.'); await load();
+  }
+  async function endHalfInning() {
+    if (!bundle) return;
+    const half = bundle.game.state.half === 'top' ? 'top' : 'bottom';
+    const inning = bundle.game.state.inning;
+    const outs = bundle.game.state.outs;
+    const message = `End the ${half} of inning ${inning} now with ${outs} out${outs === 1 ? '' : 's'}? The count and runners will be cleared, and the unfinished batter will not be charged with a plate appearance.`;
+    if (!window.confirm(message)) return;
+    await sendEvent({ type: 'half_inning', note: 'Half-inning ended manually.' });
   }
   async function setStatus(status: 'live' | 'final') {
     const response = await fetch(`/api/game-tracker/games/${gameId}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status }) });
@@ -206,19 +435,20 @@ export default function GameTrackerLive({ gameId }: { gameId: number }) {
     return sideHasBatted ? (lineScore[side].innings[inning] ?? 0) : '';
   };
   const hasLineups = bundle.players.some((p) => p.teamSide === 'us') && bundle.players.some((p) => p.teamSide === 'opponent');
-  if (!hasLineups || lineupOpen) return <main className={`${styles.shell} game-tracker-shell`}><div className="game-tracker-back"><Link href="/portal/admin/game-tracker">← All sessions</Link>{hasLineups ? <button className="btn btn-ghost" onClick={() => setLineupOpen(false)}>Return to scoring</button> : null}</div><LineupEditor bundle={bundle} onSaved={async () => { await load(); setLineupOpen(false); }} /></main>;
+  if (!hasLineups || lineupOpen) return <main className={`${styles.shell} game-tracker-shell`}><div className="game-tracker-back"><Link href="/portal/admin/game-tracker">← All sessions</Link>{hasLineups ? <button className="btn btn-ghost" onClick={() => setLineupOpen(false)}>Return to scoring</button> : null}</div><LineupEditor bundle={bundle} locked={bundle.events.length > 0} onSaved={async () => { await load(); setLineupOpen(false); }} /></main>;
 
   return <main className={`${styles.shell} game-tracker-shell game-tracker-live`}>
-    <div className="game-tracker-back"><Link href="/portal/admin/game-tracker">← All sessions</Link><div><button className="btn btn-ghost" onClick={() => setLineupOpen(true)}>Edit lineups</button> <Link className="btn btn-ghost as-link" href="/portal/admin/game-tracker/stats">Stats</Link></div></div>
+    <div className="game-tracker-back"><Link href="/portal/admin/game-tracker">← All sessions</Link><div><button className="btn btn-ghost" onClick={() => setLineupOpen(true)}>{bundle.events.length ? 'View lineups' : 'Edit lineups'}</button><button className="btn btn-ghost" onClick={() => setSubstitutionOpen((open) => !open)}>Substitutions</button><Link className="btn btn-ghost as-link" href="/portal/admin/game-tracker/stats">Stats</Link></div></div>
+    {substitutionOpen ? <SubstitutionPanel bundle={bundle} onClose={() => setSubstitutionOpen(false)} onSaved={load} /> : null}
     <section className="game-tracker-scoreboard-panel">
       <div className="game-tracker-scoreboard">
-        <div><span>{bundle.game.schoolCode}</span><strong>{state.score.us}</strong></div><div className="game-tracker-inning"><span>{state.half === 'top' ? '▲' : '▼'} {state.inning}</span><small>{state.outs} OUT{state.outs === 1 ? '' : 'S'}</small></div><div><span>{bundle.game.opponentName}</span><strong>{state.score.opponent}</strong></div>
+        <div><span>{bundle.game.usTeamName}</span><strong>{state.score.us}</strong></div><div className="game-tracker-inning"><span>{state.half === 'top' ? '▲' : '▼'} {state.inning}</span><small>{state.outs} OUT{state.outs === 1 ? '' : 'S'}</small></div><div><span>{bundle.game.opponentName}</span><strong>{state.score.opponent}</strong></div>
       </div>
       <div className="game-tracker-linescore-wrap">
         <table className="game-tracker-linescore" aria-label="Inning-by-inning line score">
           <thead><tr><th>Team</th>{lineScoreInnings.map((inning) => <th key={inning} className={inning === state.inning ? 'is-current' : ''}>{inning}</th>)}<th>R</th><th>H</th><th>E</th></tr></thead>
           <tbody>
-            <tr><th>{bundle.game.schoolCode}</th>{lineScoreInnings.map((inning) => <td key={inning} className={inning === state.inning ? 'is-current' : ''}>{inningDisplay('us', inning)}</td>)}<td>{state.score.us}</td><td>{lineScore.us.hits}</td><td>{lineScore.us.errors}</td></tr>
+            <tr><th>{bundle.game.usTeamName}</th>{lineScoreInnings.map((inning) => <td key={inning} className={inning === state.inning ? 'is-current' : ''}>{inningDisplay('us', inning)}</td>)}<td>{state.score.us}</td><td>{lineScore.us.hits}</td><td>{lineScore.us.errors}</td></tr>
             <tr><th>{bundle.game.opponentName}</th>{lineScoreInnings.map((inning) => <td key={inning} className={inning === state.inning ? 'is-current' : ''}>{inningDisplay('opponent', inning)}</td>)}<td>{state.score.opponent}</td><td>{lineScore.opponent.hits}</td><td>{lineScore.opponent.errors}</td></tr>
           </tbody>
         </table>
@@ -251,7 +481,8 @@ export default function GameTrackerLive({ gameId }: { gameId: number }) {
         <h2>Runners</h2>
         {([3,2,1] as const).map((base) => { const id = base === 1 ? state.runners.first : base === 2 ? state.runners.second : state.runners.third; return <div key={base} className="game-tracker-runner-row"><span><small>{base === 1 ? '1ST' : base === 2 ? '2ND' : '3RD'}</small><strong>{id ? playerName(bundle.players, id) : 'Empty'}</strong></span>{id ? <div><button disabled={busy} onClick={() => sendEvent({ type: 'runner', runnerGamePlayerId: id, fromBase: base, toBase: base === 3 ? 4 : base + 1 as 2 | 3, reason: runnerReason })}>{base === 3 ? 'Score' : 'Advance'}</button><button disabled={busy} onClick={() => sendEvent({ type: 'runner', runnerGamePlayerId: id, fromBase: base, toBase: base, reason: runnerReason, isOut: true })}>Out</button></div> : null}</div>; })}
         <label>Runner reason<select value={runnerReason} onChange={(event) => setRunnerReason(event.target.value as RunnerReason)}>{RUNNER_REASONS.map((reason) => <option key={reason} value={reason}>{reason.replaceAll('_', ' ')}</option>)}</select></label>
-        <div className="game-tracker-event-log"><h3>Last plays</h3>{bundle.events.filter((event) => !event.isVoided).slice(-6).reverse().map((event) => <p key={event.id}><strong>{event.sequence}.</strong> {event.input.type === 'pitch' ? `${event.input.pitchType} · ${(event.input.plateAppearanceResult ?? event.input.result).replaceAll('_', ' ')}` : event.input.reason.replaceAll('_', ' ')}</p>)}</div>
+        <div className="game-tracker-event-log"><h3>Last plays</h3>{bundle.events.filter((event) => !event.isVoided).slice(-6).reverse().map((event) => <p key={event.id}><strong>{event.sequence}.</strong> {event.input.type === 'pitch' ? `${event.input.pitchType} · ${(event.input.plateAppearanceResult ?? event.input.result).replaceAll('_', ' ')}` : event.input.type === 'runner' ? event.input.reason.replaceAll('_', ' ') : 'Half-inning ended'}</p>)}</div>
+        <button className="btn btn-ghost game-tracker-end-inning" disabled={busy || bundle.game.status === 'final'} onClick={endHalfInning}>End {state.half === 'top' ? 'Top' : 'Bottom'} Half</button>
         <button className="btn btn-ghost" disabled={busy || bundle.events.length === 0} onClick={undo}>Undo last play</button>
         {bundle.game.status === 'final' ? <button className="btn btn-primary" onClick={() => setStatus('live')}>Reopen game</button> : <button className="btn btn-primary" onClick={() => setStatus('final')}>Finalize game</button>}
         <button className="btn btn-ghost" onClick={deleteGame}>Delete game</button>

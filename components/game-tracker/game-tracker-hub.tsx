@@ -2,13 +2,14 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import type { GameTrackerGame, GameType } from '../../lib/game-tracker/types';
+import type { GameTrackerGame, GameTrackerTeam, GameType } from '../../lib/game-tracker/types';
 import styles from './game-tracker-hub.module.css';
 
 const GAME_TYPE_LABELS: Record<GameType, string> = { game: 'Game', scrimmage: 'Scrimmage', live_bp: 'Live BP' };
 
 export default function GameTrackerHub({ logoSrc }: { logoSrc: string }) {
   const [games, setGames] = useState<GameTrackerGame[]>([]);
+  const [teams, setTeams] = useState<GameTrackerTeam[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -16,10 +17,15 @@ export default function GameTrackerHub({ logoSrc }: { logoSrc: string }) {
 
   async function loadGames() {
     setLoading(true);
-    const response = await fetch('/api/game-tracker/games', { cache: 'no-store' });
-    const body = await response.json();
-    if (!response.ok) setError(body.error ?? 'Could not load games.');
-    else setGames(body.games ?? []);
+    const [gamesResponse, teamsResponse] = await Promise.all([
+      fetch('/api/game-tracker/games', { cache: 'no-store' }),
+      fetch('/api/game-tracker/teams', { cache: 'no-store' }),
+    ]);
+    const [gamesBody, teamsBody] = await Promise.all([gamesResponse.json(), teamsResponse.json()]);
+    if (!gamesResponse.ok) setError(gamesBody.error ?? 'Could not load games.');
+    else setGames(gamesBody.games ?? []);
+    if (!teamsResponse.ok) setError(teamsBody.error ?? 'Could not load teams.');
+    else setTeams(teamsBody.teams ?? []);
     setLoading(false);
   }
 
@@ -28,12 +34,16 @@ export default function GameTrackerHub({ logoSrc }: { logoSrc: string }) {
   async function createGame(formData: FormData) {
     setSaving(true);
     setError('');
+    const homeTeamId = Number(formData.get('homeTeamId'));
+    const awayTeamId = Number(formData.get('awayTeamId'));
+    const awayTeam = teams.find((team) => team.id === awayTeamId);
     const response = await fetch('/api/game-tracker/games', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         gameType: formData.get('gameType'), gameDate: formData.get('gameDate'), season: formData.get('season'),
-        opponentName: formData.get('opponentName'), location: formData.get('location') || null,
-        homeAway: formData.get('homeAway'), inningsScheduled: Number(formData.get('inningsScheduled') || 9),
+        opponentName: awayTeam?.name ?? 'Away team', location: formData.get('location') || null,
+        homeAway: 'home', usTeamId: homeTeamId, opponentTeamId: awayTeamId,
+        inningsScheduled: Number(formData.get('inningsScheduled') || 9),
       }),
     });
     const body = await response.json();
@@ -65,7 +75,8 @@ export default function GameTrackerHub({ logoSrc }: { logoSrc: string }) {
         </div>
       </section>
       <div className="game-tracker-hero-actions">
-        <Link href="/portal/admin/game-tracker/stats" className="btn btn-primary as-link">Season Stats</Link>
+        <Link href="/portal/admin/game-tracker/teams" className="btn btn-ghost as-link">Teams & Rosters</Link>
+        <Link href="/portal/admin/game-tracker/stats" className="btn btn-primary as-link">Stats</Link>
       </div>
 
       <section className="game-tracker-grid game-tracker-grid--top">
@@ -75,9 +86,9 @@ export default function GameTrackerHub({ logoSrc }: { logoSrc: string }) {
             <label>Type<select name="gameType" defaultValue="game"><option value="game">Game</option><option value="scrimmage">Scrimmage</option><option value="live_bp">Live BP</option></select></label>
             <label>Date<input name="gameDate" type="date" defaultValue={today} required /></label>
             <label>Season<input name="season" defaultValue={today.slice(0, 4)} required /></label>
-            <label>Opponent / session<input name="opponentName" placeholder="Lake Erie or Green vs. White" required /></label>
+            <label>Home team<select key={teams[0]?.id ?? 'empty'} name="homeTeamId" required defaultValue={teams[0]?.id ?? ''}><option value="" disabled>Select team</option>{teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label>
+            <label>Away team<select name="awayTeamId" required defaultValue=""><option value="" disabled>Select team</option>{teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label>
             <label>Location<input name="location" placeholder="Optional" /></label>
-            <label>Our side<select name="homeAway" defaultValue="home"><option value="home">Home</option><option value="away">Away</option></select></label>
             <label>Scheduled innings<input name="inningsScheduled" type="number" min="1" max="30" defaultValue="9" /></label>
             <button className="btn btn-primary game-tracker-submit" disabled={saving}>{saving ? 'Creating…' : 'Create & build lineup'}</button>
           </form>
@@ -91,7 +102,7 @@ export default function GameTrackerHub({ logoSrc }: { logoSrc: string }) {
               <div key={game.id} className="game-tracker-game-row-wrap">
                 <Link href={`/portal/admin/game-tracker/${game.id}`} className="game-tracker-game-row">
                   <span className={`game-tracker-status game-tracker-status--${game.status}`}>{game.status}</span>
-                  <span><strong>{game.opponentName}</strong><small>{GAME_TYPE_LABELS[game.gameType]} · {game.gameDate}</small></span>
+                  <span><strong>{game.usTeamName} vs. {game.opponentName}</strong><small>{GAME_TYPE_LABELS[game.gameType]} · {game.gameDate}</small></span>
                   <span className="game-tracker-score">{game.state.score.us}<small>–</small>{game.state.score.opponent}</span>
                   <span aria-hidden>→</span>
                 </Link>
