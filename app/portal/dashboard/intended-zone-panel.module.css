@@ -437,6 +437,56 @@
   gap: 12px;
 }
 
+.liveHeatmapGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  width: 100%;
+}
+
+.liveHeatmapCard {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 18px;
+  background: rgba(8, 11, 16, 0.78);
+}
+
+.liveHeatmapCard .zoneFrame {
+  margin: 0 auto;
+}
+
+.liveHeatmapHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  color: #e2e8f0;
+  font-size: 0.84rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.liveHeatmapHeader > span:last-child {
+  display: inline-grid;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(var(--portal-accent-rgb, 200, 16, 46), 0.16);
+  color: rgb(var(--portal-accent-rgb, 200, 16, 46));
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 390px) {
+  .liveHeatmapGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .zoneFrame {
   position: relative;
   width: 100%;

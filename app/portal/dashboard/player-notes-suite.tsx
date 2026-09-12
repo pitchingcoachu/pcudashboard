@@ -784,7 +784,10 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
       if (startDate && noteDate && noteDate < startDate) return false;
       if (endDate && noteDate && noteDate > endDate) return false;
       if (!query) return true;
-      const text = `${note.noteText} ${note.category} ${note.attachmentName ?? ''} ${note.dashboardPlayerName ?? ''}`.toLowerCase();
+      const attachmentText = parseNoteAttachments(note)
+        .map((attachment) => `${attachment.name} ${attachment.mimeType}`)
+        .join(' ');
+      const text = `${note.noteText} ${note.category} ${note.domain} ${note.noteDate} ${note.attachmentName ?? ''} ${attachmentText} ${note.dashboardPlayerName ?? ''}`.toLowerCase();
       return text.includes(query);
     });
   }, [notes, filterCategory, filterStartDate, filterEndDate, searchText]);
@@ -1222,7 +1225,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
     <section className={embedded ? 'portal-admin-card' : 'portal-panel portal-admin-panel'} style={{ padding: '1rem' }}>
       <div style={{ display: 'grid', gap: 12 }}>
         <article className="portal-admin-card">
-          <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(2, minmax(180px, 1fr))' }}>
+          <div className="portal-form-grid" style={{ gridTemplateColumns: 'minmax(180px, 1fr)' }}>
             {isFixedPlayerMode ? (
               <label>
                 Player
@@ -1251,10 +1254,6 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
                 </datalist>
               </label>
             )}
-            <label>
-              Search Notes
-              <input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="Search titles or note text…" />
-            </label>
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
             {categoryOptions.map((category) => (
@@ -1562,7 +1561,17 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
           </article>
 
           <article className="portal-admin-card">
-            <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(3, minmax(140px, 1fr))' }}>
+            <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+              <label>
+                Search Notes
+                <input
+                  type="search"
+                  value={searchText}
+                  onChange={(event) => setSearchText(event.target.value)}
+                  placeholder="Search keywords…"
+                  aria-label="Search notes by keyword"
+                />
+              </label>
               <label>
                 Category Filter
                 <select value={filterCategory} onChange={(event) => setFilterCategory(event.target.value || 'All')}>

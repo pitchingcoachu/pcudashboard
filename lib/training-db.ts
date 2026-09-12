@@ -2774,6 +2774,14 @@ export type IntendedZonePitcherStat = {
   throwsLeft: boolean;
 };
 
+export type IntendedZoneDailyStat = {
+  sessionDate: string;
+  pitchCount: number;
+  avgMissDistanceFt: number;
+  medianMissDistanceFt: number;
+  targetHitRates: IntendedZoneTargetHitRate[];
+};
+
 // Same fixed target-size options offered on both web (intended-zone-panel.tsx's
 // TARGET_SIZE_PRESETS) and mobile (intended-zones.tsx's TARGET_SIZE_PRESETS) --
 // kept in sync manually since every miss distance is measured from the same
@@ -2835,6 +2843,7 @@ async function fetchIntendedZoneStatRows(input: {
 }): Promise<
   {
     pitcherName: string;
+    sessionDate: string;
     pitchType: string;
     ballType: string;
     missDistanceFt: number;
@@ -2866,7 +2875,13 @@ async function fetchIntendedZoneStatRows(input: {
   const params: (string | number | string[])[] = [input.organizationId];
 
   if (input.pitcherName) {
-    params.push(input.pitcherName);
+    // Dashboard roster labels may include an organization suffix such as
+    // "(PCU)" and may use "Last, First". Intended Target source rows are
+    // compared in canonical "First Last" order.
+    const unsuffixedPitcherName = input.pitcherName.replace(/\s+\([^)]*\)\s*$/, '').trim();
+    const pitcherNameVariants = nameOrderingVariants(unsuffixedPitcherName);
+    const canonicalPitcherName = pitcherNameVariants.find((name) => !name.includes(',')) ?? unsuffixedPitcherName;
+    params.push(canonicalPitcherName);
     conditions.push(`LOWER(${firstLastPitcherNameSql}) = LOWER(TRIM($${params.length}::text))`);
   }
   if (input.startDate) {
@@ -2892,6 +2907,7 @@ async function fetchIntendedZoneStatRows(input: {
 
   const result = await pool.query(
     `SELECT ${firstLastPitcherNameSql} AS pitcher_name,
+            COALESCE(izp.thrown_at, s.started_at)::date::text AS session_date,
             COALESCE(izp.pitch_type, 'Undefined') AS pitch_type,
             COALESCE(NULLIF(TRIM(pe.customlabel), ''), 'Baseball') AS ball_type,
             COALESCE(izp.miss_distance_ft, ${INTENDED_ZONE_MISSING_LOCATION_MISS_DISTANCE_FT}) AS miss_distance_ft,
@@ -2943,6 +2959,7 @@ async function fetchIntendedZoneStatRows(input: {
       const intendedHeightFt = Number(row.intended_height_ft);
       return {
         pitcherName: String(row.pitcher_name),
+        sessionDate: String(row.session_date),
         pitchType: String(row.pitch_type),
         ballType: String(row.ball_type),
         missDistanceFt,
@@ -2965,6 +2982,39 @@ async function fetchIntendedZoneStatRows(input: {
 }
 
 export type IntendedZoneStatsSplitBy = 'pitchType' | 'targetSize' | 'targetLocation' | 'ballType';
+
+/** Daily series for Player Plan goals, derived from the exact same filtered
+ * Intended Target pitch rows and target-size hit calculations as the Stats
+ * page. Multiple sessions on one date are combined into that date's point. */
+export async function getIntendedZoneDailyStats(input: {
+  organizationId: number;
+  pitcherName: string;
+  startDate?: string | null;
+  endDate?: string | null;
+  pitchTypes?: string[] | null;
+  ballTypes?: string[] | null;
+}): Promise<IntendedZoneDailyStat[]> {
+  const rows = await fetchIntendedZoneStatRows(input);
+  const byDate = new Map<string, typeof rows>();
+  for (const row of rows) {
+    const bucket = byDate.get(row.sessionDate) ?? [];
+    bucket.push(row);
+    byDate.set(row.sessionDate, bucket);
+  }
+
+  return Array.from(byDate.entries())
+    .map(([sessionDate, dayRows]) => {
+      const distances = dayRows.map((row) => row.missDistanceFt);
+      return {
+        sessionDate,
+        pitchCount: dayRows.length,
+        avgMissDistanceFt: distances.reduce((sum, value) => sum + value, 0) / distances.length,
+        medianMissDistanceFt: medianDistance(distances) ?? 0,
+        targetHitRates: computeTargetHitRates(dayRows),
+      };
+    })
+    .sort((a, b) => a.sessionDate.localeCompare(b.sessionDate));
+}
 
 export type IntendedZoneTargetingSample = {
   pitchCount: number;

@@ -51,6 +51,7 @@ function goalStatLabel(parsed: StoredGoalPayload): string {
 function goalUnit(statLabel: string): string {
   const upper = statLabel.trim().toUpperCase();
   if (upper.includes('%')) return '%';
+  if (upper.includes('MISS DISTANCE')) return '"';
   if (upper === 'VELOCITY') return ' mph';
   if (upper === 'IVB' || upper === 'HB') return '"';
   if (upper === 'SPIN RATE') return ' rpm';

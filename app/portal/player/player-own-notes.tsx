@@ -69,7 +69,13 @@ export default function PlayerOwnNotes({ playerId, currentUserId }: { playerId: 
   const sortedNotes = useMemo(() => {
     const query = searchText.trim().toLowerCase();
     return notes
-      .filter((note) => !query || `${note.category} ${note.noteText}`.toLowerCase().includes(query))
+      .filter((note) => {
+        if (!query) return true;
+        const attachmentText = (note.attachments ?? [])
+          .map((attachment) => `${attachment.title} ${attachment.fileName} ${attachment.contentType} ${attachment.mediaType}`)
+          .join(' ');
+        return `${note.noteText} ${note.category} ${note.domain} ${note.noteDate} ${attachmentText}`.toLowerCase().includes(query);
+      })
       .sort((a, b) => {
         if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
         return b.noteDate === a.noteDate ? b.createdAt.localeCompare(a.createdAt) : b.noteDate.localeCompare(a.noteDate);

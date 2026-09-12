@@ -23,8 +23,10 @@ import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
 import PortalNotificationsBell from '../notifications-bell';
 import PortalThemeToggle from '../theme-toggle';
 import PortalMessagesNavButton from '../messages-nav-button';
+import StaffPrimaryNav, { staffPrimaryMobileItems } from '../staff-primary-nav';
 import ProfileDashboard from './profile-dashboard';
 import PlayerQuestionnaireGate from './player-questionnaire-gate';
+import { resolveStaffPrimaryNavigation } from '../../../lib/portal-primary-nav-server';
 
 type PlayerPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -64,6 +66,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: 
 
 export default async function PlayerPortalPage({ searchParams }: PlayerPageProps) {
   const session = await requirePortalSession();
+  const isStaff = session.role === 'admin' || session.role === 'coach';
   const schoolOptions = await resolveSessionDashboardSchoolOptions(session);
   const selectedSchool = resolveDashboardSchoolCode(session);
   const canAccessSessionBooking = ['PCU', 'GUND'].includes(String(selectedSchool).trim().toUpperCase());
@@ -72,6 +75,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
     redirect('/portal/dashboard');
   }
   const canAccessGameTracker = await canUseGameTracker(session);
+  const staffPrimaryNav = isStaff ? await resolveStaffPrimaryNavigation(session) : null;
   const programmingOrganizationId = await resolveProgrammingOrganizationId(session);
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
   const params = await searchParams;
@@ -105,31 +109,32 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
       <PortalChrome
         left={<DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />}
         navLinks={
-          <>
-            {(session.role === 'admin' || session.role === 'coach') && (
-              <Link href="/portal/admin" className="portal-nav-link">
-                Admin
+          isStaff && staffPrimaryNav ? (
+            <StaffPrimaryNav {...staffPrimaryNav} activeHref="/profiles" />
+          ) : (
+            <>
+              <Link href="/portal/player" className="portal-nav-link active">
+                Profile
               </Link>
-            )}
-            <Link href="/portal/player" className="portal-nav-link active">
-              Profile
-            </Link>
-            {canAccessProgramming ? (
-              <Link href="/portal/player/program" className="portal-nav-link">
-                Program
+              {canAccessProgramming ? (
+                <Link href="/portal/player/program" className="portal-nav-link">
+                  Program
+                </Link>
+              ) : null}
+              {canAccessSessionBooking ? (
+                <Link href="/portal/scheduling" className="portal-nav-link">
+                  Booking
+                </Link>
+              ) : null}
+              <Link href="/portal/dashboard" className="portal-nav-link">
+                Dashboard
               </Link>
-            ) : null}
-            {session.role === 'player' && canAccessSessionBooking ? (
-              <Link href="/portal/scheduling" className="portal-nav-link">
-                Booking
-              </Link>
-            ) : null}
-            <Link href="/portal/dashboard" className="portal-nav-link">
-              Dashboard
-            </Link>
-          </>
+            </>
+          )
         }
-        mobileNavItems={[]}
+        mobileNavCurrentHref={isStaff ? '/profiles' : '/portal/player'}
+        mobileNavLoggedInAs={session.name ?? session.email}
+        mobileNavItems={isStaff && staffPrimaryNav ? staffPrimaryMobileItems(staffPrimaryNav) : []}
         right={
           <>
             {session.role === 'admin' || session.role === 'coach' ? (
@@ -261,53 +266,41 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
         </>
       }
       navLinks={
-        <>
-          {(session.role === 'admin' || session.role === 'coach') && (
-            <Link href="/portal/admin" className="portal-nav-link">
-              Admin
+        isStaff && staffPrimaryNav ? (
+          <StaffPrimaryNav {...staffPrimaryNav} activeHref="/profiles" />
+        ) : (
+          <>
+            <Link href="/portal/player" className="portal-nav-link active">
+              Profile
             </Link>
-          )}
-          <Link href="/portal/player" className="portal-nav-link active">
-            Profile
-          </Link>
-          {canAccessProgramming ? (
-            <Link href={session.role === 'admin' || session.role === 'coach' ? '/portal/admin/schedule' : fullProgramHref} className="portal-nav-link">
-              {session.role === 'admin' || session.role === 'coach' ? 'Schedule' : 'Program'}
-            </Link>
-          ) : null}
-          {session.role === 'player' && canAccessSessionBooking ? (
-            <Link href="/portal/scheduling" className="portal-nav-link">
-              Booking
-            </Link>
-          ) : null}
-          {session.role === 'player' ? (
+            {canAccessProgramming ? (
+              <Link href={fullProgramHref} className="portal-nav-link">
+                Program
+              </Link>
+            ) : null}
+            {canAccessSessionBooking ? (
+              <Link href="/portal/scheduling" className="portal-nav-link">
+                Booking
+              </Link>
+            ) : null}
             <Link href="/portal/dashboard" className="portal-nav-link">
               Dashboard
             </Link>
-          ) : (
-            <Link href="/profiles" className="portal-nav-link">
-              Profiles
-            </Link>
-          )}
-        </>
+          </>
+        )
       }
-      mobileNavCurrentHref="/portal/player"
+      mobileNavCurrentHref={isStaff ? '/profiles' : '/portal/player'}
       mobileNavLoggedInAs={session.name ?? session.email}
-      mobileNavItems={[
-        ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Admin' }] : []),
-        { href: '/portal/player', label: 'Profile' },
-        ...(canAccessProgramming
-          ? [
-              session.role === 'admin' || session.role === 'coach'
-                ? { href: '/portal/admin/schedule', label: 'Schedule' }
-                : { href: fullProgramHref, label: 'Program' },
+      mobileNavItems={
+        isStaff && staffPrimaryNav
+          ? staffPrimaryMobileItems(staffPrimaryNav)
+          : [
+              { href: '/portal/player', label: 'Profile' },
+              ...(canAccessProgramming ? [{ href: fullProgramHref, label: 'Program' }] : []),
+              ...(canAccessSessionBooking ? [{ href: '/portal/scheduling', label: 'Booking' }] : []),
+              { href: '/portal/dashboard', label: 'Dashboard' },
             ]
-          : []),
-        ...(session.role === 'player' && canAccessSessionBooking ? [{ href: '/portal/scheduling', label: 'Booking' }] : []),
-        ...(session.role === 'player'
-          ? [{ href: '/portal/dashboard', label: 'Dashboard' }]
-          : [{ href: '/profiles', label: 'Profiles' }]),
-      ]}
+      }
       right={
         <>
           {session.role === 'admin' || session.role === 'coach' ? (

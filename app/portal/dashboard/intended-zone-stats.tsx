@@ -786,7 +786,7 @@ export default function IntendedZoneStats({
               <div className={styles.logSection}>
                 <p className={styles.logTitle} data-pdf-hide="true" style={{ marginBottom: 12 }}>By {splitByLabel(splitBy)}</p>
                 <div className={styles.logScroll}>
-                  <table className={styles.logTable}>
+                  <table className={styles.logTable} data-pdf-fit-table="true">
                     <thead>
                       <tr>
                         <th>{splitByLabel(splitBy)}</th>
@@ -1018,7 +1018,15 @@ export default function IntendedZoneStats({
                               <p className={styles.historyTitle} style={{ alignSelf: 'flex-start', color: '#f8fafc' }}>
                                 {row.pitchType} ({row.pitchCount})
                               </p>
-                              <DirectionHeatmap breakdown={row.directionBreakdown} throwsLeft={row.throwsLeft} />
+                              <DirectionHeatmap
+                                breakdown={row.directionBreakdown}
+                                // Miss directions are classified into each pitcher's
+                                // arm/glove frame before aggregation. Keep the mixed-
+                                // pitcher leaderboard in one consistent right-handed
+                                // visual frame; only an individual pitcher drill-down
+                                // should mirror the grid for a left-handed pitcher.
+                                throwsLeft={selectedPitcherStat ? row.throwsLeft : false}
+                              />
                             </div>
                           ))}
                         </div>

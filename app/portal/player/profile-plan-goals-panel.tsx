@@ -59,6 +59,18 @@ function normalizeExecutionStatKey(value: string): string {
     .replace(/[+\s\-_/]/g, '');
 }
 
+function intendedTargetMetricField(value: string): string | null {
+  const normalized = String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+  if (normalized === 'average miss distance' || normalized === 'avg miss distance') return 'avg_miss_distance';
+  if (normalized === 'median miss distance' || normalized === 'med. miss distance' || normalized === 'med miss distance') return 'median_miss_distance';
+  const targetMatch = normalized.match(/^(4|8|12|16|20)["”]? target hit%$/);
+  return targetMatch ? `target_hit_${targetMatch[1]}_pct` : null;
+}
+
+function isIntendedTargetGoal(goal: ParsedGoal): boolean {
+  return goal.category === 'Execution' && intendedTargetMetricField(goal.executionStat) !== null;
+}
+
 function formatMdyy(isoDate: string): string {
   const date = new Date(`${isoDate}T00:00:00Z`);
   if (Number.isNaN(date.getTime())) return isoDate;
@@ -175,6 +187,8 @@ function metricValue(goal: ParsedGoal, point: Record<string, unknown>): number |
     }
     return num('velo', 'rel_speed');
   }
+  const intendedTargetField = intendedTargetMetricField(goal.executionStat);
+  if (intendedTargetField) return num(intendedTargetField);
   const key = normalizeExecutionStatKey(goal.executionStat);
   if (key === 'velocity' || key === 'velo') return num('velo', 'rel_speed');
   if (key === 'max') return num('velo', 'rel_speed');
@@ -240,6 +254,11 @@ function buildSeries(goal: ParsedGoal, points: Array<Record<string, unknown>>): 
       }
 
       const key = normalizeExecutionStatKey(goal.executionStat);
+      const intendedTargetField = intendedTargetMetricField(goal.executionStat);
+      if (intendedTargetField) {
+        const value = avgFrom(intendedTargetField);
+        return value === null ? null : { date, value };
+      }
       const directMetric =
         key === 'velocity' || key === 'velo'
           ? avgFrom('velo', 'rel_speed')
@@ -518,6 +537,7 @@ function formatGoalValue(goal: ParsedGoal, value: number | null): string {
     return formatTableDisplayValue(upper, value);
   }
   if (label.includes('%')) return `${value.toFixed(1)}%`;
+  if (upper.includes('MISS DISTANCE')) return `${value.toFixed(1)}"`;
   if (upper === 'SPIN RATE') return String(Math.round(value));
   return Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(1);
 }
@@ -525,6 +545,7 @@ function formatGoalValue(goal: ParsedGoal, value: number | null): string {
 function targetUnit(goal: ParsedGoal): string {
   const label = metricLabel(goal).trim().toUpperCase();
   if (label.includes('%')) return '%';
+  if (label.includes('MISS DISTANCE')) return '"';
   if (label === 'VELOCITY') return ' mph';
   if (label === 'IVB' || label === 'HB') return '"';
   if (label === 'SPIN RATE') return ' rpm';
@@ -726,6 +747,43 @@ export default function ProfilePlanGoalsPanel({ playerId, playerName, goals, can
       chartGoals.map(async (goal) => {
         const domain = goalDomain(goal);
         let lastError = '';
+        if (domain === 'pitching' && isIntendedTargetGoal(goal)) {
+          for (const candidate of candidates) {
+            const params = new URLSearchParams({ pitcherName: candidate, daily: '1' });
+            if (goal.startDate) params.set('startDate', goal.startDate);
+            if (goal.endDate) params.set('endDate', goal.endDate);
+            if (!goal.pitchTypes.includes('All')) params.set('pitchTypes', goal.pitchTypes.join(','));
+            if (!goal.ballTypes.includes('All')) params.set('ballTypes', goal.ballTypes.join(','));
+            const response = await fetch(`/api/dashboard/pitching/intended-zone/stats?${params.toString()}`, {
+              cache: 'no-store',
+              signal: controller.signal,
+            });
+            const payload = (await response.json().catch(() => ({}))) as {
+              dailyStats?: Array<{
+                sessionDate: string;
+                avgMissDistanceFt: number;
+                medianMissDistanceFt: number;
+                targetHitRates: Array<{ targetInches: number; hitPct: number }>;
+              }>;
+              error?: string;
+            };
+            if (!response.ok) {
+              lastError = payload.error ?? 'Failed to load Intended Target goal data.';
+              continue;
+            }
+            return {
+              slotIndex: goal.slotIndex,
+              points: (payload.dailyStats ?? []).map((row) => ({
+                session_date: row.sessionDate,
+                avg_miss_distance: Number(row.avgMissDistanceFt) * 12,
+                median_miss_distance: Number(row.medianMissDistanceFt) * 12,
+                ...Object.fromEntries(row.targetHitRates.map((rate) => [`target_hit_${rate.targetInches}_pct`, rate.hitPct])),
+              })),
+            };
+          }
+          if (lastError) throw new Error(lastError);
+          return { slotIndex: goal.slotIndex, points: [] };
+        }
         for (const candidate of candidates) {
           const params = new URLSearchParams();
           params.set(domain === 'hitting' ? 'hitter' : 'pitcher', candidate);

@@ -88,6 +88,17 @@ const PITCH_COLORS: Record<string, string> = {
   Undefined: '#9ca3af',
 };
 
+const PITCH_TYPE_ORDER = ['Fastball', 'Sinker', 'Cutter', 'Slider', 'Sweeper', 'Curveball', 'ChangeUp', 'Splitter', 'Knuckleball'];
+
+function comparePitchTypes(a: string, b: string): number {
+  const aIndex = PITCH_TYPE_ORDER.indexOf(a);
+  const bIndex = PITCH_TYPE_ORDER.indexOf(b);
+  if (aIndex === -1 && bIndex === -1) return a.localeCompare(b);
+  if (aIndex === -1) return 1;
+  if (bIndex === -1) return -1;
+  return aIndex - bIndex;
+}
+
 // Fixed target-size presets (diameter in inches -> radius in feet) --
 // replaced the old free-form slider so every session only ever uses one of
 // these sizes, matching the fixed set mobile offers and keeping the
@@ -1072,12 +1083,22 @@ export default function IntendedZonePanel({
     };
   }, [pitches, twoThreeHits]);
 
-  const liveDirectionBreakdown = useMemo(() => {
-    const breakdown = emptyIntendedZoneDirectionBreakdown();
-    for (const p of pitches) {
-      if (p.missDirection) breakdown[p.missDirection as MissDirection] += 1;
+  const liveDirectionBreakdownsByPitchType = useMemo(() => {
+    const grouped = new Map<string, ReturnType<typeof emptyIntendedZoneDirectionBreakdown>>();
+    for (const pitch of pitches) {
+      if (!pitch.missDirection) continue;
+      const pitchType = pitch.pitchType?.trim() || 'Untagged';
+      const breakdown = grouped.get(pitchType) ?? emptyIntendedZoneDirectionBreakdown();
+      breakdown[pitch.missDirection as MissDirection] += 1;
+      grouped.set(pitchType, breakdown);
     }
-    return breakdown;
+    return Array.from(grouped.entries())
+      .sort(([a], [b]) => comparePitchTypes(a, b))
+      .map(([pitchType, breakdown]) => ({
+        pitchType,
+        breakdown,
+        count: Object.values(breakdown).reduce((sum, value) => sum + value, 0),
+      }));
   }, [pitches]);
 
   // Drives which screen side (left/right) the live direction heatmap
@@ -1982,7 +2003,20 @@ export default function IntendedZonePanel({
                   <p className={styles.zoneHint} style={{ textAlign: 'left', alignSelf: 'flex-start', marginBottom: 8 }}>
                     Where misses land relative to the target — glove/arm side is from the pitcher&apos;s own throwing-hand perspective.
                   </p>
-                  <DirectionHeatmap breakdown={liveDirectionBreakdown} throwsLeft={liveThrowsLeft} />
+                  <div className={styles.liveHeatmapGrid}>
+                    {liveDirectionBreakdownsByPitchType.map(({ pitchType, breakdown, count }) => (
+                      <section key={pitchType} className={styles.liveHeatmapCard}>
+                        <div className={styles.liveHeatmapHeader}>
+                          <span className={styles.logPitchType}>
+                            <span className={styles.logPitchDot} style={{ background: PITCH_COLORS[pitchType] ?? PITCH_COLORS.Undefined }} />
+                            {pitchType}
+                          </span>
+                          <span>{count}</span>
+                        </div>
+                        <DirectionHeatmap breakdown={breakdown} throwsLeft={liveThrowsLeft} />
+                      </section>
+                    ))}
+                  </div>
                 </div>
               ) : null}
             </div>

@@ -242,6 +242,13 @@ const DOMAIN_EXECUTION_FALLBACKS: Record<Domain, string[]> = {
     'ISO',
     'xISO',
     'BABIP',
+    'Average Miss Distance',
+    'Median Miss Distance',
+    '4" Target Hit%',
+    '8" Target Hit%',
+    '12" Target Hit%',
+    '16" Target Hit%',
+    '20" Target Hit%',
   ],
   Hitting: [
     'Swing%',
@@ -773,6 +780,18 @@ function normalizeExecutionStatKey(value: string): string {
     .replace(/[+\s\-_/]/g, '');
 }
 
+function intendedTargetMetricField(value: string): string | null {
+  const normalized = String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+  if (normalized === 'average miss distance' || normalized === 'avg miss distance') return 'avg_miss_distance';
+  if (normalized === 'median miss distance' || normalized === 'med. miss distance' || normalized === 'med miss distance') return 'median_miss_distance';
+  const targetMatch = normalized.match(/^(4|8|12|16|20)["”]? target hit%$/);
+  return targetMatch ? `target_hit_${targetMatch[1]}_pct` : null;
+}
+
+function isIntendedTargetGoal(goal: GoalDraft): boolean {
+  return goal.category === 'Execution' && intendedTargetMetricField(goal.executionStat) !== null;
+}
+
 function normalizeMulti(values: string[]): string[] {
   const unique = Array.from(new Set(values.filter((value) => value.trim().length > 0)));
   if (unique.length === 0) return ['All'];
@@ -1175,6 +1194,8 @@ function goalMetricValue(goal: GoalDraft, point: Record<string, unknown>): numbe
     }
     return num('velo', 'rel_speed');
   }
+  const intendedTargetField = intendedTargetMetricField(goal.executionStat);
+  if (intendedTargetField) return num(intendedTargetField);
   const key = normalizeExecutionStatKey(goal.executionStat);
   if (key === 'velocity' || key === 'velo') return num('velo', 'rel_speed');
   if (key === 'ivb') return num('ivb');
@@ -1236,6 +1257,11 @@ function buildGoalMetricSeries(goal: GoalDraft, points: Array<Record<string, unk
       }
 
       const key = normalizeExecutionStatKey(goal.executionStat);
+      const intendedTargetField = intendedTargetMetricField(goal.executionStat);
+      if (intendedTargetField) {
+        const value = avgFrom(dayRows, intendedTargetField);
+        return value === null ? null : { date, value };
+      }
       if (key === 'velocity' || key === 'velo') {
         const value = avgFrom(dayRows, 'velo', 'rel_speed');
         return value === null ? null : { date, value };
@@ -1553,6 +1579,9 @@ function fmtGoalValueForGoal(goal: GoalDraft, value: number | null): string {
   const threeDecimalStats = new Set(['AVG', 'SLG', 'OBP', 'OPS', 'WOBA', 'XWOBA', 'ISO', 'XISO', 'BABIP']);
   if (threeDecimalStats.has(upper)) return formatTableDisplayValue(upper, value);
   if (statLabel.includes('%')) return `${value.toFixed(1)}%`;
+  if (upper === 'AVERAGE MISS DISTANCE' || upper === 'AVG MISS DISTANCE' || upper === 'MEDIAN MISS DISTANCE' || upper === 'MED. MISS DISTANCE') {
+    return `${value.toFixed(1)}"`;
+  }
   if (upper === 'SPIN RATE') return String(Math.round(value));
   if (upper === 'VELOCITY' || upper === 'HB' || upper === 'IVB' || upper === 'EXTENSION' || upper === 'RELEASE HEIGHT' || upper === 'RELEASE SIDE') {
     return value.toFixed(1);
@@ -1563,6 +1592,7 @@ function fmtGoalValueForGoal(goal: GoalDraft, value: number | null): string {
 function goalUnit(goal: GoalDraft): string {
   const statLabel = goalStatLabel(goal).trim().toUpperCase();
   if (statLabel.includes('%')) return '';
+  if (statLabel.includes('MISS DISTANCE')) return '';
   if (statLabel === 'VELOCITY') return 'mph';
   if (statLabel === 'IVB' || statLabel === 'HB') return '"';
   if (statLabel === 'SPIN RATE') return 'rpm';
@@ -3114,6 +3144,8 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
         .filter((goal) => isChartCapableGoal(goal, domain))
         .map((goal) => ({
           slotIndex: goal.slotIndex,
+          category: goal.category,
+          executionStat: goal.executionStat,
           startDate: goal.startDate,
           endDate: goal.endDate,
           pitchTypes: goal.pitchTypes,
@@ -3130,19 +3162,15 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
     [domain, planGoals, planMode]
   );
 
-  // Only re-fetch a goal's chart if its own filter fields changed, not when
-  // an unrelated goal slot gets a category for the first time.
-  const prevChartFetchGoalsRef = useRef<typeof chartFetchGoalsRaw>([]);
-  const chartFetchGoals = useMemo(() => {
-    const prev = prevChartFetchGoalsRef.current;
-    const serializeGoal = (g: typeof chartFetchGoalsRaw[number]) =>
-      `${g.slotIndex}|${g.startDate}|${g.endDate}|${g.sessionType}|${g.pitchTypes.join(',')}|${g.ballTypes.join(',')}|${g.pitchResults.join(',')}|${g.hand}|${g.batterSide}|${g.teams.join(',')}`;
-    const prevMap = new Map(prev.map((g) => [g.slotIndex, serializeGoal(g)]));
-    // Only include goals that are new or whose filters changed
-    const changed = chartFetchGoalsRaw.filter((g) => prevMap.get(g.slotIndex) !== serializeGoal(g));
-    prevChartFetchGoalsRef.current = chartFetchGoalsRaw;
-    return changed;
-  }, [chartFetchGoalsRaw]);
+  // Keep the fetch dependency stable while non-filter fields (such as goal
+  // notes or target value) are edited. Do not mutate a ref during render to
+  // track changed goals: React Strict Mode can render twice before effects
+  // run, which consumed the changed goal and left its chart unfetched.
+  const chartFetchGoalsSignature = JSON.stringify(chartFetchGoalsRaw);
+  const chartFetchGoals = useMemo(
+    () => JSON.parse(chartFetchGoalsSignature) as typeof chartFetchGoalsRaw,
+    [chartFetchGoalsSignature]
+  );
 
   useEffect(() => {
     let active = true;
@@ -3287,11 +3315,42 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
 
     Promise.allSettled(
       chartFetchGoals.map(async (goal) => {
+        const intendedTargetField = goal.category === 'Execution' ? intendedTargetMetricField(goal.executionStat) : null;
         const params = new URLSearchParams();
         const candidates = domain === 'Hitting' ? playerQueryCandidates : [selectedDashboardPlayerName];
         const candidateNameKeys = new Set(candidates.map((name) => normalizeNameKey(name)).filter(Boolean));
         let bestPoints: Array<Record<string, unknown>> = [];
         let lastError = '';
+        if (domain === 'Pitching' && intendedTargetField) {
+          const intendedParams = new URLSearchParams({ pitcherName: selectedDashboardPlayerName, daily: '1' });
+          if (goal.startDate) intendedParams.set('startDate', goal.startDate);
+          if (goal.endDate) intendedParams.set('endDate', goal.endDate);
+          if (!goal.pitchTypes.includes('All')) intendedParams.set('pitchTypes', goal.pitchTypes.join(','));
+          if (!goal.ballTypes.includes('All')) intendedParams.set('ballTypes', goal.ballTypes.join(','));
+          const response = await fetch(`/api/dashboard/pitching/intended-zone/stats?${intendedParams.toString()}`, {
+            cache: 'no-store',
+            signal: controller.signal,
+          });
+          const payload = (await response.json().catch(() => ({}))) as {
+            dailyStats?: Array<{
+              sessionDate: string;
+              avgMissDistanceFt: number;
+              medianMissDistanceFt: number;
+              targetHitRates: Array<{ targetInches: number; hitPct: number }>;
+            }>;
+            error?: string;
+          };
+          if (!response.ok) throw new Error(payload.error ?? 'Failed to load Intended Target goal data.');
+          return {
+            slotIndex: goal.slotIndex,
+            points: (payload.dailyStats ?? []).map((row) => ({
+              session_date: row.sessionDate,
+              avg_miss_distance: Number(row.avgMissDistanceFt) * 12,
+              median_miss_distance: Number(row.medianMissDistanceFt) * 12,
+              ...Object.fromEntries(row.targetHitRates.map((rate) => [`target_hit_${rate.targetInches}_pct`, rate.hitPct])),
+            })),
+          };
+        }
         for (const candidate of candidates) {
           const params = new URLSearchParams();
           params.set(playerParam, candidate);
@@ -4750,6 +4809,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
         <div ref={goalsExportRef} className="portal-profile-goals-grid" style={{ alignItems: 'stretch' }}>
           {planGoals.filter((goal) => goal.slotIndex <= goalCount).map((goal) => {
             const chartCapable = isChartCapableGoal(goal, domain);
+            const intendedTargetGoal = domain === 'Pitching' && isIntendedTargetGoal(goal);
             const controlsVisible = goalControlsVisible[goal.slotIndex] ?? true;
             const stats = goalHeaderStats(goal);
             const goalTarget =
@@ -4903,11 +4963,33 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                       Stat
                       <select
                         value={goal.executionStat}
-                        onChange={(event) =>
+                        onChange={(event) => {
+                          const executionStat = event.target.value;
+                          const intendedField = intendedTargetMetricField(executionStat);
                           setPlanGoals((prev) =>
-                            prev.map((entry) => (entry.slotIndex === goal.slotIndex ? { ...entry, executionStat: event.target.value } : entry))
-                          )
-                        }
+                            prev.map((entry) =>
+                              entry.slotIndex === goal.slotIndex
+                                ? {
+                                    ...entry,
+                                    executionStat,
+                                    ...(intendedField
+                                      ? {
+                                          chartType: 'Trend' as const,
+                                          comparator: intendedField.includes('miss_distance') ? 'Less Than' as const : 'Greater Than' as const,
+                                          sessionType: 'Season',
+                                          pitchResults: ['All'],
+                                          countOptions: ['All'],
+                                          afterCountOptions: ['All'],
+                                          teams: ['All'],
+                                          hand: 'All',
+                                          batterSide: 'All',
+                                        }
+                                      : {}),
+                                  }
+                                : entry
+                            )
+                          );
+                        }}
                       >
                         <option value="">Select stat</option>
                         {domainExecutionStats.map((option) => (
@@ -4975,7 +5057,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                     <label className="portal-inline-filter">
                       Chart
                       <SearchableSingleSelect
-                        options={toOptions(CHART_OPTIONS)}
+                        options={toOptions(intendedTargetGoal ? ['Trend'] : CHART_OPTIONS)}
                         value={goal.chartType}
                         onChange={(next) =>
                           setPlanGoals((prev) =>
@@ -5039,7 +5121,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                           ariaLabel="End Date"
                         />
                       </label>
-                      {domain === 'Pitching' ? (
+                      {domain === 'Pitching' && !intendedTargetGoal ? (
                         <label className="portal-inline-filter">
                           Session Type
                           <select
@@ -5058,7 +5140,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                       ) : null}
                     </div>
                     <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(2, minmax(120px, 1fr))', gap: 8 }}>
-                      <label className="portal-inline-filter">
+                      {!intendedTargetGoal ? <label className="portal-inline-filter">
                         Pitcher Hand
                         <SearchableSingleSelect
                           options={toOptions(filterOptions.hands ?? ['All'])}
@@ -5070,8 +5152,8 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                           }
                           placeholder="All"
                         />
-                      </label>
-                      <label className="portal-inline-filter">
+                      </label> : null}
+                      {!intendedTargetGoal ? <label className="portal-inline-filter">
                         Batter Hand
                         <SearchableSingleSelect
                           options={toOptions(filterOptions.batter_sides ?? ['All'])}
@@ -5083,7 +5165,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                           }
                           placeholder="All"
                         />
-                      </label>
+                      </label> : null}
                       <label className="portal-inline-filter">
                         Pitch Type
                         <SearchableMultiSelect
@@ -5110,7 +5192,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                           />
                         </label>
                       ) : null}
-                      <label className="portal-inline-filter">
+                      {!intendedTargetGoal ? <label className="portal-inline-filter">
                         Pitch Results
                         <SearchableMultiSelect
                           options={toOptions(filterOptions.pitch_results)}
@@ -5121,8 +5203,8 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                             )
                           }
                         />
-                      </label>
-                      <label className="portal-inline-filter">
+                      </label> : null}
+                      {!intendedTargetGoal ? <label className="portal-inline-filter">
                         Count
                         <SearchableMultiSelect
                           options={toOptions(filterOptions.count_options)}
@@ -5133,8 +5215,8 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                             )
                           }
                         />
-                      </label>
-                      <label className="portal-inline-filter">
+                      </label> : null}
+                      {!intendedTargetGoal ? <label className="portal-inline-filter">
                         After Count
                         <SearchableMultiSelect
                           options={toOptions(filterOptions.after_count_options)}
@@ -5145,8 +5227,8 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                             )
                           }
                         />
-                      </label>
-                      <label className="portal-inline-filter">
+                      </label> : null}
+                      {!intendedTargetGoal ? <label className="portal-inline-filter">
                         Teams
                         <SearchableMultiSelect
                           options={toOptions(filterOptions.team_types)}
@@ -5157,7 +5239,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                             )
                           }
                         />
-                      </label>
+                      </label> : null}
                     </div>
                       </>
                     ) : null}
@@ -5188,7 +5270,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                           </span>
                         </div>
                         <div>
-                          <span>{goal.sessionType === 'Bullpen' ? 'Last 2 bullpens: ' : goal.sessionType === 'Live' ? 'Last 2 live BPs: ' : 'Last 2 games: '}</span>
+                          <span>{intendedTargetGoal ? 'Last 2 dates: ' : goal.sessionType === 'Bullpen' ? 'Last 2 bullpens: ' : goal.sessionType === 'Live' ? 'Last 2 live BPs: ' : 'Last 2 games: '}</span>
                           <span style={{ color: last2Color, fontWeight: 700 }}>
                             {`${last2Arrow} ${formatGoalValueWithUnit(goal, stats.recency2)}`}
                           </span>

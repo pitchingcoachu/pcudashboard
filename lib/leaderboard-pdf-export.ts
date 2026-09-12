@@ -22,8 +22,12 @@ async function renderCaptureBatchesToPdf(options: {
    * -- fitting the page to the content avoids both. Width stays at Letter
    * width; only height grows. */
   singlePage?: boolean;
+  /** Absolute source-canvas Y positions where a page may safely end.
+   * Leaderboard exports pass table-row boundaries so pagination never
+   * slices through the middle of a row. */
+  safePageBreakSourceOffsets?: number[];
 }): Promise<void> {
-  const { captureBatches, captureScale, isLightTheme, titleText, nameText, subtitleText, fileName, singlePage } = options;
+  const { captureBatches, captureScale, isLightTheme, titleText, nameText, subtitleText, fileName, singlePage, safePageBreakSourceOffsets } = options;
   const { jsPDF } = await import('jspdf');
   const rawW = Math.max(1, ...captureBatches.map((c) => c.width));
   const totalRawH = captureBatches.reduce((sum, c) => sum + c.height, 0);
@@ -130,28 +134,75 @@ async function renderCaptureBatchesToPdf(options: {
   // (pageSourceHeight) has actually been filled.
   type PageState = { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D | null; used: number };
   const pages: PageState[] = [];
-  const newPageState = (): PageState => {
+  const newPageState = (height = pageSourceHeight): PageState => {
     const canvas = document.createElement('canvas');
     canvas.width = rawW;
-    canvas.height = pageSourceHeight;
+    canvas.height = Math.max(1, height);
     return { canvas, ctx: canvas.getContext('2d'), used: 0 };
   };
-  let current = newPageState();
-  pages.push(current);
-  for (const batchCanvas of captureBatches) {
-    const batchW = Math.max(1, batchCanvas.width);
-    const batchH = Math.max(1, batchCanvas.height);
-    let sourceY = 0;
-    while (sourceY < batchH) {
-      if (pageSourceHeight - current.used <= 0) {
-        current = newPageState();
-        pages.push(current);
-        continue;
+
+  if (safePageBreakSourceOffsets?.length && !singlePage) {
+    const safeOffsets = Array.from(
+      new Set(
+        safePageBreakSourceOffsets
+          .map((offset) => Math.max(0, Math.min(totalRawH, Math.round(offset))))
+          .filter((offset) => offset > 0 && offset < totalRawH)
+      )
+    ).sort((a, b) => a - b);
+    const ranges: Array<{ start: number; end: number }> = [];
+    let rangeStart = 0;
+    while (rangeStart < totalRawH) {
+      const idealEnd = Math.min(totalRawH, rangeStart + pageSourceHeight);
+      if (idealEnd >= totalRawH) {
+        ranges.push({ start: rangeStart, end: totalRawH });
+        break;
       }
-      const chunkHeight = Math.min(pageSourceHeight - current.used, batchH - sourceY);
-      current.ctx?.drawImage(batchCanvas, 0, sourceY, batchW, chunkHeight, 0, current.used, batchW, chunkHeight);
-      current.used += chunkHeight;
-      sourceY += chunkHeight;
+      const safeEnd = safeOffsets.filter((offset) => offset > rangeStart && offset <= idealEnd).at(-1);
+      const rangeEnd = safeEnd && safeEnd > rangeStart ? safeEnd : idealEnd;
+      ranges.push({ start: rangeStart, end: rangeEnd });
+      rangeStart = rangeEnd;
+    }
+
+    const batchRanges: Array<{ canvas: HTMLCanvasElement; start: number; end: number }> = [];
+    let batchStart = 0;
+    for (const canvas of captureBatches) {
+      const batchEnd = batchStart + canvas.height;
+      batchRanges.push({ canvas, start: batchStart, end: batchEnd });
+      batchStart = batchEnd;
+    }
+
+    for (const range of ranges) {
+      const page = newPageState(range.end - range.start);
+      pages.push(page);
+      for (const batch of batchRanges) {
+        const overlapStart = Math.max(range.start, batch.start);
+        const overlapEnd = Math.min(range.end, batch.end);
+        if (overlapEnd <= overlapStart) continue;
+        const sourceY = overlapStart - batch.start;
+        const destinationY = overlapStart - range.start;
+        const height = overlapEnd - overlapStart;
+        page.ctx?.drawImage(batch.canvas, 0, sourceY, batch.canvas.width, height, 0, destinationY, batch.canvas.width, height);
+      }
+      page.used = range.end - range.start;
+    }
+  } else {
+    let current = newPageState();
+    pages.push(current);
+    for (const batchCanvas of captureBatches) {
+      const batchW = Math.max(1, batchCanvas.width);
+      const batchH = Math.max(1, batchCanvas.height);
+      let sourceY = 0;
+      while (sourceY < batchH) {
+        if (pageSourceHeight - current.used <= 0) {
+          current = newPageState();
+          pages.push(current);
+          continue;
+        }
+        const chunkHeight = Math.min(pageSourceHeight - current.used, batchH - sourceY);
+        current.ctx?.drawImage(batchCanvas, 0, sourceY, batchW, chunkHeight, 0, current.used, batchW, chunkHeight);
+        current.used += chunkHeight;
+        sourceY += chunkHeight;
+      }
     }
   }
   let isFirstPage = true;
@@ -224,6 +275,47 @@ export async function downloadContentPdf(options: {
   // the capture window down the live node) keeps every individual capture
   // well under that limit.
   const MAX_CAPTURE_SOURCE_HEIGHT = 4000;
+  const prepareCloneForContentPdf = (clonedDoc: Document, clonedNode: HTMLElement) => {
+    if (forceWidth) {
+      clonedNode.style.width = `${forceWidth}px`;
+      clonedNode.style.maxWidth = `${forceWidth}px`;
+    }
+    clonedDoc.querySelectorAll('[data-pdf-hide="true"]').forEach((el) => {
+      (el as HTMLElement).style.display = 'none';
+    });
+
+    // Wide analytics tables normally live in horizontal scroll containers.
+    // html2canvas faithfully clips that overflow, which used to omit the
+    // rightmost Intended Target columns from the PDF. Tables explicitly
+    // marked for fitting get a compact export-only layout in the clone;
+    // the live page remains scrollable and completely unchanged.
+    clonedNode.querySelectorAll('table[data-pdf-fit-table="true"]').forEach((tableElement) => {
+      const table = tableElement as HTMLTableElement;
+      table.style.width = '100%';
+      table.style.minWidth = '0';
+      table.style.maxWidth = '100%';
+      table.style.tableLayout = 'fixed';
+      const scrollWrap = table.parentElement;
+      if (scrollWrap) {
+        scrollWrap.style.width = '100%';
+        scrollWrap.style.maxWidth = '100%';
+        scrollWrap.style.overflow = 'visible';
+      }
+      table.querySelectorAll('th, td').forEach((cellElement) => {
+        const cell = cellElement as HTMLElement;
+        cell.style.padding = '7px 4px';
+        cell.style.whiteSpace = 'normal';
+        cell.style.overflowWrap = 'anywhere';
+        cell.style.lineHeight = '1.15';
+      });
+      table.querySelectorAll('th').forEach((cellElement) => {
+        (cellElement as HTMLElement).style.fontSize = '9px';
+      });
+      table.querySelectorAll('td').forEach((cellElement) => {
+        (cellElement as HTMLElement).style.fontSize = '11px';
+      });
+    });
+  };
   // When forcing a wider layout, measure that wider height instead of the
   // live (possibly narrower/taller-from-wrapping) node's own rect -- a
   // dry-run clone-and-measure pass, discarded, just to get an accurate
@@ -237,11 +329,7 @@ export async function downloadContentPdf(options: {
       logging: false,
       windowWidth: Math.max(forceWidth + 200, document.documentElement.scrollWidth),
       onclone: (clonedDoc, clonedNode) => {
-        clonedNode.style.width = `${forceWidth}px`;
-        clonedNode.style.maxWidth = `${forceWidth}px`;
-        clonedDoc.querySelectorAll('[data-pdf-hide="true"]').forEach((el) => {
-          (el as HTMLElement).style.display = 'none';
-        });
+        prepareCloneForContentPdf(clonedDoc, clonedNode);
       },
     });
     totalHeight = probeCanvas.height;
@@ -264,13 +352,7 @@ export async function downloadContentPdf(options: {
       // that content collapse out of the capture's layout entirely instead
       // of just being painted-over, leaving no gap where it was.
       onclone: (clonedDoc, clonedNode) => {
-        if (forceWidth) {
-          clonedNode.style.width = `${forceWidth}px`;
-          clonedNode.style.maxWidth = `${forceWidth}px`;
-        }
-        clonedDoc.querySelectorAll('[data-pdf-hide="true"]').forEach((el) => {
-          (el as HTMLElement).style.display = 'none';
-        });
+        prepareCloneForContentPdf(clonedDoc, clonedNode);
       },
     });
     captureBatches.push(canvas);
@@ -466,6 +548,8 @@ export async function downloadLeaderboardTablePdf(options: {
     const tbodyNode = tableNode.querySelector('tbody') as HTMLElement | null;
     const bodyRows = tbodyNode ? (Array.from(tbodyNode.children) as HTMLElement[]) : [];
     const captureBatches: HTMLCanvasElement[] = [];
+    const safePageBreakSourceOffsets: number[] = [];
+    let capturedSourceHeight = 0;
     const captureNode = async (node: HTMLElement): Promise<HTMLCanvasElement> =>
       html2canvas(node, {
         backgroundColor: isLightTheme ? '#f8fafc' : '#000000',
@@ -520,7 +604,10 @@ export async function downloadLeaderboardTablePdf(options: {
       headerWrap.style.width = `${tableWidthPx}px`;
       document.body.appendChild(headerWrap);
       try {
-        captureBatches.push(await captureNode(headerWrap));
+        const headerCanvas = await captureNode(headerWrap);
+        captureBatches.push(headerCanvas);
+        capturedSourceHeight += headerCanvas.height;
+        safePageBreakSourceOffsets.push(capturedSourceHeight);
       } finally {
         document.body.removeChild(headerWrap);
       }
@@ -553,7 +640,20 @@ export async function downloadLeaderboardTablePdf(options: {
         batchWrap.style.width = `${tableWidthPx}px`;
         document.body.appendChild(batchWrap);
         try {
-          captureBatches.push(await captureNode(batchWrap));
+          const bodyCanvas = await captureNode(batchWrap);
+          captureBatches.push(bodyCanvas);
+          const batchRows = bodyRows.slice(batchStart, batchEnd);
+          const measuredRowHeights = batchRows.map((row) => row.getBoundingClientRect().height || 0);
+          const measuredBatchHeight = measuredRowHeights.reduce((sum, height) => sum + height, 0);
+          let measuredRowBottom = 0;
+          for (const rowHeight of measuredRowHeights) {
+            measuredRowBottom += rowHeight;
+            const proportionalBottom = measuredBatchHeight > 0
+              ? Math.round((measuredRowBottom / measuredBatchHeight) * bodyCanvas.height)
+              : bodyCanvas.height;
+            safePageBreakSourceOffsets.push(capturedSourceHeight + proportionalBottom);
+          }
+          capturedSourceHeight += bodyCanvas.height;
         } finally {
           document.body.removeChild(batchWrap);
         }
@@ -562,7 +662,15 @@ export async function downloadLeaderboardTablePdf(options: {
     } else if (!theadNode) {
       captureBatches.push(await captureNode(tableNode));
     }
-    await renderCaptureBatchesToPdf({ captureBatches, captureScale, isLightTheme, titleText, subtitleText, fileName });
+    await renderCaptureBatchesToPdf({
+      captureBatches,
+      captureScale,
+      isLightTheme,
+      titleText,
+      subtitleText,
+      fileName,
+      safePageBreakSourceOffsets,
+    });
   } finally {
     for (const entry of originalLogoAttrs) {
       if (entry.src === null) entry.node.removeAttribute('src');

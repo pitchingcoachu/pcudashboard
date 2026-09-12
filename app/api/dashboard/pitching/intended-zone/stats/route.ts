@@ -2,7 +2,14 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromRequest } from '../../../../../../lib/auth';
 import { resolveProgrammingOrganizationId } from '../../../../../../lib/programming-scope';
-import { getIntendedZonePitchTypeStats, getIntendedZonePitcherLeaderboard, listIntendedZoneBallTypes } from '../../../../../../lib/training-db';
+import { getIntendedZoneDailyStats, getIntendedZonePitchTypeStats, getIntendedZonePitcherLeaderboard, getPlayerForUser, listIntendedZoneBallTypes } from '../../../../../../lib/training-db';
+
+function normalizePersonName(value: string): string {
+  const raw = String(value ?? '').trim().replace(/\s+\([^)]*\)\s*$/, '').trim();
+  const parts = raw.split(',').map((part) => part.trim()).filter(Boolean);
+  const firstLast = parts.length >= 2 ? `${parts.slice(1).join(' ')} ${parts[0]}` : raw;
+  return firstLast.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
 
 // A cold serverless instance's first DB round-trip (schema check, pool
 // connect) occasionally loses the race against the pg driver's client-side
@@ -28,12 +35,21 @@ export async function GET(request: Request) {
     const cookieStore = await cookies();
     const session = getSessionFromRequest(request, cookieStore);
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
     const organizationId = await resolveProgrammingOrganizationId(session);
     if (organizationId <= 0) return NextResponse.json({ error: 'Session context missing.' }, { status: 400 });
 
     const url = new URL(request.url);
+    const isDailyRequest = url.searchParams.get('daily') === '1';
+
+    if (session.role === 'player') {
+      if (!isDailyRequest) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      const requestedPitcher = String(url.searchParams.get('pitcherName') ?? '').trim();
+      const ownPlayer = await getPlayerForUser({ organizationId, userId: session.userId ?? 0 });
+      if (!ownPlayer || normalizePersonName(ownPlayer.fullName) !== normalizePersonName(requestedPitcher)) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      }
+    }
 
     if (url.searchParams.get('ballTypeOptions') === '1') {
       const ballTypes = await withRetryOnTimeout(() => listIntendedZoneBallTypes({ organizationId }));
@@ -58,6 +74,15 @@ export async function GET(request: Request) {
     const splitBy = splitByRaw === 'targetSize' || splitByRaw === 'targetLocation' || splitByRaw === 'ballType'
       ? splitByRaw
       : 'pitchType';
+
+    if (isDailyRequest) {
+      const pitcherName = String(url.searchParams.get('pitcherName') ?? '').trim();
+      if (!pitcherName) return NextResponse.json({ error: 'pitcherName is required.' }, { status: 400 });
+      const dailyStats = await withRetryOnTimeout(() =>
+        getIntendedZoneDailyStats({ organizationId, pitcherName, startDate, endDate, pitchTypes, ballTypes })
+      );
+      return NextResponse.json({ dailyStats });
+    }
 
     if (url.searchParams.get('leaderboard') === '1') {
       const [leaderboard, stats] = await withRetryOnTimeout(() =>
