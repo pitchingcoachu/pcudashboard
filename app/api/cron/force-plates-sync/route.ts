@@ -34,12 +34,14 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const forceFullSync = String(url.searchParams.get('full') ?? '').trim() === '1';
   const asyncMode = String(url.searchParams.get('async') ?? '').trim() === '1';
-  const maxRunSeconds = parsePositiveInt(String(url.searchParams.get('maxRunSeconds') ?? ''));
-  const playerBatchSize = parsePositiveInt(String(url.searchParams.get('playerBatchSize') ?? ''));
+  const maxRunSeconds = parsePositiveInt(String(url.searchParams.get('maxRunSeconds') ?? '')) || 240;
+  const playerBatchSize = parsePositiveInt(String(url.searchParams.get('playerBatchSize') ?? '')) || 1000;
   const trialFetchLimit = parsePositiveInt(String(url.searchParams.get('trialFetchLimit') ?? ''));
-  const lookbackDays = parsePositiveInt(String(url.searchParams.get('lookbackDays') ?? ''));
-  const recentTestLimit = parsePositiveInt(String(url.searchParams.get('recentTestLimit') ?? ''));
-  const testsWindowDays = parsePositiveInt(String(url.searchParams.get('testsWindowDays') ?? ''));
+  const multiPlayerTrialFetchLimit = parsePositiveInt(String(url.searchParams.get('multiPlayerTrialFetchLimit') ?? '')) || 10_000;
+  const trialFetchConcurrency = parsePositiveInt(String(url.searchParams.get('trialFetchConcurrency') ?? '')) || 4;
+  const lookbackDays = parsePositiveInt(String(url.searchParams.get('lookbackDays') ?? '')) || 5;
+  const recentTestLimit = parsePositiveInt(String(url.searchParams.get('recentTestLimit') ?? '')) || 500;
+  const testsWindowDays = parsePositiveInt(String(url.searchParams.get('testsWindowDays') ?? '')) || 3;
   const requestTimeoutMs = parsePositiveInt(String(url.searchParams.get('requestTimeoutMs') ?? ''));
   const requestMaxAttempts = parsePositiveInt(String(url.searchParams.get('requestMaxAttempts') ?? ''));
   const orgId = parsePositiveInt(String(process.env.FORCE_PLATE_SYNC_ORGANIZATION_ID ?? ''));
@@ -61,10 +63,12 @@ export async function GET(request: Request) {
         forceFullSync,
         maxRunSecondsOverride: maxRunSeconds || null,
         playerBatchSizeOverride: playerBatchSize || null,
-        trialFetchLimitOverride: trialFetchLimit || null,
-        lookbackDaysOverride: lookbackDays || null,
-        recentTestLimitOverride: recentTestLimit || null,
-        testsWindowDaysOverride: testsWindowDays || null,
+        trialFetchLimitOverride: trialFetchLimit,
+        multiPlayerTrialFetchLimitOverride: multiPlayerTrialFetchLimit,
+        trialFetchConcurrencyOverride: trialFetchConcurrency,
+        lookbackDaysOverride: lookbackDays,
+        recentTestLimitOverride: recentTestLimit,
+        testsWindowDaysOverride: testsWindowDays,
       });
     } finally {
       if (previousValdRequestTimeoutMs === undefined) delete process.env.VALD_REQUEST_TIMEOUT_MS;

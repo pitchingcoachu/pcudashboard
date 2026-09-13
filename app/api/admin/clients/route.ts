@@ -1,8 +1,9 @@
 import { cookies } from 'next/headers';
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
 import { resolveClientManagementOrganizationId, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
 import { createClientWithLogin, listClientsByOrganizationPaged, resolveOrganizationIdForSchool } from '../../../../lib/training-db';
+import { backfillNewForcePlatePlayer } from '../../../../lib/force-plate-sync-runner';
 
 function redirectWithMessage(request: Request, redirectTo: string, key: 'ok' | 'error', value: string) {
   const url = new URL(redirectTo, request.url);
@@ -103,6 +104,23 @@ export async function POST(request: Request) {
 
     if (!result.ok) {
       return redirectWithMessage(request, redirectTo, 'error', result.error);
+    }
+
+    if (selectedSchoolCode === 'PCU') {
+      after(async () => {
+        const backfill = await backfillNewForcePlatePlayer({
+          organizationId,
+          schoolCode: selectedSchoolCode,
+          playerName: fullName,
+        });
+        if (!backfill.ok) {
+          console.error('[force-plate-sync] automatic new-player backfill failed', {
+            organizationId,
+            playerName: fullName,
+            error: backfill.error,
+          });
+        }
+      });
     }
 
     return redirectWithMessage(request, redirectTo, 'ok', 'Client added successfully.');

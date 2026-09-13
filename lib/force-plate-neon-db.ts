@@ -77,6 +77,17 @@ async function ensureForcePlateNeonTables(): Promise<void> {
       PRIMARY KEY (organization_id, school_code)
     );
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS force_plate_player_backfill_state (
+      organization_id BIGINT NOT NULL,
+      school_code TEXT NOT NULL,
+      player_name_norm TEXT NOT NULL,
+      completed_at TIMESTAMPTZ,
+      last_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_error TEXT,
+      PRIMARY KEY (organization_id, school_code, player_name_norm)
+    );
+  `);
   await pool.query(`ALTER TABLE force_plate_sync_state ADD COLUMN IF NOT EXISTS player_cursor INTEGER NOT NULL DEFAULT 0;`);
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_force_plate_metric_rows_player
@@ -86,7 +97,48 @@ async function ensureForcePlateNeonTables(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_force_plate_metric_rows_test
     ON force_plate_metric_rows (organization_id, school_code, test_id);
   `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_force_plate_tests_semantic_lookup
+    ON force_plate_tests (organization_id, school_code, player_name_norm, recorded_date_utc);
+  `);
   global.__pcuForcePlateNeonReady = true;
+}
+
+export async function listForcePlateHistoricallySearchedPlayerNorms(args: {
+  organizationId: number;
+  schoolCode: string;
+}): Promise<Set<string>> {
+  if (!isDatabaseConfigured()) return new Set();
+  await ensureForcePlateNeonTables();
+  const result = await getDbPool().query<{ player_name_norm: string }>(
+    `SELECT player_name_norm
+     FROM force_plate_player_backfill_state
+     WHERE organization_id = $1 AND school_code = $2 AND completed_at IS NOT NULL`,
+    [args.organizationId, args.schoolCode]
+  );
+  return new Set(result.rows.map((row) => row.player_name_norm));
+}
+
+export async function markForcePlatePlayerHistoricalSearch(args: {
+  organizationId: number;
+  schoolCode: string;
+  playerNameNorm: string;
+  ok: boolean;
+  error?: string | null;
+}): Promise<void> {
+  if (!isDatabaseConfigured()) return;
+  await ensureForcePlateNeonTables();
+  await getDbPool().query(
+    `INSERT INTO force_plate_player_backfill_state (
+       organization_id, school_code, player_name_norm, completed_at, last_attempt_at, last_error
+     ) VALUES ($1, $2, $3, CASE WHEN $4 THEN NOW() ELSE NULL END, NOW(), $5)
+     ON CONFLICT (organization_id, school_code, player_name_norm)
+     DO UPDATE SET
+       completed_at = CASE WHEN $4 THEN NOW() ELSE force_plate_player_backfill_state.completed_at END,
+       last_attempt_at = NOW(),
+       last_error = $5`,
+    [args.organizationId, args.schoolCode, args.playerNameNorm, args.ok, args.error ?? null]
+  );
 }
 
 export type ForcePlateSyncState = {
@@ -121,6 +173,7 @@ export async function upsertForcePlateSnapshotToNeon(args: {
   let metricRowCount = 0;
   try {
     await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock($1, $2)', [1347634252, args.organizationId]);
     for (const player of args.snapshot.players) {
       playerCount += 1;
       const playerNorm = normalizeName(player.playerName);
@@ -147,7 +200,48 @@ export async function upsertForcePlateSnapshotToNeon(args: {
         if (parsed && (!current.recorded || parsed.getTime() > current.recorded.getTime())) current.recorded = parsed;
         testsById.set(row.testId, current);
       }
+      const canonicalTestIds = new Map<string, string>();
       for (const [testId, test] of testsById.entries()) {
+        let canonicalTestId = testId;
+        if (test.recorded) {
+          const equivalent = await client.query<{ test_id: string }>(
+            `SELECT test_id
+             FROM force_plate_tests
+             WHERE organization_id = $1
+               AND school_code = $2
+               AND player_name_norm = $3
+               AND LOWER(TRIM(test_type)) = LOWER(TRIM($4))
+               AND recorded_date_utc BETWEEN $5::timestamptz - INTERVAL '1 second'
+                                        AND $5::timestamptz + INTERVAL '1 second'
+             ORDER BY CASE WHEN test_id LIKE 'csv-%' THEN 1 ELSE 0 END, test_id`,
+            [args.organizationId, args.schoolCode, playerNorm, test.testType, test.recorded]
+          );
+          const existingApiId = equivalent.rows.find((row) => !row.test_id.startsWith('csv-'))?.test_id;
+          if (testId.startsWith('csv-') && existingApiId) {
+            canonicalTestId = existingApiId;
+          } else if (!testId.startsWith('csv-')) {
+            for (const duplicate of equivalent.rows.filter((row) => row.test_id.startsWith('csv-') && row.test_id !== testId)) {
+              await client.query(
+                `UPDATE force_plate_metric_rows
+                 SET test_id = $4, updated_at = NOW()
+                 WHERE organization_id = $1 AND school_code = $2 AND test_id = $3`,
+                [args.organizationId, args.schoolCode, duplicate.test_id, testId]
+              );
+              await client.query(
+                `DELETE FROM force_plate_tests
+                 WHERE organization_id = $1 AND school_code = $2 AND test_id = $3`,
+                [args.organizationId, args.schoolCode, duplicate.test_id]
+              );
+            }
+          }
+        }
+        canonicalTestIds.set(testId, canonicalTestId);
+      }
+      const canonicalTestsById = new Map<string, { testType: string; recorded: Date | null }>();
+      for (const [testId, test] of testsById.entries()) {
+        canonicalTestsById.set(canonicalTestIds.get(testId) ?? testId, test);
+      }
+      for (const [testId, test] of canonicalTestsById.entries()) {
         testCount += 1;
         await client.query(
           `
@@ -168,21 +262,40 @@ export async function upsertForcePlateSnapshotToNeon(args: {
         );
       }
 
-      const syncedTestIds = Array.from(testsById.keys());
-      if (syncedTestIds.length) {
+      const normalizedRows = player.metricRows.map((row) => ({
+        ...row,
+        testId: canonicalTestIds.get(row.testId) ?? row.testId,
+      }));
+      const rowsByTest = new Map<string, ValdMetricRow[]>();
+      for (const row of normalizedRows) {
+        const rows = rowsByTest.get(row.testId) ?? [];
+        rows.push(row);
+        rowsByTest.set(row.testId, rows);
+      }
+      for (const [testId, incomingRows] of rowsByTest) {
+        const hasRepRows = incomingRows.some((row) => row.pointType === 'rep');
+        if (hasRepRows) {
+          await client.query(
+            `DELETE FROM force_plate_metric_rows
+             WHERE organization_id = $1 AND school_code = $2 AND test_id = $3`,
+            [args.organizationId, args.schoolCode, testId]
+          );
+          continue;
+        }
+        const metricIds = Array.from(new Set(incomingRows.map((row) => row.metricId)));
         await client.query(
-          `
-            DELETE FROM force_plate_metric_rows
-            WHERE organization_id = $1
-              AND school_code = $2
-              AND test_id = ANY($3::text[])
-          `,
-          [args.organizationId, args.schoolCode, syncedTestIds]
+          `DELETE FROM force_plate_metric_rows
+           WHERE organization_id = $1
+             AND school_code = $2
+             AND test_id = $3
+             AND point_type = 'average'
+             AND metric_id = ANY($4::int[])`,
+          [args.organizationId, args.schoolCode, testId, metricIds]
         );
       }
       const METRIC_ROW_BATCH_SIZE = 200;
-      for (let start = 0; start < player.metricRows.length; start += METRIC_ROW_BATCH_SIZE) {
-        const chunk = player.metricRows.slice(start, start + METRIC_ROW_BATCH_SIZE);
+      for (let start = 0; start < normalizedRows.length; start += METRIC_ROW_BATCH_SIZE) {
+        const chunk = normalizedRows.slice(start, start + METRIC_ROW_BATCH_SIZE);
         metricRowCount += chunk.length;
         const values: unknown[] = [];
         const placeholders: string[] = [];

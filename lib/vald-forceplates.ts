@@ -40,6 +40,7 @@ type ValdTrialMetric = {
   metricName: string;
   metricUnit: string;
   value: number;
+  limb: string;
 };
 
 type ValdTrialMetricPoint = {
@@ -49,6 +50,8 @@ type ValdTrialMetricPoint = {
   metricName: string;
   metricUnit: string;
   value: number;
+  limb: string;
+  repeat: number;
 };
 
 type ValdPlayerSeriesPoint = {
@@ -103,11 +106,30 @@ export type ValdSnapshot = {
 type ValdSnapshotFetchOptions = {
   trialFetchLimitOverride?: number;
   multiPlayerTrialFetchLimitOverride?: number;
+  trialFetchConcurrencyOverride?: number;
   lookbackDaysOverride?: number;
   testsWindowDaysOverride?: number;
   recentTestLimitOverride?: number;
   disableInMemoryCache?: boolean;
 };
+
+async function mapWithConcurrency<T, R>(
+  values: T[],
+  concurrency: number,
+  mapper: (value: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < values.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await mapper(values[index], index);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(values.length, Math.max(1, concurrency)) }, () => worker()));
+  return results;
+}
 
 const DEFAULT_VALD_TOKEN_URL = 'https://auth.prd.vald.com/oauth/token';
 const DEFAULT_LOOKBACK_DAYS = 180;
@@ -332,32 +354,48 @@ async function fetchTrialMetricsForTest(
   if (!teamId || !testId) return { aggregate: [], raw: [] };
   const payload = await valdGetJson<unknown>(baseUrl, `/v2019q3/teams/${teamId}/tests/${testId}/trials`, {});
   const trials = Array.isArray(payload) ? payload : [];
-  const aggregate = new Map<
-    number,
-    { metricName: string; metricUnit: string; sum: number; count: number }
-  >();
+  const aggregate = new Map<string, {
+    resultId: number;
+    metricName: string;
+    metricUnit: string;
+    limb: string;
+    sum: number;
+    count: number;
+  }>();
   const raw: ValdTrialMetricPoint[] = [];
   for (const trial of trials) {
     const data = trial as Record<string, unknown>;
     const trialId = String(data.id ?? '').trim();
     const recordedUTC = String(data.recordedUTC ?? '').trim();
+    const trialLimb = String(data.limb ?? '').trim();
     const results = Array.isArray(data.results) ? (data.results as Array<Record<string, unknown>>) : [];
     for (const row of results) {
-      const limb = String(row.limb ?? '').trim();
-      const repeat = Number(row.repeat ?? 0);
-      if (limb && limb !== 'Trial') continue;
-      if (repeat !== 0) continue;
+      const resultLimb = String(row.limb ?? '').trim();
+      const limb = (resultLimb === 'Trial' || resultLimb === 'Both' || !resultLimb) && /^(left|right)$/i.test(trialLimb)
+        ? trialLimb
+        : resultLimb || trialLimb || 'Trial';
+      const repeatRaw = Number(row.repeat ?? 0);
+      const repeat = Number.isFinite(repeatRaw) && repeatRaw >= 0 ? Math.floor(repeatRaw) : 0;
       const resultId = Number(row.resultId ?? 0);
       const value = Number(row.value);
       if (!Number.isFinite(resultId) || resultId <= 0 || !Number.isFinite(value)) continue;
       const definition = (row.definition as Record<string, unknown> | undefined) ?? {};
-      const metricName = String(definition.name ?? definition.result ?? `Metric ${resultId}`).trim() || `Metric ${resultId}`;
+      const baseMetricName = String(definition.name ?? definition.result ?? `Metric ${resultId}`).trim() || `Metric ${resultId}`;
+      const normalizedLimb = limb.toLowerCase();
+      const metricName = normalizedLimb === 'left'
+        ? `${baseMetricName} - Left`
+        : normalizedLimb === 'right'
+          ? `${baseMetricName} - Right`
+          : normalizedLimb === 'asym' || normalizedLimb === 'asymmetry'
+            ? `${baseMetricName} - Asymmetry`
+            : baseMetricName;
       const metricUnit = String(definition.unit ?? '').trim();
       const normalizedValue = normalizeMetricValue(metricName, metricUnit, value);
-      const current = aggregate.get(resultId) ?? { metricName, metricUnit, sum: 0, count: 0 };
+      const aggregateKey = `${resultId}__${normalizedLimb}`;
+      const current = aggregate.get(aggregateKey) ?? { resultId, metricName, metricUnit, limb, sum: 0, count: 0 };
       current.sum += normalizedValue;
       current.count += 1;
-      aggregate.set(resultId, current);
+      aggregate.set(aggregateKey, current);
       raw.push({
         trialId: trialId || `:`,
         dateTime: recordedUTC,
@@ -365,15 +403,18 @@ async function fetchTrialMetricsForTest(
         metricName,
         metricUnit,
         value: normalizedValue,
+        limb,
+        repeat,
       });
     }
   }
-  const aggregateRows = Array.from(aggregate.entries())
-    .map(([resultId, row]) => ({
-      resultId,
+  const aggregateRows = Array.from(aggregate.values())
+    .map((row) => ({
+      resultId: row.resultId,
       metricName: row.metricName,
       metricUnit: row.metricUnit,
       value: row.count ? row.sum / row.count : 0,
+      limb: row.limb,
     }))
     .filter((row) => Number.isFinite(row.value));
   return { aggregate: aggregateRows, raw };
@@ -603,6 +644,10 @@ export async function fetchValdForceDecksSnapshot(
     ? Math.max(0, Number(options?.multiPlayerTrialFetchLimitOverride))
     : multiPlayerTrialFetchLimitBase;
   const effectiveTrialFetchLimit = playerNames.length > 1 ? multiPlayerTrialFetchLimit : trialFetchLimitConfigured;
+  const trialFetchConcurrency = Math.max(
+    1,
+    Math.min(12, Number(options?.trialFetchConcurrencyOverride ?? process.env.VALD_TRIAL_FETCH_CONCURRENCY ?? 4))
+  );
   const cacheKey = snapshotCacheKey({
     tenantId,
     region,
@@ -689,14 +734,15 @@ export async function fetchValdForceDecksSnapshot(
     // The loop below is otherwise unchanged: it still processes tests in
     // order and does all its other bookkeeping inline, it just looks up the
     // already-fetched trial result instead of awaiting it itself.
-    const trialFetchResults = await Promise.all(
-      recent.map((test, idx) =>
+    const trialFetchResults = await mapWithConcurrency(
+      recent,
+      trialFetchConcurrency,
+      (test, idx) =>
         idx < effectiveTrialFetchLimit
           ? fetchTrialMetricsForTest(base.forcedecks, String(test.teamId ?? '').trim() || tenantId, test.testId).catch(
               () => ({ aggregate: [] as ValdTrialMetric[], raw: [] as ValdTrialMetricPoint[] })
             )
           : Promise.resolve({ aggregate: [] as ValdTrialMetric[], raw: [] as ValdTrialMetricPoint[] })
-      )
     );
     for (let idx = 0; idx < recent.length; idx += 1) {
       const test = recent[idx];
@@ -729,18 +775,15 @@ export async function fetchValdForceDecksSnapshot(
         addBodyWeightMetricRow(-1, 'Body Weight', 'kg', Number(test.weight));
       }
       const trialMetrics = trialFetchResults[idx] ?? { aggregate: [], raw: [] };
-      if (idx >= effectiveTrialFetchLimit) {
-        console.info('[vald-forceplates] trial fetch skipped by limit', {
-          testId: test.testId,
-          idx,
-          effectiveTrialFetchLimit,
-        });
-      }
       trialMetricsByTestId.set(test.testId, trialMetrics.aggregate);
       trialRawByTestId.set(test.testId, trialMetrics.raw);
 
       const baseMetrics = [test.parameter, ...(test.extendedParameters ?? [])].filter(Boolean) as ValdTestMetric[];
-      const trialAsMetrics = trialMetrics.aggregate.map((row) => ({
+      const combinedTrialMetrics = trialMetrics.aggregate.filter((row) => {
+        const limb = row.limb.toLowerCase();
+        return !limb || limb === 'trial' || limb === 'both';
+      });
+      const trialAsMetrics = combinedTrialMetrics.map((row) => ({
         resultId: row.resultId,
         value: row.value,
       }));
@@ -758,7 +801,7 @@ export async function fetchValdForceDecksSnapshot(
       const metrics = Array.from(metricsById.values());
       for (const metric of metrics) {
         if (!Number.isFinite(Number(metric.value))) continue;
-        const trialDef = trialMetricsByTestId.get(test.testId)?.find((row) => row.resultId === metric.resultId);
+        const trialDef = combinedTrialMetrics.find((row) => row.resultId === metric.resultId);
         const def = resultDefs.get(metric.resultId);
         const label = trialDef?.metricName ?? def?.resultName ?? `Metric ${metric.resultId}`;
         const unit = trialDef?.metricUnit ?? def?.resultUnitName ?? '';
@@ -779,6 +822,24 @@ export async function fetchValdForceDecksSnapshot(
           pointType: 'average',
         });
       }
+      for (const metric of trialMetrics.aggregate) {
+        const limb = metric.limb.toLowerCase();
+        if (!limb || limb === 'trial' || limb === 'both') continue;
+        if (isBodyWeightMetric(metric.metricName)) continue;
+        addMetricValue(metric.metricName, metric.metricUnit, metric.value);
+        metricRows.push({
+          testId: test.testId,
+          date: toShortDate(test.recordedDateUtc),
+          dateTime: test.recordedDateUtc,
+          testType: test.testType,
+          metricId: metric.resultId,
+          metricName: metric.metricName,
+          metricUnit: metric.metricUnit,
+          value: metric.value,
+          pointType: 'average',
+          pointLabel: metric.limb,
+        });
+      }
       const trialPoints = trialRawByTestId.get(test.testId) ?? [];
       for (const point of trialPoints) {
         metricRows.push({
@@ -792,7 +853,7 @@ export async function fetchValdForceDecksSnapshot(
           metricUnit: point.metricUnit,
           value: Number(point.value),
           pointType: 'rep',
-          pointLabel: point.trialId,
+          pointLabel: `${point.limb || 'Trial'}:${point.repeat + 1}`,
         });
       }
     }
