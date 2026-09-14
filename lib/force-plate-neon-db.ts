@@ -6,11 +6,18 @@ declare global {
 }
 
 function normalizeName(value: string): string {
-  return String(value ?? '')
-    .trim()
+  const raw = String(value ?? '').trim();
+  const firstLast = raw.includes(',')
+    ? (() => {
+        const [last, ...firstParts] = raw.split(',').map((part) => part.trim()).filter(Boolean);
+        return `${firstParts.join(' ')} ${last}`.trim();
+      })()
+    : raw;
+  return firstLast
     .toLowerCase()
     .replace(/\./g, '')
-    .replace(/[^a-z0-9]+/g, ' ');
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
 }
 
 async function ensureForcePlateNeonTables(): Promise<void> {
@@ -92,6 +99,10 @@ async function ensureForcePlateNeonTables(): Promise<void> {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_force_plate_metric_rows_player
     ON force_plate_metric_rows (organization_id, school_code, player_name_norm);
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_force_plate_metric_rows_player_point_date
+    ON force_plate_metric_rows (organization_id, school_code, player_name_norm, point_type, date_time_utc);
   `);
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_force_plate_metric_rows_test
@@ -400,6 +411,9 @@ export async function loadForcePlateSnapshotFromNeon(args: {
   organizationId: number;
   schoolCode: string;
   allowedPlayerNames?: string[];
+  metricPlayerNames?: string[];
+  pointTypes?: Array<'average' | 'rep'>;
+  includeMetrics?: boolean;
 }): Promise<{ snapshot: ValdSnapshot | null }> {
   if (!isDatabaseConfigured()) return { snapshot: null };
   await ensureForcePlateNeonTables();
@@ -422,8 +436,13 @@ export async function loadForcePlateSnapshotFromNeon(args: {
   const allowed = new Set((args.allowedPlayerNames ?? []).map((name) => normalizeName(name)));
   const playerRows = playersResult.rows.filter((row) => (allowed.size ? allowed.has(row.player_name_norm) : true));
   if (!playerRows.length) return { snapshot: null };
-  const norms = playerRows.map((row) => row.player_name_norm);
-  const metricsResult = await pool.query<{
+  const requestedMetricNorms = new Set((args.metricPlayerNames ?? []).map((name) => normalizeName(name)));
+  const metricPlayerRows = requestedMetricNorms.size
+    ? playerRows.filter((row) => requestedMetricNorms.has(row.player_name_norm))
+    : playerRows;
+  const norms = metricPlayerRows.map((row) => row.player_name_norm);
+  const pointTypes = Array.from(new Set(args.pointTypes ?? ['average', 'rep']));
+  type MetricDbRow = {
     player_name_norm: string;
     test_id: string;
     trial_id: string | null;
@@ -436,19 +455,25 @@ export async function loadForcePlateSnapshotFromNeon(args: {
     value: number;
     point_type: string;
     point_label: string | null;
-  }>(
-    `
+  };
+  let metricDbRows: MetricDbRow[] = [];
+  if (args.includeMetrics !== false && norms.length) {
+    const metricsResult = await pool.query<MetricDbRow>(
+      `
       SELECT player_name_norm, test_id, trial_id, date_short, date_time_utc, test_type, metric_id, metric_name, metric_unit, value, point_type, point_label
       FROM force_plate_metric_rows
       WHERE organization_id = $1
         AND school_code = $2
         AND player_name_norm = ANY($3::text[])
+        AND point_type = ANY($4::text[])
       ORDER BY COALESCE(date_time_utc, NOW()) ASC, test_id ASC
-    `,
-    [args.organizationId, args.schoolCode, norms]
-  );
+      `,
+      [args.organizationId, args.schoolCode, norms, pointTypes]
+    );
+    metricDbRows = metricsResult.rows;
+  }
   const byPlayer = new Map<string, ValdMetricRow[]>();
-  for (const row of metricsResult.rows) {
+  for (const row of metricDbRows) {
     const list = byPlayer.get(row.player_name_norm) ?? [];
     list.push({
       testId: row.test_id,
@@ -474,6 +499,257 @@ export async function loadForcePlateSnapshotFromNeon(args: {
       tenantId: 'neon',
       players,
     },
+  };
+}
+
+export type ForcePlateLeaderboardAggregate = {
+  playerName: string;
+  testType: string;
+  metricName: string;
+  metricUnit: string;
+  averageValue: number;
+  maximumValue: number;
+  samples: number;
+};
+
+export async function loadForcePlateMetricCatalog(args: {
+  organizationId: number;
+  schoolCode: string;
+}): Promise<{
+  metrics: Array<{ metricName: string; metricUnit: string; testTypes: string[] }>;
+  testTypes: string[];
+}> {
+  if (!isDatabaseConfigured()) return { metrics: [], testTypes: [] };
+  await ensureForcePlateNeonTables();
+  const result = await getDbPool().query<{ metric_name: string; metric_unit: string; test_type: string }>(
+    `SELECT DISTINCT metric_name, metric_unit, test_type
+     FROM force_plate_metric_rows
+     WHERE organization_id = $1
+       AND school_code = $2
+       AND point_type = 'average'
+     ORDER BY metric_name, metric_unit, test_type`,
+    [args.organizationId, args.schoolCode]
+  );
+  const metricMap = new Map<string, { metricName: string; metricUnit: string; testTypes: string[] }>();
+  for (const row of result.rows) {
+    const key = `${row.metric_name}\u001f${row.metric_unit}`;
+    const current = metricMap.get(key) ?? { metricName: row.metric_name, metricUnit: row.metric_unit, testTypes: [] };
+    if (row.test_type && !current.testTypes.includes(row.test_type)) current.testTypes.push(row.test_type);
+    metricMap.set(key, current);
+  }
+  const metrics = Array.from(metricMap.values()).map((metric) => ({ ...metric, testTypes: metric.testTypes.sort((a, b) => a.localeCompare(b)) }));
+  const testTypes = Array.from(new Set(result.rows.map((row) => row.test_type).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  return { metrics, testTypes };
+}
+
+export type ForcePlateReportMetricRow = {
+  playerName: string;
+  date: string;
+  dateTime: string;
+  testType: string;
+  metricName: string;
+  metricUnit: string;
+  value: number;
+  samples: number;
+};
+
+export async function loadForcePlateReportMetricRows(args: {
+  organizationId: number;
+  schoolCode: string;
+  allowedPlayerNames: string[];
+  selectedPlayerNames?: string[];
+  metrics: Array<{ metricName: string; metricUnit: string }>;
+  testType?: string;
+  startDate?: string;
+  endDate?: string;
+}): Promise<ForcePlateReportMetricRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureForcePlateNeonTables();
+  const allowedNorms = new Set(args.allowedPlayerNames.map((name) => normalizeName(name)).filter(Boolean));
+  const requestedNorms = (args.selectedPlayerNames ?? []).map((name) => normalizeName(name)).filter(Boolean);
+  const playerNorms = requestedNorms.length
+    ? Array.from(new Set(requestedNorms.filter((name) => allowedNorms.has(name))))
+    : Array.from(allowedNorms);
+  const metrics = args.metrics.filter((metric) => metric.metricName.trim());
+  if (!playerNorms.length || !metrics.length) return [];
+  const metricNames = metrics.map((metric) => metric.metricName);
+  const metricUnits = metrics.map((metric) => metric.metricUnit);
+  const result = await getDbPool().query<{
+    player_name: string;
+    date_short: string;
+    date_time_utc: string | null;
+    test_type: string;
+    metric_name: string;
+    metric_unit: string;
+    value: number;
+    samples: number;
+  }>(
+    `SELECT
+       player_name,
+       date_short,
+       MAX(date_time_utc)::text AS date_time_utc,
+       test_type,
+       metric_name,
+       metric_unit,
+       AVG(value)::double precision AS value,
+       COUNT(DISTINCT test_id)::integer AS samples
+     FROM force_plate_metric_rows
+     WHERE organization_id = $1
+       AND school_code = $2
+       AND player_name_norm = ANY($3::text[])
+       AND point_type = 'average'
+       AND ($4::date IS NULL OR date_time_utc >= $4::date)
+       AND ($5::date IS NULL OR date_time_utc < $5::date + INTERVAL '1 day')
+       AND (metric_name, metric_unit) IN (
+         SELECT metric_name, metric_unit
+         FROM unnest($6::text[], $7::text[]) AS selected(metric_name, metric_unit)
+       )
+       AND ($8::text IS NULL OR test_type = $8)
+     GROUP BY player_name, date_short, test_type, metric_name, metric_unit
+     ORDER BY MAX(date_time_utc) ASC NULLS LAST, date_short ASC, player_name ASC, test_type ASC, metric_name ASC, metric_unit ASC`,
+    [
+      args.organizationId,
+      args.schoolCode,
+      playerNorms,
+      args.startDate || null,
+      args.endDate || null,
+      metricNames,
+      metricUnits,
+      args.testType && args.testType !== 'All' ? args.testType : null,
+    ]
+  );
+  return result.rows.map((row) => ({
+    playerName: row.player_name,
+    date: row.date_short,
+    dateTime: row.date_time_utc ?? '',
+    testType: row.test_type,
+    metricName: row.metric_name,
+    metricUnit: row.metric_unit,
+    value: Number(row.value),
+    samples: Number(row.samples),
+  }));
+}
+
+export type ForcePlatePercentileRow = {
+  playerName: string;
+  testId: string;
+  dateTime: string;
+  dateShort: string;
+  testType: string;
+  value: number;
+};
+
+export async function loadForcePlatePercentileRows(args: {
+  organizationId: number;
+  schoolCode: string;
+  allowedPlayerNames: string[];
+  metricName: string;
+  metricUnit: string;
+  testType?: string;
+  startDate?: string;
+  endDate?: string;
+}): Promise<ForcePlatePercentileRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureForcePlateNeonTables();
+  const playerNorms = Array.from(new Set(args.allowedPlayerNames.map((name) => normalizeName(name)).filter(Boolean)));
+  if (!playerNorms.length || !args.metricName.trim()) return [];
+  const result = await getDbPool().query<{
+    player_name: string;
+    test_id: string;
+    date_time_utc: string | null;
+    date_short: string;
+    test_type: string;
+    value: number;
+  }>(
+    `SELECT player_name, test_id, date_time_utc::text, date_short, test_type, value
+     FROM force_plate_metric_rows
+     WHERE organization_id = $1
+       AND school_code = $2
+       AND player_name_norm = ANY($3::text[])
+       AND point_type = 'average'
+       AND metric_name = $4
+       AND metric_unit = $5
+       AND ($6::text IS NULL OR test_type = $6)
+       AND ($7::date IS NULL OR date_time_utc >= $7::date)
+       AND ($8::date IS NULL OR date_time_utc < $8::date + INTERVAL '1 day')
+     ORDER BY player_name_norm, date_time_utc ASC NULLS FIRST, date_short ASC, test_id ASC`,
+    [
+      args.organizationId,
+      args.schoolCode,
+      playerNorms,
+      args.metricName,
+      args.metricUnit,
+      args.testType && args.testType !== 'All' ? args.testType : null,
+      args.startDate || null,
+      args.endDate || null,
+    ]
+  );
+  return result.rows.map((row) => ({
+    playerName: row.player_name,
+    testId: row.test_id,
+    dateTime: row.date_time_utc ?? '',
+    dateShort: row.date_short,
+    testType: row.test_type,
+    value: Number(row.value),
+  }));
+}
+
+export async function loadForcePlateLeaderboardAggregates(args: {
+  organizationId: number;
+  schoolCode: string;
+  allowedPlayerNames: string[];
+  startDate?: string;
+  endDate?: string;
+}): Promise<{ rows: ForcePlateLeaderboardAggregate[]; minDate: string; maxDate: string }> {
+  if (!isDatabaseConfigured()) return { rows: [], minDate: '', maxDate: '' };
+  await ensureForcePlateNeonTables();
+  const playerNorms = Array.from(new Set(args.allowedPlayerNames.map((name) => normalizeName(name)).filter(Boolean)));
+  if (!playerNorms.length) return { rows: [], minDate: '', maxDate: '' };
+  const result = await getDbPool().query<{
+    player_name: string;
+    test_type: string;
+    metric_name: string;
+    metric_unit: string;
+    average_value: number;
+    maximum_value: number;
+    samples: number;
+    min_date: string | null;
+    max_date: string | null;
+  }>(
+    `SELECT
+       player_name,
+       test_type,
+       metric_name,
+       metric_unit,
+       AVG(value)::double precision AS average_value,
+       MAX(value)::double precision AS maximum_value,
+       COUNT(*)::integer AS samples,
+       MIN(date_time_utc)::text AS min_date,
+       MAX(date_time_utc)::text AS max_date
+     FROM force_plate_metric_rows
+     WHERE organization_id = $1
+       AND school_code = $2
+       AND player_name_norm = ANY($3::text[])
+       AND point_type = 'average'
+       AND ($4::date IS NULL OR date_time_utc >= $4::date)
+       AND ($5::date IS NULL OR date_time_utc < $5::date + INTERVAL '1 day')
+     GROUP BY player_name, test_type, metric_name, metric_unit
+     ORDER BY player_name, test_type, metric_name, metric_unit`,
+    [args.organizationId, args.schoolCode, playerNorms, args.startDate || null, args.endDate || null]
+  );
+  const dates = result.rows.flatMap((row) => [row.min_date, row.max_date]).filter((value): value is string => Boolean(value)).sort();
+  return {
+    rows: result.rows.map((row) => ({
+      playerName: row.player_name,
+      testType: row.test_type,
+      metricName: row.metric_name,
+      metricUnit: row.metric_unit,
+      averageValue: Number(row.average_value),
+      maximumValue: Number(row.maximum_value),
+      samples: Number(row.samples),
+    })),
+    minDate: dates[0]?.slice(0, 10) ?? '',
+    maxDate: dates[dates.length - 1]?.slice(0, 10) ?? '',
   };
 }
 

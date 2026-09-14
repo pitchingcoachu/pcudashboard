@@ -42,6 +42,8 @@ const ONE_DECIMAL_STAT_COLUMNS = new Set([
   'VAA',
   'NVAA',
   'HAA',
+  'ITMISSAVG',
+  'ITMISSMED',
   ...SEP_STAT_COLUMNS,
 ]);
 

@@ -13,7 +13,7 @@ export async function POST(request: Request) {
   const access = await requireAiAccess(request, true);
   if (!access.ok) return NextResponse.json({ error: access.error }, { status: access.status });
   const body = await request.json().catch(() => ({})) as Record<string, unknown>;
-  const domain = body.domain === 'hitting' ? 'hitting' : 'pitching';
+  const domain = body.domain === 'hitting' ? 'hitting' : body.domain === 'force_plates' ? 'force_plates' : 'pitching';
   const direction = ['increase', 'decrease', 'either'].includes(String(body.direction))
     ? body.direction as 'increase' | 'decrease' | 'either'
     : 'either';
@@ -39,6 +39,7 @@ export async function POST(request: Request) {
     minimumSample: Math.min(500, Math.max(1, Number(body.minimumSample ?? 5))),
     targetPlayer: String(body.targetPlayer ?? 'All').trim() || 'All',
     sessionType: String(body.sessionType ?? 'All').trim() || 'All',
+    testType: String(body.testType ?? 'All').trim() || 'All',
     notificationsEnabled: Boolean(body.notificationsEnabled),
     cooldownHours: Math.min(720, Math.max(1, Number(body.cooldownHours ?? 24))),
     enabled: body.enabled !== false,

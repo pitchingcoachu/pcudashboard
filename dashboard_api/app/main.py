@@ -2409,6 +2409,12 @@ def _split_key_from_row(row: Dict[str, Any], split_by: str) -> str:
         return "All"
     if split == "Pitch Types":
         return str(row.get("pitch_type") or "Unknown")
+    if split == "Date":
+        session_value = row.get("session_date")
+        if isinstance(session_value, date):
+            return session_value.isoformat()
+        session_str = str(session_value or "").strip()
+        return session_str[:10] if len(session_str) >= 10 else "Unknown"
     if split == "Year":
         session_value = row.get("session_date")
         if isinstance(session_value, date):
@@ -3647,6 +3653,7 @@ def _build_dynamic_table(
     split_col_map: Dict[str, str] = {
         "All": "All",
         "Pitch Types": "Pitch",
+        "Date": "Date",
         "Pitcher Hand": "Pitcher Hand",
         "Batter Hand": "Batter Hand",
         "Count": "Count",
@@ -5195,6 +5202,8 @@ def _build_dynamic_table(
     split_clean = (split_by or "Pitch Types").strip()
     if split_clean == "Pitch Types":
         ordered_items = sorted(groups.items(), key=lambda kv: (_pitch_type_sort_rank(kv[0]), kv[0]))
+    elif split_clean == "Date":
+        ordered_items = sorted(groups.items(), key=lambda kv: str(kv[0]))
     elif split_clean == "Times Through Order":
         tto_rank = {"1": 0, "2": 1, "3": 2, "4+": 3}
         ordered_items = sorted(groups.items(), key=lambda kv: (tto_rank.get(str(kv[0]), 9), str(kv[0])))
@@ -10630,6 +10639,7 @@ def _try_pitching_overview_daily_rollup(
     split_to_rollup_col: Dict[str, tuple[str, str]] = {
         "All": ("pitch_type", "All"),
         "Pitch Types": ("pitch_type", "Pitch"),
+        "Date": ("session_date::text", "Date"),
         "Pitcher": ("pitcher_name", "Pitcher"),
         "Batter": ("batter_name", "Batter"),
         "Catcher": ("catcher_name", "Catcher"),
@@ -11426,8 +11436,11 @@ def _try_pitching_overview_daily_rollup(
     elif split_clean == "Times Through Order":
         tto_order = {"1": 1, "2": 2, "3": 3, "4+": 4, "Unknown": 99}
         split_items.sort(key=lambda kv: (tto_order.get(str(kv[0]), 98), str(kv[0])))
-    elif split_clean in {"Year", "Month"}:
-        split_items.sort(key=lambda kv: _year_or_month_split_sort_key(kv[0]))
+    elif split_clean in {"Date", "Year", "Month"}:
+        if split_clean == "Date":
+            split_items.sort(key=lambda kv: str(kv[0]))
+        else:
+            split_items.sort(key=lambda kv: _year_or_month_split_sort_key(kv[0]))
     else:
         split_items.sort(key=lambda kv: (-sum(int(r.get("pitches") or 0) for r in kv[1]), str(kv[0])))
 
@@ -13597,6 +13610,7 @@ def _try_pro_pitching_overview_rollup(
     split_to_expr: Dict[str, tuple[str, str]] = {
         "All": ("pitch_type", "All"),
         "Pitch Types": ("pitch_type", "Pitch"),
+        "Date": ("session_date::text", "Date"),
         "Pitcher": ("pitcher_name", "Pitcher"),
         "Batter": ("batter_name", "Batter"),
         "Catcher": ("catcher_name", "Catcher"),
@@ -14253,8 +14267,11 @@ def _try_pro_pitching_overview_rollup(
     split_items = list(grouped_by_split.items())
     if split_clean == "Pitch Types":
         split_items.sort(key=lambda kv: (pitch_order.get(str(kv[0]), 99), str(kv[0])))
-    elif split_clean in {"Year", "Month"}:
-        split_items.sort(key=lambda kv: _year_or_month_split_sort_key(kv[0]))
+    elif split_clean in {"Date", "Year", "Month"}:
+        if split_clean == "Date":
+            split_items.sort(key=lambda kv: str(kv[0]))
+        else:
+            split_items.sort(key=lambda kv: _year_or_month_split_sort_key(kv[0]))
     else:
         split_items.sort(key=lambda kv: (-sum(int(r.get("pitches") or 0) for r in kv[1]), str(kv[0])))
     total_single_n = int(sum(int(r.get("single_n") or 0) for r in grouped_rows))
@@ -15029,6 +15046,7 @@ def _try_pro_hitting_overview_rollup(
             return None
     split_to_expr: Dict[str, tuple[str, bool]] = {
         "Pitch Types": ("pitch_type", False),
+        "Date": ("session_date::text", False),
         "Batter": ("batter_name", False),
         "Batter Team": ("batter_team_code", False),
         "Batter Hand": ("batterside_norm", False),
@@ -15471,6 +15489,7 @@ def _try_league_hitting_overview_rollup(
         return None
     split_to_expr: Dict[str, tuple[str, bool]] = {
         "Pitch Types": ("pitch_type", False),
+        "Date": ("session_date::text", False),
         "Batter": ("batter_name", False),
         "Batter Team": ("batter_team_norm_eff", False),
         "Batter Hand": ("batterside_norm", False),
@@ -18150,6 +18169,7 @@ def _pro_rollup_filters_hitting(level_norm: str) -> Optional[Dict[str, Any]]:
         "table_modes": ["Results", "Swing Decisions", "Swing Metrics", "Batted Ball Data", "Custom"],
         "split_by_options": [
             "All",
+            "Date",
             "Pitch Types",
             "Pitcher Hand",
             "Year",
@@ -20573,6 +20593,7 @@ def _pro_hitting_filters(school_code: str, level: Optional[str] = None) -> Dict[
             "table_modes": ["Results", "Swing Decisions", "Swing Metrics", "Batted Ball Data", "Custom"],
             "split_by_options": [
                 "All",
+                "Date",
                 "Pitch Types",
                 "Pitcher Hand",
                 "Year",
@@ -20882,6 +20903,7 @@ def _pro_hitting_filters(school_code: str, level: Optional[str] = None) -> Dict[
         "table_modes": ["Results", "Swing Decisions", "Swing Metrics", "Batted Ball Data", "Custom"],
         "split_by_options": [
             "All",
+            "Date",
             "Pitch Types",
             "Pitcher Hand",
             "Year",
@@ -22768,6 +22790,7 @@ def pitching_overview(
                 table_mode = "Live"
             if split_by not in {
                 "All",
+                "Date",
                 "Pitch Types",
                 "Pitcher",
                 "Batter",
@@ -22849,6 +22872,7 @@ def pitching_overview(
                 table_mode = "Live"
             if split_by not in {
                 "All",
+                "Date",
                 "Pitch Types",
                 "Pitcher",
                 "Batter",
@@ -22900,6 +22924,7 @@ def pitching_overview(
                 table_mode = "Live"
             if split_by not in {
                 "All",
+                "Date",
                 "Pitch Types",
                 "Pitcher",
                 "Batter",
@@ -26330,6 +26355,7 @@ def hitting_filters(
         "table_modes": ["Results", "Swing Decisions", "Swing Metrics", "Batted Ball Data", "Custom"],
         "split_by_options": [
             "All",
+            "Date",
             "Pitch Types",
             "Pitcher Hand",
             "Year",
@@ -26550,6 +26576,7 @@ def hitting_overview(
             table_mode_mapped = mode_map.get(mode_raw, "Hitting Results")
             if split_by not in {
                 "All",
+                "Date",
                 "Pitch Types",
                 "Batter",
                 "Pitcher Hand",
@@ -28104,6 +28131,7 @@ def catching_overview(
                 mode_raw = "Results"
             if split_by_raw not in {
                 "All",
+                "Date",
                 "Pitch Types",
                 "Pitcher",
                 "Batter",

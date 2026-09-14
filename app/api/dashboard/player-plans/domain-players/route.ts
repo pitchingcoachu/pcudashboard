@@ -4,8 +4,10 @@ import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
 import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, selectScopedPlayerName, shouldScopeDashboardPlayer } from '../../../../../lib/dashboard-player-scope';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
+import { canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../../lib/programming-scope';
+import { getPlayerForUser, listPlayerChoicesByOrganization } from '../../../../../lib/training-db';
 
-type Domain = 'Pitching' | 'Hitting' | 'Catching';
+type Domain = 'Pitching' | 'Hitting' | 'Catching' | 'Force Plates';
 
 function uniqueNames(values: string[]): string[] {
   return Array.from(new Set(values.map((entry) => String(entry ?? '').trim()).filter(Boolean)));
@@ -22,7 +24,7 @@ export async function GET(request: Request) {
 
   const inputUrl = new URL(request.url);
   const domainRaw = String(inputUrl.searchParams.get('domain') ?? '').trim();
-  const domain: Domain = domainRaw === 'Hitting' || domainRaw === 'Catching' ? domainRaw : 'Pitching';
+  const domain: Domain = domainRaw === 'Hitting' || domainRaw === 'Catching' || domainRaw === 'Force Plates' ? domainRaw : 'Pitching';
 
   const schoolCode = resolveDashboardSchoolCode({
     userId: session.userId ?? 0,
@@ -50,6 +52,18 @@ export async function GET(request: Request) {
   }
 
   try {
+    if (domain === 'Force Plates') {
+      if (!(await canUseProgrammingData(session)) || resolveProgrammingSchoolCode(session) !== 'PCU') {
+        return NextResponse.json({ players: [] }, { headers: RESPONSE_CACHE_HEADERS });
+      }
+      const organizationId = await resolveProgrammingOrganizationId(session);
+      if (session.role === 'player') {
+        const own = await getPlayerForUser({ organizationId, userId: session.userId ?? 0 });
+        return NextResponse.json({ players: own?.fullName ? [own.fullName] : [] }, { headers: RESPONSE_CACHE_HEADERS });
+      }
+      const roster = await listPlayerChoicesByOrganization({ organizationId, assignedCoachUserId: null });
+      return NextResponse.json({ players: uniqueNames(roster.map((player) => player.fullName)) }, { headers: RESPONSE_CACHE_HEADERS });
+    }
     if (domain === 'Hitting' || domain === 'Pitching' || domain === 'Catching') {
       const filtersUrl = new URL(`${apiBase}/v1/${domain.toLowerCase()}/filters`);
       filtersUrl.searchParams.set('school_code', schoolCode);

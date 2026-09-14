@@ -1,4 +1,5 @@
 import { getDbPool, isDatabaseConfigured } from './auth-db';
+import { sanitizeAiProcessingError } from './openai-transcription-config';
 
 export type AiSessionStatus = 'uploaded' | 'processing' | 'ready' | 'failed';
 export type AiSessionRow = {
@@ -21,7 +22,7 @@ export type AiSessionRow = {
 export type FlagRuleRow = {
   id: number;
   name: string;
-  domain: 'pitching' | 'hitting';
+  domain: 'pitching' | 'hitting' | 'force_plates';
   metric: string;
   pitchType: string;
   pitchTypes: string[];
@@ -32,6 +33,7 @@ export type FlagRuleRow = {
   minimumSample: number;
   targetPlayer: string;
   sessionType: string;
+  testType: string;
   notificationsEnabled: boolean;
   cooldownHours: number;
   enabled: boolean;
@@ -46,7 +48,7 @@ declare global {
   var __pcuAiWorkspaceReadyPromise: Promise<void> | undefined;
 }
 
-const AI_WORKSPACE_SCHEMA_VERSION = 3;
+const AI_WORKSPACE_SCHEMA_VERSION = 5;
 
 export async function ensureAiWorkspaceReady(): Promise<void> {
   if (!isDatabaseConfigured() || global.__pcuAiWorkspaceSchemaVersion === AI_WORKSPACE_SCHEMA_VERSION) return;
@@ -54,6 +56,7 @@ export async function ensureAiWorkspaceReady(): Promise<void> {
   global.__pcuAiWorkspaceReadyPromise = (async () => {
     const pool = getDbPool();
     await pool.query(`
+      SELECT pg_advisory_xact_lock(71948321);
       CREATE TABLE IF NOT EXISTS ai_sessions (
         id BIGSERIAL PRIMARY KEY,
         organization_id BIGINT NOT NULL,
@@ -87,7 +90,7 @@ export async function ensureAiWorkspaceReady(): Promise<void> {
         id BIGSERIAL PRIMARY KEY,
         organization_id BIGINT NOT NULL,
         name TEXT NOT NULL,
-        domain TEXT NOT NULL CHECK (domain IN ('pitching', 'hitting')),
+        domain TEXT NOT NULL CHECK (domain IN ('pitching', 'hitting', 'force_plates')),
         metric TEXT NOT NULL,
         pitch_type TEXT NOT NULL DEFAULT 'All',
         direction TEXT NOT NULL CHECK (direction IN ('increase', 'decrease', 'either')),
@@ -97,6 +100,7 @@ export async function ensureAiWorkspaceReady(): Promise<void> {
         minimum_sample INTEGER NOT NULL DEFAULT 5,
         target_player TEXT NOT NULL DEFAULT 'All',
         session_type TEXT NOT NULL DEFAULT 'All',
+        test_type TEXT NOT NULL DEFAULT 'All',
         notifications_enabled BOOLEAN NOT NULL DEFAULT FALSE,
         cooldown_hours INTEGER NOT NULL DEFAULT 24,
         enabled BOOLEAN NOT NULL DEFAULT TRUE,
@@ -113,7 +117,21 @@ export async function ensureAiWorkspaceReady(): Promise<void> {
         PRIMARY KEY (rule_id, player_name, session_date)
       );
       ALTER TABLE metric_flag_rules ADD COLUMN IF NOT EXISTS pitch_types TEXT[] NOT NULL DEFAULT ARRAY['All']::TEXT[];
+      ALTER TABLE metric_flag_rules ADD COLUMN IF NOT EXISTS test_type TEXT NOT NULL DEFAULT 'All';
       ALTER TABLE metric_flag_rules ADD COLUMN IF NOT EXISTS display_order INTEGER;
+      DO $$
+      DECLARE domain_constraint TEXT;
+      BEGIN
+        SELECT pg_get_constraintdef(oid) INTO domain_constraint
+        FROM pg_constraint
+        WHERE conrelid = 'metric_flag_rules'::regclass
+          AND conname = 'metric_flag_rules_domain_check';
+        IF domain_constraint IS NULL OR POSITION('force_plates' IN domain_constraint) = 0 THEN
+          ALTER TABLE metric_flag_rules DROP CONSTRAINT IF EXISTS metric_flag_rules_domain_check;
+          ALTER TABLE metric_flag_rules ADD CONSTRAINT metric_flag_rules_domain_check
+            CHECK (domain IN ('pitching', 'hitting', 'force_plates'));
+        END IF;
+      END $$;
       UPDATE metric_flag_rules
       SET pitch_types = ARRAY[pitch_type]::TEXT[]
       WHERE pitch_types = ARRAY['All']::TEXT[]
@@ -129,6 +147,11 @@ export async function ensureAiWorkspaceReady(): Promise<void> {
         AND rule.display_order IS NULL;
       ALTER TABLE metric_flag_rules ALTER COLUMN display_order SET DEFAULT 0;
       ALTER TABLE metric_flag_rules ALTER COLUMN display_order SET NOT NULL;
+      UPDATE player_plan_notes
+      SET category = 'AI Transcript',
+          note_text = REGEXP_REPLACE(note_text, '^AI Session:', 'AI Transcript:')
+      WHERE source_type = 'ai_session'
+        AND (category = 'AI Session' OR note_text LIKE 'AI Session:%');
     `);
     global.__pcuAiWorkspaceReady = true;
     global.__pcuAiWorkspaceSchemaVersion = AI_WORKSPACE_SCHEMA_VERSION;
@@ -137,6 +160,7 @@ export async function ensureAiWorkspaceReady(): Promise<void> {
 }
 
 function mapSession(row: Record<string, unknown>): AiSessionRow {
+  const storedError = row.error_message ? String(row.error_message) : null;
   return {
     id: Number(row.id), title: String(row.title), sessionType: String(row.session_type),
     sourceKind: row.source_kind === 'video' ? 'video' : 'audio', status: row.status as AiSessionStatus,
@@ -145,7 +169,8 @@ function mapSession(row: Record<string, unknown>): AiSessionRow {
     keepAudio: Boolean(row.keep_audio), audioAvailable: Boolean(row.audio_r2_key),
     playerIds: Array.isArray(row.player_ids) ? row.player_ids.map(Number) : [],
     playerNames: Array.isArray(row.player_names) ? row.player_names.map(String) : [],
-    createdAt: String(row.created_at), errorMessage: row.error_message ? String(row.error_message) : null,
+    createdAt: String(row.created_at),
+    errorMessage: storedError ? sanitizeAiProcessingError(storedError).message : null,
   };
 }
 
@@ -237,7 +262,7 @@ export async function syncAiSessionPlayerNotes(id: number, organizationId: numbe
     if (session) {
       const bullets = Array.isArray(session.summary_json) ? session.summary_json.map(String).filter(Boolean) : [];
       const sections = [
-        `AI Session: ${session.title}`,
+        `AI Transcript: ${session.title}`,
         `Session Type: ${session.session_type}`,
         bullets.length ? `Key Points:\n${bullets.map((bullet) => `• ${bullet}`).join('\n')}` : '',
         session.transcript_text.trim() ? `Full Transcript:\n${session.transcript_text.trim()}` : '',
@@ -247,7 +272,7 @@ export async function syncAiSessionPlayerNotes(id: number, organizationId: numbe
            player_id, domain, note_date, category, note_text, source_type, source_id,
            player_visible, created_by_user_id
          )
-         SELECT player.id, 'General', ai.created_at::date, 'AI Session', $3,
+         SELECT player.id, 'General', ai.created_at::date, 'AI Transcript', $3,
                 'ai_session', $4, TRUE, ai.created_by_user_id
          FROM ai_sessions AS ai
          JOIN ai_session_players AS linked ON linked.session_id = ai.id
@@ -277,17 +302,17 @@ export async function editAiSession(input:{id:number;organizationId:number;title
 function mapFlagRule(row: Record<string, unknown>): FlagRuleRow {
   const pitchTypes=Array.isArray(row.pitch_types)?row.pitch_types.map(String).map((value)=>value.trim()).filter(Boolean):[];
   const normalizedPitchTypes=pitchTypes.length?pitchTypes:[String(row.pitch_type??'All')];
-  return { id:Number(row.id),name:String(row.name),domain:row.domain as 'pitching'|'hitting',metric:String(row.metric),pitchType:normalizedPitchTypes.length===1?normalizedPitchTypes[0]:normalizedPitchTypes.join(', '),pitchTypes:normalizedPitchTypes,
+  return { id:Number(row.id),name:String(row.name),domain:row.domain as FlagRuleRow['domain'],metric:String(row.metric),pitchType:normalizedPitchTypes.length===1?normalizedPitchTypes[0]:normalizedPitchTypes.join(', '),pitchTypes:normalizedPitchTypes,
     direction:row.direction as FlagRuleRow['direction'],threshold:Number(row.threshold),thresholdType:row.threshold_type as FlagRuleRow['thresholdType'],
-    baselineDays:Number(row.baseline_days),minimumSample:Number(row.minimum_sample),targetPlayer:String(row.target_player),sessionType:String(row.session_type),
+    baselineDays:Number(row.baseline_days),minimumSample:Number(row.minimum_sample),targetPlayer:String(row.target_player),sessionType:String(row.session_type),testType:String(row.test_type??'All'),
     notificationsEnabled:Boolean(row.notifications_enabled),cooldownHours:Number(row.cooldown_hours),enabled:Boolean(row.enabled),displayOrder:Number(row.display_order??0),createdAt:String(row.created_at),createdByUserId:row.created_by_user_id?Number(row.created_by_user_id):null };
 }
 
 export async function listFlagRules(organizationId:number):Promise<FlagRuleRow[]> { await ensureAiWorkspaceReady(); const r=await getDbPool().query<Record<string,unknown>>(`SELECT * FROM metric_flag_rules WHERE organization_id=$1 ORDER BY display_order ASC, created_at DESC`,[organizationId]);return r.rows.map(mapFlagRule); }
 export async function saveFlagRule(input:Omit<FlagRuleRow,'id'|'createdAt'|'createdByUserId'|'pitchType'|'displayOrder'> & {organizationId:number;userId:number;id?:number}):Promise<number> {
-  await ensureAiWorkspaceReady(); const pitchTypes=input.pitchTypes.length?input.pitchTypes:['All'];const legacyPitchType=pitchTypes.length===1?pitchTypes[0]:'All';const values=[input.organizationId,input.name,input.domain,input.metric,legacyPitchType,pitchTypes,input.direction,input.threshold,input.thresholdType,input.baselineDays,input.minimumSample,input.targetPlayer,input.sessionType,input.notificationsEnabled,input.cooldownHours,input.enabled,input.userId];
-  if(input.id){const r=await getDbPool().query<{id:number}>(`UPDATE metric_flag_rules SET name=$2,domain=$3,metric=$4,pitch_type=$5,pitch_types=$6::text[],direction=$7,threshold=$8,threshold_type=$9,baseline_days=$10,minimum_sample=$11,target_player=$12,session_type=$13,notifications_enabled=$14,cooldown_hours=$15,enabled=$16,updated_at=NOW() WHERE organization_id=$1 AND id=$18 RETURNING id`,[...values,input.id]);return Number(r.rows[0]?.id||0);}
-  const r=await getDbPool().query<{id:number}>(`INSERT INTO metric_flag_rules (organization_id,name,domain,metric,pitch_type,pitch_types,direction,threshold,threshold_type,baseline_days,minimum_sample,target_player,session_type,notifications_enabled,cooldown_hours,enabled,display_order,created_by_user_id) SELECT $1,$2,$3,$4,$5,$6::text[],$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,COALESCE(MAX(display_order)+1,0),$17 FROM metric_flag_rules WHERE organization_id=$1 RETURNING id`,values);return Number(r.rows[0].id);
+  await ensureAiWorkspaceReady(); const pitchTypes=input.pitchTypes.length?input.pitchTypes:['All'];const legacyPitchType=pitchTypes.length===1?pitchTypes[0]:'All';const values=[input.organizationId,input.name,input.domain,input.metric,legacyPitchType,pitchTypes,input.direction,input.threshold,input.thresholdType,input.baselineDays,input.minimumSample,input.targetPlayer,input.sessionType,input.testType,input.notificationsEnabled,input.cooldownHours,input.enabled,input.userId];
+  if(input.id){const r=await getDbPool().query<{id:number}>(`UPDATE metric_flag_rules SET name=$2,domain=$3,metric=$4,pitch_type=$5,pitch_types=$6::text[],direction=$7,threshold=$8,threshold_type=$9,baseline_days=$10,minimum_sample=$11,target_player=$12,session_type=$13,test_type=$14,notifications_enabled=$15,cooldown_hours=$16,enabled=$17,updated_at=NOW() WHERE organization_id=$1 AND id=$19 RETURNING id`,[...values,input.id]);return Number(r.rows[0]?.id||0);}
+  const r=await getDbPool().query<{id:number}>(`INSERT INTO metric_flag_rules (organization_id,name,domain,metric,pitch_type,pitch_types,direction,threshold,threshold_type,baseline_days,minimum_sample,target_player,session_type,test_type,notifications_enabled,cooldown_hours,enabled,display_order,created_by_user_id) SELECT $1,$2,$3,$4,$5,$6::text[],$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,COALESCE(MAX(display_order)+1,0),$18 FROM metric_flag_rules WHERE organization_id=$1 RETURNING id`,values);return Number(r.rows[0].id);
 }
 export async function deleteFlagRule(id:number,organizationId:number):Promise<void>{await ensureAiWorkspaceReady();await getDbPool().query(`DELETE FROM metric_flag_rules WHERE id=$1 AND organization_id=$2`,[id,organizationId]);}
 export async function reorderFlagRules(organizationId:number,ruleIds:number[]):Promise<boolean>{

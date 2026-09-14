@@ -3211,6 +3211,80 @@ body.theme-light .portal-notification-item:focus-visible {
   background: rgba(15, 23, 42, 0.06);
 }
 
+.portal-trackman-sync {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.portal-trackman-sync-btn {
+  display: inline-grid;
+  width: 1.85rem;
+  height: 1.85rem;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(10, 10, 10, 0.55);
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.portal-trackman-sync-btn:hover,
+.portal-trackman-sync-btn:focus-visible {
+  opacity: 1;
+  border-color: rgba(var(--portal-accent-rgb, 200, 16, 46), 0.5);
+  color: var(--text-main);
+  outline: none;
+}
+
+.portal-trackman-sync-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.portal-trackman-sync-btn svg {
+  width: 0.92rem;
+  height: 0.92rem;
+  fill: currentColor;
+}
+
+.portal-trackman-sync-note {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  z-index: 220;
+  width: max-content;
+  max-width: 220px;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(8, 8, 8, 0.96);
+  color: var(--text-main);
+  font-size: 0.7rem;
+  font-weight: 700;
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.35);
+}
+
+body.theme-light .portal-trackman-sync-btn {
+  border-color: rgba(15, 23, 42, 0.14);
+  background: rgba(255, 255, 255, 0.85);
+  color: #64748b;
+}
+
+body.theme-light .portal-trackman-sync-btn:hover,
+body.theme-light .portal-trackman-sync-btn:focus-visible {
+  color: #0f172a;
+}
+
+body.theme-light .portal-trackman-sync-note {
+  border-color: rgba(15, 23, 42, 0.16);
+  background: rgba(255, 255, 255, 0.99);
+  color: #0f172a;
+  box-shadow: 0 16px 32px rgba(15, 23, 42, 0.15);
+}
+
 .portal-user-meta {
   display: grid;
   justify-items: end;
@@ -7243,6 +7317,514 @@ body.theme-light .portal-player-search-option.active {
   font-weight: 700;
 }
 
+/* Schedule drill builders: an understated performance-lab workspace. */
+.portal-schedule-workspace .portal-schedule-toolbar {
+  position: relative;
+  isolation: isolate;
+  gap: 0.75rem;
+  padding: 1.15rem;
+  overflow: visible;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, rgba(225, 29, 72, 0.075), transparent 32%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.012));
+  box-shadow: 0 24px 65px rgba(0, 0, 0, 0.22), inset 0 1px rgba(255, 255, 255, 0.045);
+}
+
+.portal-schedule-workspace .portal-schedule-toolbar::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  border-radius: inherit;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px);
+  background-size: 32px 32px;
+  content: '';
+  pointer-events: none;
+  mask-image: linear-gradient(to bottom, black, transparent 62%);
+}
+
+.portal-schedule-workspace .portal-schedule-view-switch {
+  gap: 0.45rem;
+}
+
+.portal-drills-workspace input,
+.portal-drills-workspace select,
+.portal-drills-workspace textarea,
+.portal-drills-workspace button {
+  font-family: inherit;
+}
+
+.portal-drills-workspace-heading {
+  display: flex;
+  width: 100%;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1.5rem;
+  margin-top: 0.2rem;
+  padding: 1.35rem 0.35rem 0.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.portal-drills-workspace-heading h2 {
+  margin: 0.18rem 0 0.25rem;
+  font-size: clamp(1.65rem, 2.5vw, 2.45rem);
+  line-height: 1;
+  letter-spacing: -0.035em;
+}
+
+.portal-drills-workspace-heading p {
+  max-width: 680px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+
+.portal-drills-eyebrow {
+  display: block;
+  color: var(--accent);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.portal-drills-workspace-meta {
+  display: grid;
+  min-width: 190px;
+  gap: 0.2rem;
+  padding: 0.72rem 0.9rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.28);
+  text-align: right;
+}
+
+.portal-drills-workspace-meta span {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.portal-drills-workspace-meta strong {
+  font-size: 0.94rem;
+}
+
+.portal-drills-setup-stack {
+  display: grid;
+  width: 100%;
+  gap: 0.85rem;
+}
+
+.portal-drills-quick-add {
+  display: grid;
+  grid-template-columns: minmax(190px, 0.55fr) minmax(0, 2fr);
+  align-items: center;
+  gap: 1rem;
+  padding: 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.24);
+}
+
+.portal-drills-quick-add-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.portal-drills-quick-add-heading > div {
+  display: grid;
+  gap: 0.14rem;
+}
+
+.portal-drills-quick-add-heading strong {
+  font-size: 0.94rem;
+}
+
+.portal-drills-quick-add-heading span:not(.portal-drills-quick-add-icon) {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.portal-drills-quick-add-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  font-size: 1.3rem;
+  font-weight: 500;
+}
+
+.portal-drills-quick-add-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.portal-drills-quick-add-fields .portal-schedule-control {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+}
+
+.portal-drills-new-name {
+  flex: 1 1 180px;
+}
+
+.portal-drills-new-category {
+  flex: 0 1 170px;
+}
+
+.portal-drills-custom-category {
+  flex: 1 1 180px;
+}
+
+.portal-drills-new-video {
+  flex: 1 1 220px;
+}
+
+.portal-drills-library-toggle {
+  display: inline-flex !important;
+  min-height: 42px;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 0.45rem !important;
+  padding: 0 0.3rem;
+  white-space: nowrap;
+}
+
+.portal-drills-workspace .portal-drills-template-controls {
+  gap: 0.85rem;
+}
+
+.portal-drills-workspace .portal-drills-template-control {
+  grid-template-columns: minmax(145px, 0.9fr) minmax(180px, 1.25fr) 76px auto;
+  gap: 0.65rem;
+  padding: 1rem;
+  border-color: rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 100% 0, rgba(225, 29, 72, 0.11), transparent 38%),
+    rgba(0, 0, 0, 0.26);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.035);
+}
+
+.portal-drills-template-heading {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 0.65rem;
+  padding-bottom: 0.7rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.085);
+}
+
+.portal-drills-template-heading > span {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 62%, transparent);
+  border-radius: 50%;
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.portal-drills-template-heading > div {
+  display: grid;
+  gap: 0.08rem;
+}
+
+.portal-drills-template-heading strong {
+  font-size: 0.98rem;
+}
+
+.portal-drills-template-heading small {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 650;
+}
+
+.portal-drills-workspace .portal-drills-template-control label {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.portal-drills-workspace .portal-drills-template-control label > .portal-schedule-control {
+  color: var(--text-main);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.portal-drills-workspace .portal-drills-template-actions .btn {
+  min-height: 42px;
+}
+
+.portal-drills-workspace .portal-drills-sections {
+  gap: 1rem;
+}
+
+.portal-drills-workspace .portal-drills-note-section {
+  width: min(780px, 100%);
+  padding: 0.85rem 1rem 1rem;
+  border-color: rgba(255, 255, 255, 0.11);
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.24);
+}
+
+.portal-drills-workspace .portal-drills-note-section label {
+  gap: 0.18rem;
+  text-align: left;
+}
+
+.portal-drills-workspace .portal-drills-note-section strong {
+  margin-bottom: 0.35rem;
+  font-size: 1rem;
+}
+
+.portal-drills-workspace .portal-drills-note-section textarea {
+  min-height: 62px;
+  padding: 0.75rem 0.85rem;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 0.94rem;
+  font-weight: 600;
+}
+
+.portal-drills-workspace .portal-drills-section {
+  padding: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 20%),
+    rgba(0, 0, 0, 0.22);
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.16);
+}
+
+.portal-drills-section-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.8rem;
+  padding: 0.1rem 0.15rem 0.8rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.portal-drills-workspace .portal-drills-section-heading h3 {
+  margin: 0.2rem 0 0;
+  text-align: left;
+  font-size: 1.18rem;
+  letter-spacing: -0.02em;
+}
+
+.portal-drills-section-heading p {
+  margin: 0.2rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
+.portal-drills-slot-count {
+  flex: 0 0 auto;
+  padding: 0.38rem 0.58rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 850;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.portal-drills-workspace .portal-drills-section .portal-table-wrap {
+  border: 0;
+  background: transparent;
+}
+
+.portal-drills-workspace .portal-drills-table {
+  border-spacing: 0 0.42rem;
+  border-collapse: separate;
+}
+
+.portal-drills-workspace .portal-drills-table th {
+  padding: 0 0.45rem 0.28rem;
+  border: 0;
+  color: var(--text-muted);
+  font-size: 0.66rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.portal-drills-workspace .portal-drills-table td {
+  padding: 0.3rem;
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.095);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.095);
+  background: rgba(255, 255, 255, 0.025);
+  transition: border-color 150ms ease, background 150ms ease, transform 150ms ease;
+}
+
+.portal-drills-workspace .portal-drills-table tr:hover td {
+  border-color: rgba(225, 29, 72, 0.28);
+  background: rgba(225, 29, 72, 0.045);
+}
+
+.portal-drills-workspace .portal-drills-table td:first-child {
+  border-left: 1px solid rgba(255, 255, 255, 0.095);
+  border-radius: 11px 0 0 11px;
+}
+
+.portal-drills-workspace .portal-drills-table td:last-child {
+  border-right: 1px solid rgba(255, 255, 255, 0.095);
+  border-radius: 0 11px 11px 0;
+}
+
+.portal-drills-workspace .portal-drills-table input,
+.portal-drills-workspace .portal-drills-table textarea {
+  min-height: 44px;
+  border-color: transparent;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.portal-drills-workspace .portal-drills-table input:focus,
+.portal-drills-workspace .portal-drills-table textarea:focus {
+  border-color: color-mix(in srgb, var(--accent) 58%, transparent);
+  background: rgba(0, 0, 0, 0.28);
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.portal-drills-workspace .portal-drills-row-handle {
+  width: 30px;
+  height: 38px;
+  border-color: transparent;
+  background: transparent;
+  font-size: 0.7rem;
+  letter-spacing: -0.25em;
+}
+
+.portal-drills-workspace .portal-drills-row-handle:hover {
+  border-color: rgba(255, 255, 255, 0.13);
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--text-main);
+}
+
+.portal-drills-workspace .portal-drill-picker-cell {
+  position: relative;
+  display: block;
+}
+
+.portal-drills-workspace .portal-drill-picker-cell:has(.portal-drill-video-trigger) input {
+  padding-right: 2.65rem;
+}
+
+.portal-drill-video-trigger {
+  position: absolute;
+  top: 50%;
+  right: 0.42rem;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  transform: translateY(-50%);
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, rgba(255, 255, 255, 0.13));
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 12%, rgba(0, 0, 0, 0.72));
+  color: var(--text-main);
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease, transform 150ms ease;
+}
+
+.portal-drill-video-trigger:hover {
+  transform: translateY(-50%) scale(1.06);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 24%, rgba(0, 0, 0, 0.68));
+}
+
+.portal-drill-video-trigger svg {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+}
+
+.portal-drills-catch-play {
+  display: grid;
+  grid-column: 1 / -1;
+  width: 100%;
+  gap: 0.25rem;
+  margin-top: 0.1rem;
+  min-height: 0;
+  align-self: start;
+  padding: 0.95rem !important;
+  border-radius: 16px;
+}
+
+.portal-drills-catch-play h4 {
+  margin: 0.2rem 0 0;
+  font-size: 1.16rem;
+}
+
+.portal-drills-catch-play > div {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.portal-drills-catch-play label {
+  padding: 0.65rem;
+  border: 1px solid rgba(255, 255, 255, 0.095);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.portal-drills-catch-play textarea {
+  min-height: 68px;
+  max-height: 150px;
+  border-color: transparent;
+  background: rgba(0, 0, 0, 0.2);
+  font-size: 0.9rem !important;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+body.theme-light .portal-schedule-workspace .portal-schedule-toolbar,
+body.theme-light .portal-drills-workspace .portal-drills-template-control,
+body.theme-light .portal-drills-workspace .portal-drills-section,
+body.theme-light .portal-drills-workspace .portal-drills-note-section,
+body.theme-light .portal-drills-quick-add {
+  border-color: rgba(15, 23, 42, 0.12);
+  background-color: rgba(255, 255, 255, 0.84);
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.07);
+}
+
+body.theme-light .portal-drills-workspace .portal-drills-table td,
+body.theme-light .portal-drills-catch-play label {
+  border-color: rgba(15, 23, 42, 0.1);
+  background: rgba(15, 23, 42, 0.025);
+}
+
 body.theme-light .portal-drills-template-control,
 body.theme-light .portal-drills-section {
   background: rgba(255, 255, 255, 0.72);
@@ -7340,11 +7922,48 @@ body.theme-light .portal-drills-section {
   .portal-drills-template-control {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .portal-drills-quick-add {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .portal-drills-quick-add-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .portal-drills-quick-add-fields .btn,
+  .portal-drills-library-toggle {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .portal-drills-catch-play > div {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 640px) {
   .portal-drills-template-control {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .portal-drills-workspace-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .portal-drills-workspace-meta {
+    min-width: 0;
+    text-align: left;
+  }
+
+  .portal-drills-quick-add-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .portal-drills-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 

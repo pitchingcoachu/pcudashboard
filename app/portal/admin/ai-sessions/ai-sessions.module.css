@@ -100,6 +100,23 @@
 .libraryHeader { display: flex; align-items: end; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
 .libraryHeader h3 { margin: 5px 0 0; font-size: 1.5rem; }
 .libraryHeader .searchField { width: min(420px, 100%); }
+.librarySearch input {
+  width: 100%;
+  min-height: 46px;
+  padding: 0 18px 0 44px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 999px;
+  outline: 0;
+  background: linear-gradient(180deg, rgba(255,255,255,.055), rgba(255,255,255,.025));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.035), 0 8px 22px rgba(0,0,0,.16);
+  color: #f8fafc;
+  font-family: inherit;
+  font-size: .84rem;
+  transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
+}
+.librarySearch input::placeholder { color: rgba(226,232,240,.42); }
+.librarySearch:focus-within input { border-color: rgba(var(--portal-accent-rgb,239,68,68),.68); background: rgba(255,255,255,.06); box-shadow: 0 0 0 4px rgba(var(--portal-accent-rgb,239,68,68),.1), 0 12px 28px rgba(0,0,0,.2); }
+.librarySearch:focus-within svg { color: rgb(var(--portal-accent-rgb,239,68,68)); }
 .sessionList { display: grid; gap: 8px; }
 .sessionCard { overflow: hidden; border: 1px solid rgba(255,255,255,.08); border-radius: 13px; background: rgba(255,255,255,.02); }
 .sessionSummary { display: grid; grid-template-columns: auto minmax(0,1fr) auto auto; align-items: center; gap: 13px; width: 100%; padding: 15px; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
@@ -112,10 +129,18 @@
 .sessionMain small { color: rgba(226,232,240,.47); }
 .typeBadge { padding: 5px 9px; border-radius: 999px; background: rgba(var(--portal-accent-rgb,239,68,68),.11); color: rgb(var(--portal-accent-rgb,239,68,68)); font-size: .66rem; font-weight: 850; }
 .chevron { color: rgba(248,250,252,.5); font-size: 1.15rem; }
-.editor { display: grid; gap: 14px; padding: 0 16px 18px; border-top: 1px solid rgba(255,255,255,.07); }
+.editor { display: grid; gap: 16px; padding: 0 16px 18px; border-top: 1px solid rgba(255,255,255,.07); }
 .editor audio { width: 100%; margin-top: 16px; }
-.editorGrid { display: grid; grid-template-columns: .8fr 1.2fr; gap: 12px; }
-.editor textarea { padding: 12px; resize: vertical; line-height: 1.5; }
+.editorGrid { display: grid; grid-template-columns: .8fr 1.2fr; gap: 14px; }
+.editorPanel { overflow: hidden; gap: 0 !important; border: 1px solid rgba(255,255,255,.1); border-radius: 15px; background: rgba(0,0,0,.22); }
+.editorPanelHeading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.025); }
+.editorPanelHeading > span { display: grid; gap: 3px; }
+.editorPanelHeading strong { color: #f8fafc; font-size: .9rem; letter-spacing: -.012em; }
+.editorPanelHeading small { color: rgba(226,232,240,.46); font-size: .7rem; font-weight: 600; letter-spacing: 0; }
+.editorPanelHeading em { flex: 0 0 auto; padding: 5px 8px; border: 1px solid rgba(255,255,255,.08); border-radius: 999px; color: rgba(226,232,240,.52); font-size: .64rem; font-style: normal; font-weight: 800; letter-spacing: .02em; }
+.editor textarea { min-height: 250px; padding: 17px 18px; border: 0; border-radius: 0; outline: 0; resize: vertical; background: transparent; color: rgba(248,250,252,.92); font-family: inherit; font-size: .91rem; font-weight: 500; letter-spacing: -.006em; line-height: 1.7; }
+.editor textarea:focus { box-shadow: inset 0 0 0 2px rgba(var(--portal-accent-rgb,239,68,68),.32); }
+.editor .transcriptText { min-height: 330px; color: rgba(248,250,252,.88); font-weight: 450; line-height: 1.74; }
 .editorFooter { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .editorFooter > div { display: flex; align-items: center; gap: 12px; }
 .editorFooter label { display: flex; align-items: center; gap: 7px; }
@@ -130,6 +155,13 @@
 :global(body.theme-light) .composer, :global(body.theme-light) .guide, :global(body.theme-light) .library { border-color: rgba(15,23,42,.12); background: #fff; box-shadow: 0 18px 45px rgba(15,23,42,.08); }
 :global(body.theme-light) .composer input, :global(body.theme-light) .composer select, :global(body.theme-light) .editor textarea { border-color: rgba(15,23,42,.15); background: #fff; color: #111827; }
 :global(body.theme-light) .captureCard, :global(body.theme-light) .setting, :global(body.theme-light) .sessionCard { border-color: rgba(15,23,42,.1); background: #f8fafc; color: #111827; }
+:global(body.theme-light) .librarySearch input { border-color: rgba(15,23,42,.14); background: #f8fafc; box-shadow: inset 0 1px 0 #fff, 0 8px 20px rgba(15,23,42,.06); color: #111827; }
+:global(body.theme-light) .librarySearch input::placeholder { color: rgba(17,24,39,.42); }
+:global(body.theme-light) .editorPanel { border-color: rgba(15,23,42,.12); background: #fff; }
+:global(body.theme-light) .editorPanelHeading { border-color: rgba(15,23,42,.1); background: #f8fafc; }
+:global(body.theme-light) .editorPanelHeading strong { color: #111827; }
+:global(body.theme-light) .editorPanelHeading small, :global(body.theme-light) .editorPanelHeading em { color: rgba(17,24,39,.52); }
+:global(body.theme-light) .editor textarea { background: #fff; color: rgba(17,24,39,.88); }
 
 @media (max-width: 900px) {
   .hero { align-items: stretch; flex-direction: column; }

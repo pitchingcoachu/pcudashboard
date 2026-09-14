@@ -7,8 +7,9 @@ import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
 import NativeDateInput from '../components/native-date-input';
 import { deliverReportPdf } from '../../../lib/report-pdf-delivery';
 import { SaveReportToProfileButton } from '../components/save-report-to-profile';
+import { dashboardMetricLabel, parseForcePlateFlagMetric } from '../../../lib/dashboard-metric-catalog';
 
-type Domain = 'Pitching' | 'Hitting' | 'Catching';
+type Domain = 'Pitching' | 'Hitting' | 'Catching' | 'Force Plates';
 type GoalSlot = 1 | 2 | 3;
 type GoalCategory =
   | 'Mechanical'
@@ -21,9 +22,10 @@ type GoalCategory =
   | 'Weight'
   | 'Swing Decisions'
   | 'Batted Ball'
-  | 'Pre-Pitch Routine';
+  | 'Pre-Pitch Routine'
+  | 'Force Plate Metrics';
 type Comparator = 'Greater Than' | 'Less Than';
-type ChartType = 'Release' | 'Movement Plot' | 'Pitch Chart' | 'HeatMaps' | 'Trend';
+type ChartType = 'Release' | 'Movement Plot' | 'Pitch Chart' | 'HeatMaps' | 'Trend' | 'Bar';
 type HeatmapView = 'Pitch' | 'Frequency' | 'Whiff Rate' | 'GB Rate' | 'Contact Rate' | 'Swing Rate' | 'Exit Velocity' | 'Run Values' | 'QP+' | 'Called Strike Rate';
 type NoteCategory = 'Player Plan' | 'Weight Room' | 'Nutrition' | 'Mental Training';
 type OptionItem = { value: string; label: string };
@@ -43,6 +45,7 @@ type GoalDraft = {
   stuffType: '' | 'Velocity' | 'Movement';
   movementAxis: '' | 'IVB' | 'HB' | 'IVB+HB';
   executionStat: string;
+  statDisplayName: string;
   comparator: Comparator;
   targetValue: string;
   chartType: ChartType;
@@ -58,6 +61,7 @@ type GoalDraft = {
   hand: string;
   batterSide: string;
   sessionType: string;
+  testType: string;
   createdAt: string | null;
 };
 
@@ -68,6 +72,7 @@ type GoalPayload = {
   stuffType?: '' | 'Velocity' | 'Movement';
   movementAxis?: '' | 'IVB' | 'HB' | 'IVB+HB';
   executionStat?: string;
+  statDisplayName?: string;
   comparator?: Comparator;
   targetValue?: number | null;
   chartType?: ChartType;
@@ -84,6 +89,7 @@ type GoalPayload = {
     hand?: string;
     batterSide?: string;
     sessionType?: string;
+    testType?: string;
   };
 };
 
@@ -146,7 +152,7 @@ type HeatCell = { x: number; y: number; w: number; h: number; value: number; den
 type PlanMode = 'Manual' | 'Automated';
 type SummaryMode = 'automated' | 'manual';
 
-const DOMAIN_OPTIONS: Domain[] = ['Pitching', 'Hitting', 'Catching'];
+const DOMAIN_OPTIONS: Domain[] = ['Pitching', 'Hitting', 'Catching', 'Force Plates'];
 const GOAL_CATEGORIES: GoalCategory[] = [
   'Mechanical',
   'Stuff',
@@ -159,6 +165,7 @@ const GOAL_CATEGORIES: GoalCategory[] = [
   'Swing Decisions',
   'Batted Ball',
   'Pre-Pitch Routine',
+  'Force Plate Metrics',
 ];
 const DOMAIN_GOAL_CATEGORIES: Record<Domain, GoalCategory[]> = {
   Pitching: [
@@ -195,6 +202,7 @@ const DOMAIN_GOAL_CATEGORIES: Record<Domain, GoalCategory[]> = {
     'Batted Ball',
     'Pre-Pitch Routine',
   ],
+  'Force Plates': ['Force Plate Metrics', 'Strength', 'Mobility', 'Weight', 'Mental Side'],
 };
 const DOMAIN_EXECUTION_FALLBACKS: Record<Domain, string[]> = {
   Pitching: [
@@ -280,11 +288,12 @@ const DOMAIN_EXECUTION_FALLBACKS: Record<Domain, string[]> = {
     'LA',
   ],
   Catching: ['# Throws', 'Velo', 'ExchangeTime', 'PopTime', 'SL+'],
+  'Force Plates': [],
 };
 const HITTING_EXECUTION_ALLOWED = new Set(
   (DOMAIN_EXECUTION_FALLBACKS.Hitting ?? []).map((value) => normalizeExecutionStatKey(value))
 );
-const CHART_OPTIONS: ChartType[] = ['Release', 'Movement Plot', 'Pitch Chart', 'HeatMaps', 'Trend'];
+const CHART_OPTIONS: ChartType[] = ['Release', 'Movement Plot', 'Pitch Chart', 'HeatMaps', 'Trend', 'Bar'];
 const HEATMAP_VIEW_OPTIONS: HeatmapView[] = [
   'Pitch',
   'Frequency',
@@ -1053,6 +1062,7 @@ function parseStoredGoalDescription(category: string | null, value: string | nul
     stuffType: '',
     movementAxis: '',
     executionStat: '',
+    statDisplayName: '',
     comparator: 'Greater Than',
     targetValue: '',
     chartType: 'Trend',
@@ -1068,6 +1078,7 @@ function parseStoredGoalDescription(category: string | null, value: string | nul
     hand: 'All',
     batterSide: 'All',
     sessionType: 'Season',
+    testType: 'All',
     createdAt,
   };
   if (!value) return defaultGoal;
@@ -1081,13 +1092,14 @@ function parseStoredGoalDescription(category: string | null, value: string | nul
       stuffType: parsed.stuffType === 'Velocity' || parsed.stuffType === 'Movement' ? parsed.stuffType : '',
       movementAxis: parsed.movementAxis === 'IVB' || parsed.movementAxis === 'HB' || parsed.movementAxis === 'IVB+HB' ? parsed.movementAxis : '',
       executionStat: String(parsed.executionStat ?? ''),
+      statDisplayName: String(parsed.statDisplayName ?? ''),
       comparator: parsed.comparator === 'Less Than' ? 'Less Than' : 'Greater Than',
       targetValue:
         parsed.targetValue === null || parsed.targetValue === undefined || Number.isNaN(Number(parsed.targetValue))
           ? ''
           : String(parsed.targetValue),
       chartType:
-        parsed.chartType === 'Release' || parsed.chartType === 'Movement Plot' || parsed.chartType === 'Pitch Chart' || parsed.chartType === 'HeatMaps'
+        parsed.chartType === 'Release' || parsed.chartType === 'Movement Plot' || parsed.chartType === 'Pitch Chart' || parsed.chartType === 'HeatMaps' || parsed.chartType === 'Bar'
           ? parsed.chartType
           : 'Trend',
       heatmapView: parsed.heatmapView && HEATMAP_VIEW_OPTIONS.includes(parsed.heatmapView) ? parsed.heatmapView : 'Frequency',
@@ -1102,6 +1114,7 @@ function parseStoredGoalDescription(category: string | null, value: string | nul
       hand: String(parsed.filters?.hand ?? 'All') || 'All',
       batterSide: String(parsed.filters?.batterSide ?? 'All') || 'All',
       sessionType: String(parsed.filters?.sessionType ?? 'Season') || 'Season',
+      testType: String(parsed.filters?.testType ?? 'All') || 'All',
     };
   } catch {
     return defaultGoal;
@@ -1116,6 +1129,7 @@ function serializeGoalDescription(goal: GoalDraft): string {
     stuffType: goal.stuffType,
     movementAxis: goal.movementAxis,
     executionStat: goal.executionStat.trim(),
+    statDisplayName: goal.statDisplayName.trim(),
     comparator: goal.comparator,
     targetValue: goal.targetValue.trim() ? Number(goal.targetValue) : null,
     chartType: goal.chartType,
@@ -1132,6 +1146,7 @@ function serializeGoalDescription(goal: GoalDraft): string {
       hand: goal.hand,
       batterSide: goal.batterSide,
       sessionType: goal.sessionType,
+      testType: goal.testType,
     },
   };
   return JSON.stringify(payload);
@@ -1148,9 +1163,9 @@ function goalSummary(goal: GoalDraft): string {
     const comparator = goal.comparator === 'Less Than' ? '<' : '>';
     return `${metric} ${comparator} ${goal.targetValue || '?'} ${goal.objectiveText ? `| ${goal.objectiveText}` : ''}`.trim();
   }
-  if (goal.category === 'Execution' || goal.category === 'Hitting Stats') {
+  if (goal.category === 'Execution' || goal.category === 'Hitting Stats' || goal.category === 'Force Plate Metrics') {
     const comparator = goal.comparator === 'Less Than' ? '<' : '>';
-    return `${goal.executionStat || 'Stat'} ${comparator} ${goal.targetValue || '?'} ${goal.objectiveText ? `| ${goal.objectiveText}` : ''}`.trim();
+    return `${goal.statDisplayName.trim() || (goal.category === 'Force Plate Metrics' ? dashboardMetricLabel(goal.executionStat) : goal.executionStat) || 'Stat'} ${comparator} ${goal.targetValue || '?'} ${goal.objectiveText ? `| ${goal.objectiveText}` : ''}`.trim();
   }
   return goal.objectiveText.trim();
 }
@@ -1161,7 +1176,7 @@ function goalTypeLabel(goal: GoalDraft): string {
     if (goal.stuffType === 'Velocity') return 'Velocity';
     return 'Stuff';
   }
-  if (goal.category === 'Execution' || goal.category === 'Hitting Stats') return goal.executionStat || 'Stat';
+  if (goal.category === 'Execution' || goal.category === 'Hitting Stats' || goal.category === 'Force Plate Metrics') return goal.statDisplayName.trim() || (goal.category === 'Force Plate Metrics' ? dashboardMetricLabel(goal.executionStat) : goal.executionStat) || 'Stat';
   return goal.objectiveText.trim() ? `Note: ${goal.objectiveText.trim()}` : 'Note';
 }
 
@@ -1169,6 +1184,7 @@ function isChartCapableGoal(goal: GoalDraft, domain: Domain): boolean {
   if (goal.category === 'Stuff') return domain === 'Pitching';
   if (goal.category === 'Execution') return domain === 'Pitching' || domain === 'Catching';
   if (goal.category === 'Hitting Stats') return domain === 'Hitting';
+  if (goal.category === 'Force Plate Metrics') return domain === 'Force Plates';
   return false;
 }
 
@@ -1180,6 +1196,7 @@ function goalMetricValue(goal: GoalDraft, point: Record<string, unknown>): numbe
     }
     return null;
   };
+  if (goal.category === 'Force Plate Metrics') return num('force_plate_value', 'value');
   if (goal.category === 'Stuff') {
     if (goal.stuffType === 'Velocity') return num('velo', 'rel_speed');
     if (goal.stuffType === 'Movement') {
@@ -1250,7 +1267,7 @@ function buildGoalMetricSeries(goal: GoalDraft, points: Array<Record<string, unk
 
   const rows = Array.from(grouped.entries())
     .map(([date, dayRows]) => {
-      if (goal.category === 'Stuff') {
+      if (goal.category === 'Stuff' || goal.category === 'Force Plate Metrics') {
         const values = dayRows.map((row) => goalMetricValue(goal, row)).filter((v): v is number => v !== null);
         const value = values.length ? values.reduce((sum, v) => sum + v, 0) / values.length : null;
         return value === null ? null : { date, value };
@@ -1569,11 +1586,12 @@ function goalStatLabel(goal: GoalDraft): string {
     if (goal.stuffType === 'Movement') return goal.movementAxis || 'Movement';
     return goal.stuffType || 'Stuff';
   }
-  return goal.executionStat || 'Stat';
+  return goal.statDisplayName.trim() || (goal.category === 'Force Plate Metrics' ? dashboardMetricLabel(goal.executionStat) : goal.executionStat) || 'Stat';
 }
 
 function fmtGoalValueForGoal(goal: GoalDraft, value: number | null): string {
   if (value === null || !Number.isFinite(value)) return '-';
+  if (goal.category === 'Force Plate Metrics') return value.toFixed(1);
   const statLabel = goalStatLabel(goal).trim();
   const upper = statLabel.toUpperCase();
   const threeDecimalStats = new Set(['AVG', 'SLG', 'OBP', 'OPS', 'WOBA', 'XWOBA', 'ISO', 'XISO', 'BABIP']);
@@ -1590,6 +1608,7 @@ function fmtGoalValueForGoal(goal: GoalDraft, value: number | null): string {
 }
 
 function goalUnit(goal: GoalDraft): string {
+  if (goal.category === 'Force Plate Metrics') return parseForcePlateFlagMetric(goal.executionStat)?.metricUnit ?? '';
   const statLabel = goalStatLabel(goal).trim().toUpperCase();
   if (statLabel.includes('%')) return '';
   if (statLabel.includes('MISS DISTANCE')) return '';
@@ -1824,6 +1843,8 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
     3: { loading: false, error: '', points: [] },
   });
   const [domainExecutionStats, setDomainExecutionStats] = useState<string[]>(DOMAIN_EXECUTION_FALLBACKS.Pitching);
+  const [forcePlateMetricLabels, setForcePlateMetricLabels] = useState<Record<string, string>>({});
+  const [forcePlateTestsByMetric, setForcePlateTestsByMetric] = useState<Record<string, string[]>>({});
   const [goalControlsVisible, setGoalControlsVisible] = useState<Record<GoalSlot, boolean>>({ 1: true, 2: true, 3: true });
   const [goalCount, setGoalCount] = useState<1 | 2 | 3>(3);
   const [goalChartHover, setGoalChartHover] = useState<{ x: number; y: number; text: string; bg?: string } | null>(null);
@@ -3157,6 +3178,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
           hand: goal.hand,
           batterSide: goal.batterSide,
           sessionType: goal.sessionType,
+          testType: goal.testType,
         }));
     },
     [domain, planGoals, planMode]
@@ -3242,6 +3264,22 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
       return;
     }
     let active = true;
+    if (domain === 'Force Plates') {
+      void fetch('/api/dashboard/force-plates/filters', { cache: 'no-store' })
+        .then(async (response) => {
+          const payload = (await response.json().catch(() => ({}))) as { metrics?: Array<{ value: string; label: string; testTypes?: string[] }>; error?: string };
+          if (!response.ok) throw new Error(payload.error ?? 'Failed to load force-plate metrics.');
+          if (!active) return;
+          const metrics = Array.isArray(payload.metrics) ? payload.metrics : [];
+          setDomainExecutionStats(metrics.map((metric) => metric.value));
+          setForcePlateMetricLabels(Object.fromEntries(metrics.map((metric) => [metric.value, metric.label])));
+          setForcePlateTestsByMetric(Object.fromEntries(metrics.map((metric) => [metric.value, metric.testTypes ?? []])));
+        })
+        .catch(() => {
+          if (active) setDomainExecutionStats([]);
+        });
+      return () => { active = false; };
+    }
     const playerParam = domain === 'Pitching' ? 'pitcher' : domain === 'Hitting' ? 'hitter' : 'catcher';
     const params = new URLSearchParams();
     (async () => {
@@ -3315,6 +3353,19 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
 
     Promise.allSettled(
       chartFetchGoals.map(async (goal) => {
+        if (domain === 'Force Plates') {
+          const params = new URLSearchParams({ player: selectedDashboardPlayerName, metrics: goal.executionStat });
+          if (goal.startDate) params.set('start_date', goal.startDate);
+          if (goal.endDate) params.set('end_date', goal.endDate);
+          if (goal.testType && goal.testType !== 'All') params.set('test_type', goal.testType);
+          const response = await fetch(`/api/dashboard/force-plates/overview?${params.toString()}`, { cache: 'no-store', signal: controller.signal });
+          const payload = (await response.json().catch(() => ({}))) as { chart_points?: Array<Record<string, unknown>>; error?: string };
+          if (!response.ok) throw new Error(payload.error ?? 'Failed to load force-plate goal data.');
+          return {
+            slotIndex: goal.slotIndex,
+            points: (payload.chart_points ?? []).map((point) => ({ ...point, force_plate_value: point.value })),
+          };
+        }
         const intendedTargetField = goal.category === 'Execution' ? intendedTargetMetricField(goal.executionStat) : null;
         const params = new URLSearchParams();
         const candidates = domain === 'Hitting' ? playerQueryCandidates : [selectedDashboardPlayerName];
@@ -3425,7 +3476,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
 
   useEffect(() => {
     let active = true;
-    const domainPath = domain.toLowerCase();
+    const domainPath = domain === 'Force Plates' ? 'force-plates' : domain.toLowerCase();
     const params = new URLSearchParams();
     if (selectedSchoolCode) params.set('school_code', selectedSchoolCode);
     if (domain === 'Pitching') params.set('force_refresh', '1');
@@ -4356,8 +4407,20 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
         {targetY !== null ? (
           <line x1={left} y1={targetY} x2={width - right} y2={targetY} stroke="rgba(255,255,255,0.9)" strokeWidth={2} strokeDasharray="6 6" />
         ) : null}
-        <path d={path} fill="none" stroke="#ef4444" strokeWidth={2.2} />
-        {series.map((point, idx) => (
+        {goal.chartType === 'Bar' ? null : <path d={path} fill="none" stroke="#ef4444" strokeWidth={2.2} />}
+        {series.map((point, idx) => goal.chartType === 'Bar' ? (
+          <rect
+            key={`goal-bar-${goal.slotIndex}-${idx}`}
+            x={px(idx) - Math.min(24, (width - left - right) / Math.max(2, series.length * 2))}
+            y={py(point.value)}
+            width={Math.min(48, (width - left - right) / Math.max(1, series.length) * 0.72)}
+            height={Math.max(1, height - bottom - py(point.value))}
+            rx={3}
+            fill="#ef4444"
+            onMouseMove={(event) => setGoalChartHover({ x: event.clientX, y: event.clientY, text: `Date: ${formatMdyy(point.date)}\n${yLabel}: ${fmtGoalValueForGoal(goal, point.value)}`, bg: '#ef4444' })}
+            onMouseLeave={() => setGoalChartHover(null)}
+          />
+        ) : (
           <circle
             key={`goal-trend-dot-${goal.slotIndex}-${idx}`}
             cx={px(idx)}
@@ -4403,7 +4466,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
           <label>
             Domain
             <select value={domain} onChange={(event) => setDomain((event.target.value as Domain) || 'Pitching')}>
-              {DOMAIN_OPTIONS.map((option) => (
+              {DOMAIN_OPTIONS.filter((option) => option !== 'Force Plates' || selectedSchoolCode === 'PCU').map((option) => (
                 <option key={option} value={option}>
                   {option}
                 </option>
@@ -4957,11 +5020,20 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                   </>
                 ) : null}
 
-                {goal.category === 'Execution' || goal.category === 'Hitting Stats' ? (
+                {goal.category === 'Execution' || goal.category === 'Hitting Stats' || goal.category === 'Force Plate Metrics' ? (
                   <>
                     <label className="portal-inline-filter">
                       Stat
-                      <select
+                      {goal.category === 'Force Plate Metrics' ? (
+                        <SearchableSingleSelect
+                          options={domainExecutionStats.map((value) => ({ value, label: forcePlateMetricLabels[value] ?? dashboardMetricLabel(value) }))}
+                          value={goal.executionStat}
+                          placeholder="Search all VALD metrics…"
+                          onChange={(executionStat) => {
+                            setPlanGoals((prev) => prev.map((entry) => entry.slotIndex === goal.slotIndex ? { ...entry, executionStat, testType: 'All' } : entry));
+                          }}
+                        />
+                      ) : <select
                         value={goal.executionStat}
                         onChange={(event) => {
                           const executionStat = event.target.value;
@@ -4997,8 +5069,23 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                             {option}
                           </option>
                         ))}
-                      </select>
+                      </select>}
                     </label>
+                    {goal.category === 'Force Plate Metrics' ? (
+                      <div className="portal-form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                        <label className="portal-inline-filter">
+                          Display Name
+                          <input value={goal.statDisplayName} placeholder={forcePlateMetricLabels[goal.executionStat] ?? 'Optional shorter name'} onChange={(event) => setPlanGoals((prev) => prev.map((entry) => entry.slotIndex === goal.slotIndex ? { ...entry, statDisplayName: event.target.value } : entry))} />
+                        </label>
+                        <label className="portal-inline-filter">
+                          Test Type
+                          <select value={goal.testType} onChange={(event) => setPlanGoals((prev) => prev.map((entry) => entry.slotIndex === goal.slotIndex ? { ...entry, testType: event.target.value } : entry))}>
+                            <option value="All">All</option>
+                            {(forcePlateTestsByMetric[goal.executionStat] ?? []).map((testType) => <option key={`${goal.slotIndex}-${testType}`} value={testType}>{testType}</option>)}
+                          </select>
+                        </label>
+                      </div>
+                    ) : null}
                     <div className="portal-form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                       <label className="portal-inline-filter">
                         Comparator
@@ -5057,7 +5144,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                     <label className="portal-inline-filter">
                       Chart
                       <SearchableSingleSelect
-                        options={toOptions(intendedTargetGoal ? ['Trend'] : CHART_OPTIONS)}
+                        options={toOptions(domain === 'Force Plates' ? ['Trend', 'Bar'] : intendedTargetGoal ? ['Trend'] : CHART_OPTIONS)}
                         value={goal.chartType}
                         onChange={(next) =>
                           setPlanGoals((prev) =>
@@ -5066,7 +5153,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                                 ? {
                                     ...entry,
                                     chartType:
-                                      next === 'Release' || next === 'Movement Plot' || next === 'Pitch Chart' || next === 'HeatMaps'
+                                      next === 'Release' || next === 'Movement Plot' || next === 'Pitch Chart' || next === 'HeatMaps' || next === 'Bar'
                                         ? (next as ChartType)
                                         : 'Trend',
                                   }
@@ -5140,7 +5227,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                       ) : null}
                     </div>
                     <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(2, minmax(120px, 1fr))', gap: 8 }}>
-                      {!intendedTargetGoal ? <label className="portal-inline-filter">
+                      {domain !== 'Force Plates' && !intendedTargetGoal ? <label className="portal-inline-filter">
                         Pitcher Hand
                         <SearchableSingleSelect
                           options={toOptions(filterOptions.hands ?? ['All'])}
@@ -5153,7 +5240,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                           placeholder="All"
                         />
                       </label> : null}
-                      {!intendedTargetGoal ? <label className="portal-inline-filter">
+                      {domain !== 'Force Plates' && !intendedTargetGoal ? <label className="portal-inline-filter">
                         Batter Hand
                         <SearchableSingleSelect
                           options={toOptions(filterOptions.batter_sides ?? ['All'])}
@@ -5166,7 +5253,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                           placeholder="All"
                         />
                       </label> : null}
-                      <label className="portal-inline-filter">
+                      {domain !== 'Force Plates' ? <label className="portal-inline-filter">
                         Pitch Type
                         <SearchableMultiSelect
                           options={toOptions(filterOptions.pitch_types)}
@@ -5177,7 +5264,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                             )
                           }
                         />
-                      </label>
+                      </label> : null}
                       {domain === 'Pitching' ? (
                         <label className="portal-inline-filter">
                           Ball Type
@@ -5192,7 +5279,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                           />
                         </label>
                       ) : null}
-                      {!intendedTargetGoal ? <label className="portal-inline-filter">
+                      {domain !== 'Force Plates' && !intendedTargetGoal ? <label className="portal-inline-filter">
                         Pitch Results
                         <SearchableMultiSelect
                           options={toOptions(filterOptions.pitch_results)}
@@ -5204,7 +5291,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                           }
                         />
                       </label> : null}
-                      {!intendedTargetGoal ? <label className="portal-inline-filter">
+                      {domain !== 'Force Plates' && !intendedTargetGoal ? <label className="portal-inline-filter">
                         Count
                         <SearchableMultiSelect
                           options={toOptions(filterOptions.count_options)}
@@ -5216,7 +5303,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                           }
                         />
                       </label> : null}
-                      {!intendedTargetGoal ? <label className="portal-inline-filter">
+                      {domain !== 'Force Plates' && !intendedTargetGoal ? <label className="portal-inline-filter">
                         After Count
                         <SearchableMultiSelect
                           options={toOptions(filterOptions.after_count_options)}
@@ -5228,7 +5315,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                           }
                         />
                       </label> : null}
-                      {!intendedTargetGoal ? <label className="portal-inline-filter">
+                      {domain !== 'Force Plates' && !intendedTargetGoal ? <label className="portal-inline-filter">
                         Teams
                         <SearchableMultiSelect
                           options={toOptions(filterOptions.team_types)}

@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { resolveSchoolBrand } from '../../../lib/school-brand';
-import { formatTableDisplayValue, sortTableRows, type SortDirection } from '../../../lib/table-sort';
+import { formatTableDisplayValue, parseSortableNumber, sortTableRows, type SortDirection } from '../../../lib/table-sort';
 import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
 import { getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
 import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
@@ -16,9 +16,10 @@ import { DirectionHeatmap, type DirectionBreakdown } from './intended-zone-stats
 import { IntendedTargetMapMini } from './intended-target-map-mini';
 import { deliverReportPdf } from '../../../lib/report-pdf-delivery';
 import { ReportActionsDropdown, type AutomationPanelSeed } from '../components/save-report-to-profile';
+import { dashboardMetricLabel, dashboardMetricOptions, formatForcePlateMetricValue } from '../../../lib/dashboard-metric-catalog';
 
 type OptionItem = { value: string; label: string };
-type ReportType = 'Pitching' | 'Hitting' | 'Catching';
+type ReportType = 'Pitching' | 'Hitting' | 'Catching' | 'Force Plates';
 type ReportScope = 'Single Player' | 'Multi-Player' | 'Team';
 type PercentileScope = 'NCAA' | 'TEAM' | 'MLB';
 type SprayViewMode = 'Batted Balls' | 'Bins';
@@ -43,7 +44,11 @@ type PanelType =
   | 'Horizontal Attack'
   | 'Vertical Attack'
   | 'Bat Speed'
-  | 'EV and LA';
+  | 'EV and LA'
+  | 'Metric Line Chart'
+  | 'Metric Bar Chart'
+  | 'Force Plate Line Chart'
+  | 'Force Plate Bar Chart';
 type FilterToken =
   | 'Dates'
   | 'Level'
@@ -120,6 +125,13 @@ type CatchingFiltersPayload = {
   pitch_results: string[];
   count_options: string[];
   after_count_options: string[];
+};
+
+type ForcePlateFiltersPayload = {
+  school_code: string;
+  players: string[];
+  metrics: Array<{ value: string; label: string; testTypes?: string[] }>;
+  test_types: string[];
 };
 
 type OverviewLitePayload = {
@@ -319,6 +331,13 @@ type CellConfig = {
   batSpeedColorBy: 'pitch_type' | 'exit_velocity' | 'result';
   evlaColorBy: 'result' | 'pitch_type';
   sprayView: SprayViewMode;
+  forcePlateMetrics: string[];
+  forcePlateMetricLabels: Record<string, string>;
+  forcePlateTestType: string;
+  metricChartMetric: string;
+  metricChartLabel: string;
+  chartBenchmarkValue: string;
+  chartBenchmarkLabel: string;
 };
 
 type ReportPayload = {
@@ -382,8 +401,12 @@ const PITCHING_PANEL_TYPES: PanelType[] = [
   'Pitch Usage Bar Chart',
   'Velocity Bar Chart',
   'Velocity Distribution',
+  'Metric Line Chart',
+  'Metric Bar Chart',
   'Summary Table',
   'Spray Chart',
+  'Force Plate Line Chart',
+  'Force Plate Bar Chart',
   'Note Section',
 ];
 const HITTING_PANEL_TYPES: PanelType[] = [
@@ -398,16 +421,23 @@ const HITTING_PANEL_TYPES: PanelType[] = [
   'Vertical Attack',
   'Bat Speed',
   'EV and LA',
+  'Metric Line Chart',
+  'Metric Bar Chart',
   'Summary Table',
   'Spray Chart',
+  'Force Plate Line Chart',
+  'Force Plate Bar Chart',
   'Note Section',
 ];
 const CATCHING_PANEL_TYPES: PanelType[] = [
   '',
   'Heatmap',
+  'Metric Line Chart',
+  'Metric Bar Chart',
   'Summary Table',
   'Note Section',
 ];
+const FORCE_PLATE_PANEL_TYPES: PanelType[] = ['', 'Metric Line Chart', 'Metric Bar Chart', 'Force Plate Line Chart', 'Force Plate Bar Chart', 'Summary Table', 'Note Section'];
 const FILTER_TOKENS: FilterToken[] = [
   'Dates',
   'Level',
@@ -440,6 +470,7 @@ const normalizeSplitByForApi = (value: string): string => {
 };
 const UNIVERSAL_SPLIT_BY = [
   'All',
+  'Date',
   'Pitch Types',
   'Batter Side',
   'Pitcher Hand',
@@ -463,6 +494,7 @@ const UNIVERSAL_SPLIT_BY = [
 const PITCHING_TABLES = ['Stuff', 'Expected Movement', 'Process', 'Results', 'Bullpen', 'Live', 'Banny', 'Usage', 'Raw Data'];
 const HITTING_TABLES = ['Results', 'Swing Decisions'];
 const CATCHING_TABLES = ['Catching Data', 'Stuff', 'Process', 'Results', 'Bullpen', 'Live', 'Banny', 'Usage', 'Raw Data', 'Batted Ball Data', 'Swing Decisions'];
+const CATCHING_METRIC_OPTIONS = ['#', '# Throws', 'Velo', 'ExchangeTime', 'PopTime', 'SL+'];
 const CATCHING_SPLIT_BY = UNIVERSAL_SPLIT_BY;
 const HEATMAP_STATS = ['Frequency', 'Called Strike Rate', 'Whiff Rate', 'SwStrk%', 'Exit Velocity', 'GB Rate', 'Contact Rate', 'Swing Rate', 'RV/100', 'PV/100', 'xWOBA', 'xISO'];
 const HITTING_HEATMAP_STATS = ['Frequency', 'Whiff Rate', 'SwStrk%', 'GB Rate', 'Contact Rate', 'Swing Rate', 'Exit Velocity', 'RV/100', 'PV/100', 'xWOBA', 'xISO'] as const;
@@ -586,6 +618,11 @@ function toYmd(value: string | null | undefined): string {
 
 function fmtShortDate(value: string | null | undefined): string {
   if (!value) return '-';
+  const calendarDate = String(value).trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (calendarDate) {
+    const [, year, month, day] = calendarDate;
+    return `${Number(month)}/${Number(day)}/${year.slice(-2)}`;
+  }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return `${date.getMonth() + 1}/${date.getDate()}/${String(date.getFullYear()).slice(-2)}`;
@@ -648,29 +685,34 @@ function inferPitcherHandFromTitle(title: string): 'Right' | 'Left' | '' {
 function subjectLabelForReportType(reportType: ReportType): string {
   if (reportType === 'Pitching') return 'Pitcher';
   if (reportType === 'Hitting') return 'Hitter';
-  return 'Catcher';
+  if (reportType === 'Catching') return 'Catcher';
+  return 'Athlete';
 }
 
 function defaultTableModeForReportType(reportType: ReportType): string {
   if (reportType === 'Pitching') return 'Live';
   if (reportType === 'Hitting') return 'Results';
-  return 'Catching Data';
+  if (reportType === 'Catching') return 'Catching Data';
+  return 'Force Plate Data';
 }
 
 function tableOptionsForReportType(reportType: ReportType): string[] {
   if (reportType === 'Pitching') return PITCHING_TABLES;
   if (reportType === 'Hitting') return HITTING_TABLES;
-  return CATCHING_TABLES;
+  if (reportType === 'Catching') return CATCHING_TABLES;
+  return ['Force Plate Data'];
 }
 
 function panelOptionsForReportType(reportType: ReportType): PanelType[] {
   if (reportType === 'Pitching') return PITCHING_PANEL_TYPES;
   if (reportType === 'Hitting') return HITTING_PANEL_TYPES;
-  return CATCHING_PANEL_TYPES;
+  if (reportType === 'Catching') return CATCHING_PANEL_TYPES;
+  return FORCE_PLATE_PANEL_TYPES;
 }
 
 function splitByOptionsForReportType(reportType: ReportType): string[] {
   if (reportType === 'Catching') return CATCHING_SPLIT_BY;
+  if (reportType === 'Force Plates') return ['Date', 'Test Type', 'Player'];
   return UNIVERSAL_SPLIT_BY;
 }
 
@@ -693,6 +735,162 @@ function mergeSingleGlobalFilter(globalValue: string, localValue: string): strin
 
 function normalizeNameKey(value: string): string {
   return String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function ForcePlateReportChart({
+  points,
+  metric,
+  label,
+  kind,
+  benchmarkValue,
+  benchmarkLabel,
+  onHover,
+}: {
+  points: Array<Record<string, unknown>>;
+  metric: string;
+  label: string;
+  kind: 'line' | 'bar';
+  benchmarkValue?: string;
+  benchmarkLabel?: string;
+  onHover: (value: { x: number; y: number; text: string; bg?: string } | null) => void;
+}) {
+  const grouped = new Map<string, number[]>();
+  for (const point of points) {
+    if (String(point.metric ?? '') !== metric) continue;
+    const date = String(point.session_date ?? '').trim();
+    const value = Number(point.value);
+    if (!date || !Number.isFinite(value)) continue;
+    const values = grouped.get(date) ?? [];
+    values.push(value);
+    grouped.set(date, values);
+  }
+  const rows = Array.from(grouped.entries()).map(([date, values]) => ({ date, value: values.reduce((sum, value) => sum + value, 0) / values.length })).sort((a, b) => a.date.localeCompare(b.date));
+  if (!rows.length) return <p className="portal-muted-text">No force-plate data for the current filters.</p>;
+  const width = 720, height = 390, left = 64, right = 24, top = 28, bottom = rows.length > 5 ? 92 : 66;
+  const benchmark = Number(String(benchmarkValue ?? '').trim());
+  const hasBenchmark = String(benchmarkValue ?? '').trim() !== '' && Number.isFinite(benchmark);
+  const values = [...rows.map((row) => row.value), ...(hasBenchmark ? [benchmark] : [])];
+  const rawMin = Math.min(...values), rawMax = Math.max(...values);
+  const padding = rawMin === rawMax ? Math.max(1, Math.abs(rawMax) * 0.08) : (rawMax - rawMin) * 0.1;
+  const min = rawMin - padding, max = rawMax + padding;
+  const plotWidth = width - left - right;
+  const lineX = (index: number) => rows.length === 1 ? left + plotWidth / 2 : left + index / (rows.length - 1) * plotWidth;
+  const barX = (index: number) => left + ((index + 0.5) / rows.length) * plotWidth;
+  const px = (index: number) => kind === 'bar' ? barX(index) : lineX(index);
+  const py = (value: number) => top + (max - value) / Math.max(0.000001, max - min) * (height - top - bottom);
+  const ticks = Array.from({ length: 5 }, (_, index) => min + index / 4 * (max - min));
+  const path = rows.map((row, index) => `${index ? 'L' : 'M'} ${px(index)} ${py(row.value)}`).join(' ');
+  const barWidth = Math.min(48, plotWidth / Math.max(1, rows.length) * 0.65);
+  return <div className="portal-custom-reports-velocity"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${label} ${kind} graph`}>
+    {ticks.map((tick) => <g key={tick}><line x1={left} y1={py(tick)} x2={width - right} y2={py(tick)} stroke="rgba(148,163,184,.18)"/><text x={left - 8} y={py(tick) + 4} textAnchor="end" fontSize="11" fill="currentColor">{tick.toFixed(1)}</text></g>)}
+    <line x1={left} y1={height - bottom} x2={width - right} y2={height - bottom} stroke="rgba(148,163,184,.55)"/>
+    {kind === 'line' ? <path d={path} fill="none" stroke="#e11d48" strokeWidth="3"/> : null}
+    {rows.map((row, index) => kind === 'bar'
+      ? <rect key={row.date} x={px(index) - barWidth / 2} y={py(row.value)} width={barWidth} height={height - bottom - py(row.value)} rx="4" fill="#e11d48" onMouseMove={(event) => onHover({ x: event.clientX, y: event.clientY, text: `${fmtShortDate(row.date)}\n${label}: ${row.value.toFixed(2)}`, bg: '#e11d48' })} onMouseLeave={() => onHover(null)}/>
+      : <circle key={row.date} cx={px(index)} cy={py(row.value)} r="5" fill="#e11d48" onMouseMove={(event) => onHover({ x: event.clientX, y: event.clientY, text: `${fmtShortDate(row.date)}\n${label}: ${row.value.toFixed(2)}`, bg: '#e11d48' })} onMouseLeave={() => onHover(null)}/>)}
+    {hasBenchmark ? <g aria-label={`${benchmarkLabel?.trim() || 'Goal'} ${benchmark}`}>
+      <line x1={left} y1={py(benchmark)} x2={width - right} y2={py(benchmark)} stroke="#f8fafc" strokeWidth="2" strokeDasharray="8 6" opacity="0.9"/>
+      <text x={width - right - 4} y={py(benchmark) - 7} textAnchor="end" fontSize="11" fontWeight="800" fill="#f8fafc" paintOrder="stroke" stroke="rgba(0,0,0,.82)" strokeWidth="4">
+        {benchmarkLabel?.trim() || 'Goal'} · {formatForcePlateMetricValue(metric, benchmark)}
+      </text>
+    </g> : null}
+    {rows.map((row, index) => <text key={`date-${row.date}`} x={px(index)} y={height - bottom + 18} textAnchor={rows.length > 5 ? 'end' : 'middle'} transform={rows.length > 5 ? `rotate(-35 ${px(index)} ${height - bottom + 18})` : undefined} fontSize="10" fill="currentColor">{fmtShortDate(row.date)}</text>)}
+    <text x={width / 2} y={height - 8} textAnchor="middle" fontSize="12" fill="currentColor">Date</text>
+  </svg></div>;
+}
+
+function MetricTableReportChart({
+  rows,
+  metric,
+  label,
+  kind,
+  benchmarkValue,
+  benchmarkLabel,
+  onHover,
+}: {
+  rows: Array<Record<string, string | number | null>>;
+  metric: string;
+  label: string;
+  kind: 'line' | 'bar';
+  benchmarkValue?: string;
+  benchmarkLabel?: string;
+  onHover: (value: { x: number; y: number; text: string; bg?: string } | null) => void;
+}) {
+  const parseChartValue = (value: unknown): number | null => {
+    const upper = metric.trim().toUpperCase();
+    const raw = String(value ?? '').trim().replace(/\u2212/g, '-');
+    if (upper === 'RTILT' || upper === 'BTILT' || upper === 'TILTDEV') {
+      const clock = raw.match(/^([+-])?\s*(\d{1,2})\s*:\s*(\d{1,2})$/);
+      if (clock) {
+        const minutes = Number(clock[2]) * 60 + Number(clock[3]);
+        return clock[1] === '-' ? -minutes : minutes;
+      }
+    }
+    return parseSortableNumber(value);
+  };
+  const formatChartValue = (value: number): string => {
+    const upper = metric.trim().toUpperCase();
+    if (upper === 'RTILT' || upper === 'BTILT') {
+      const totalMinutes = ((Math.round(value) % 720) + 720) % 720;
+      const hour = Math.floor(totalMinutes / 60) || 12;
+      return `${hour}:${String(totalMinutes % 60).padStart(2, '0')}`;
+    }
+    if (upper === 'TILTDEV') {
+      const rounded = Math.round(value);
+      const sign = rounded > 0 ? '+' : rounded < 0 ? '-' : '';
+      const absolute = Math.abs(rounded);
+      return `${sign}${Math.floor(absolute / 60)}:${String(absolute % 60).padStart(2, '0')}`;
+    }
+    return formatTableDisplayValue(metric, value);
+  };
+  const valuesByDate = new Map<string, number[]>();
+  for (const row of rows) {
+    const date = String(row.Date ?? row.date ?? row.Split ?? '').trim();
+    const value = parseChartValue(row[metric]);
+    if (!date || date.toLowerCase() === 'all' || value === null) continue;
+    const values = valuesByDate.get(date) ?? [];
+    values.push(value);
+    valuesByDate.set(date, values);
+  }
+  const points = Array.from(valuesByDate.entries())
+    .map(([date, values]) => ({ date, value: values.reduce((sum, value) => sum + value, 0) / values.length }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  if (!points.length) return <p className="portal-muted-text">No metric data for the current filters.</p>;
+
+  const width = 720, height = 390, left = 64, right = 24, top = 28, bottom = points.length > 5 ? 92 : 66;
+  const plotWidth = width - left - right;
+  const benchmark = parseChartValue(benchmarkValue);
+  const hasBenchmark = String(benchmarkValue ?? '').trim() !== '' && benchmark !== null;
+  const values = [...points.map((point) => point.value), ...(hasBenchmark && benchmark !== null ? [benchmark] : [])];
+  const rawMin = Math.min(...values), rawMax = Math.max(...values);
+  const padding = rawMin === rawMax ? Math.max(1, Math.abs(rawMax) * 0.08) : (rawMax - rawMin) * 0.1;
+  const min = rawMin - padding, max = rawMax + padding;
+  const lineX = (index: number) => points.length === 1 ? left + plotWidth / 2 : left + index / (points.length - 1) * plotWidth;
+  const barX = (index: number) => left + ((index + 0.5) / points.length) * plotWidth;
+  const px = (index: number) => kind === 'bar' ? barX(index) : lineX(index);
+  const py = (value: number) => top + (max - value) / Math.max(0.000001, max - min) * (height - top - bottom);
+  const ticks = Array.from({ length: 5 }, (_, index) => min + index / 4 * (max - min));
+  const path = points.map((point, index) => `${index ? 'L' : 'M'} ${px(index)} ${py(point.value)}`).join(' ');
+  const barWidth = Math.min(48, plotWidth / Math.max(1, points.length) * 0.65);
+  return <div className="portal-custom-reports-velocity"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${label} ${kind} graph`}>
+    {ticks.map((tick) => <g key={tick}><line x1={left} y1={py(tick)} x2={width - right} y2={py(tick)} stroke="rgba(148,163,184,.18)"/><text x={left - 8} y={py(tick) + 4} textAnchor="end" fontSize="11" fill="currentColor">{tick.toFixed(1)}</text></g>)}
+    <line x1={left} y1={height - bottom} x2={width - right} y2={height - bottom} stroke="rgba(148,163,184,.55)"/>
+    {kind === 'line' ? <path d={path} fill="none" stroke="#e11d48" strokeWidth="3"/> : null}
+    {points.map((point, index) => {
+      const hoverText = `${fmtShortDate(point.date)}\n${label}: ${formatChartValue(point.value)}`;
+      return kind === 'bar'
+        ? <rect key={point.date} x={px(index) - barWidth / 2} y={py(point.value)} width={barWidth} height={height - bottom - py(point.value)} rx="4" fill="#e11d48" onMouseMove={(event) => onHover({ x: event.clientX, y: event.clientY, text: hoverText, bg: '#e11d48' })} onMouseLeave={() => onHover(null)}/>
+        : <circle key={point.date} cx={px(index)} cy={py(point.value)} r="5" fill="#e11d48" onMouseMove={(event) => onHover({ x: event.clientX, y: event.clientY, text: hoverText, bg: '#e11d48' })} onMouseLeave={() => onHover(null)}/>;
+    })}
+    {hasBenchmark && benchmark !== null ? <g aria-label={`${benchmarkLabel?.trim() || 'Goal'} ${benchmark}`}>
+      <line x1={left} y1={py(benchmark)} x2={width - right} y2={py(benchmark)} stroke="#f8fafc" strokeWidth="2" strokeDasharray="8 6" opacity="0.9"/>
+      <text x={width - right - 4} y={py(benchmark) - 7} textAnchor="end" fontSize="11" fontWeight="800" fill="#f8fafc" paintOrder="stroke" stroke="rgba(0,0,0,.82)" strokeWidth="4">
+        {benchmarkLabel?.trim() || 'Goal'} · {formatChartValue(benchmark)}
+      </text>
+    </g> : null}
+    {points.map((point, index) => <text key={`date-${point.date}`} x={px(index)} y={height - bottom + 18} textAnchor={points.length > 5 ? 'end' : 'middle'} transform={points.length > 5 ? `rotate(-35 ${px(index)} ${height - bottom + 18})` : undefined} fontSize="10" fill="currentColor">{fmtShortDate(point.date)}</text>)}
+    <text x={width / 2} y={height - 8} textAnchor="middle" fontSize="12" fill="currentColor">Date</text>
+  </svg></div>;
 }
 
 function formatVerticalRowLabel(value: string): string {
@@ -1204,6 +1402,13 @@ function emptyCell(): CellConfig {
     batSpeedColorBy: 'pitch_type',
     evlaColorBy: 'result',
     sprayView: 'Batted Balls',
+    forcePlateMetrics: [],
+    forcePlateMetricLabels: {},
+    forcePlateTestType: 'All',
+    metricChartMetric: '',
+    metricChartLabel: '',
+    chartBenchmarkValue: '',
+    chartBenchmarkLabel: '',
   };
 }
 
@@ -1218,6 +1423,8 @@ function normalizeCellConfig(input: Partial<CellConfig> | undefined): CellConfig
     pitchResults: input?.pitchResults?.length ? input.pitchResults : base.pitchResults,
     countFilter: input?.countFilter?.length ? input.countFilter : base.countFilter,
     afterCountFilter: input?.afterCountFilter?.length ? input.afterCountFilter : base.afterCountFilter,
+    forcePlateMetrics: input?.forcePlateMetrics?.length ? input.forcePlateMetrics : base.forcePlateMetrics,
+    forcePlateMetricLabels: input?.forcePlateMetricLabels ?? base.forcePlateMetricLabels,
     zoneLocations: input?.zoneLocations?.length ? input.zoneLocations : base.zoneLocations,
   };
   merged.panelType = normalizePanelType(merged.panelType);
@@ -2385,6 +2592,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const [qpLocationOptions, setQpLocationOptions] = useState<string[]>(['All', 'Yes', 'No']);
   const [inZoneOptions, setInZoneOptions] = useState<string[]>(['All']);
   const [hittingTableModes, setHittingTableModes] = useState<string[]>(HITTING_TABLES);
+  const [forcePlateMetricOptions, setForcePlateMetricOptions] = useState<Array<{ value: string; label: string; testTypes?: string[] }>>([]);
+  const [forcePlateTestTypes, setForcePlateTestTypes] = useState<string[]>([]);
   const [customTables, setCustomTables] = useState<CustomTableConfig[]>([]);
   const [teamCurrentRosterNames, setTeamCurrentRosterNames] = useState<string[] | null>(null);
   const [teamCurrentRosterNameKeys, setTeamCurrentRosterNameKeys] = useState<string[] | null>(null);
@@ -2590,7 +2799,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const labelRowOffset = hasColumnLabels ? 1 : 0;
 
   const playerLabel = useMemo(() => subjectLabelForReportType(reportType), [reportType]);
+  const canUseForcePlatePanels =
+    String(schoolCode || initialSchoolCode).trim().toUpperCase() === 'PCU' &&
+    (reportType === 'Pitching' || reportType === 'Hitting' || reportType === 'Force Plates');
   const availableTableModes = useMemo(() => {
+    if (reportType === 'Force Plates') return ['Force Plate Data'];
     const base =
       reportType === 'Hitting'
         ? (hittingTableModes.length ? hittingTableModes : HITTING_TABLES)
@@ -2600,13 +2813,28 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       .filter((id) => Number.isFinite(id) && id > 0)
       .map((id) => customTableModeValue(id));
     const customNames = customTables.map((item) => String(item.name ?? '').trim()).filter(Boolean);
-    return Array.from(new Set([...base, ...customModes, ...customNames]));
-  }, [customTables, hittingTableModes, reportType]);
+    return Array.from(new Set([...base, ...(canUseForcePlatePanels ? ['Force Plate Data'] : []), ...customModes, ...customNames]));
+  }, [canUseForcePlatePanels, customTables, hittingTableModes, reportType]);
   const defaultTableMode = useMemo(
     () => availableTableModes[0] ?? defaultTableModeForReportType(reportType),
     [availableTableModes, reportType]
   );
-  const availablePanelTypes = useMemo(() => panelOptionsForReportType(reportType), [reportType]);
+  const availablePanelTypes = useMemo(
+    () => panelOptionsForReportType(reportType).filter((panelType) =>
+      canUseForcePlatePanels || (panelType !== 'Force Plate Line Chart' && panelType !== 'Force Plate Bar Chart')
+    ),
+    [canUseForcePlatePanels, reportType]
+  );
+  const metricChartOptions = useMemo<OptionItem[]>(() => {
+    if (reportType === 'Force Plates') {
+      return forcePlateMetricOptions.map((option) => ({ value: option.value, label: option.label }));
+    }
+    if (reportType === 'Catching') {
+      return CATCHING_METRIC_OPTIONS.map((metric) => ({ value: metric, label: dashboardMetricLabel(metric) }));
+    }
+    const domain = reportType === 'Hitting' ? 'hitting' : 'pitching';
+    return dashboardMetricOptions(domain).map((metric) => ({ value: metric, label: dashboardMetricLabel(metric) }));
+  }, [forcePlateMetricOptions, reportType]);
   const availableSplitByOptions = useMemo(() => splitByOptionsForReportType(reportType), [reportType]);
 
   const teamOptions = useMemo<OptionItem[]>(() => {
@@ -3009,8 +3237,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       const next = { ...current };
       const validTables = new Set(availableTableModes);
       const fallback = defaultTableMode;
-      const validPanels = new Set(panelOptionsForReportType(reportType));
-      const validSplitBy = new Set(splitByOptionsForReportType(reportType));
+      const validPanels = new Set(availablePanelTypes);
       for (const key of Object.keys(next)) {
         const normalized = normalizeCellConfig(next[key]);
         if (String(normalized.tableMode || '').startsWith('custom_saved:')) {
@@ -3036,14 +3263,20 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         if (!validPanels.has(normalized.panelType)) {
           normalized.panelType = 'Summary Table';
         }
-        if (!validSplitBy.has(normalized.splitBy)) {
-          normalized.splitBy = splitByOptionsForReportType(reportType)[0] ?? 'Pitch Types';
+        const usesForcePlateData =
+          reportType === 'Force Plates' ||
+          normalized.panelType === 'Force Plate Line Chart' ||
+          normalized.panelType === 'Force Plate Bar Chart' ||
+          (normalized.panelType === 'Summary Table' && normalized.tableMode === 'Force Plate Data');
+        const cellSplitOptions = usesForcePlateData ? ['Date', 'Test Type', 'Player'] : splitByOptionsForReportType(reportType);
+        if (!cellSplitOptions.includes(normalized.splitBy)) {
+          normalized.splitBy = cellSplitOptions[0] ?? 'Pitch Types';
         }
         next[key] = normalized;
       }
       return next;
     });
-  }, [reportType, initialSchoolCode, availableTableModes, defaultTableMode, customTables]);
+  }, [reportType, initialSchoolCode, availableTableModes, availablePanelTypes, defaultTableMode, customTables]);
 
   useEffect(() => {
     if (restoringSavedReportRef.current) return;
@@ -3099,7 +3332,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             ? '/api/dashboard/pitching/filters'
             : reportType === 'Hitting'
               ? '/api/dashboard/hitting/filters'
-              : '/api/dashboard/catching/filters';
+              : reportType === 'Catching'
+                ? '/api/dashboard/catching/filters'
+                : '/api/dashboard/force-plates/filters';
         const response = await fetch(endpoint, { cache: 'no-store' });
         const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
         if (!response.ok) throw new Error(String(payload.error ?? 'Failed to load filters.'));
@@ -3162,7 +3397,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           const leagueStart = min && min > LEAGUE_SEASON_START ? min : LEAGUE_SEASON_START;
           setGlobalStartDate(isAtlanticLeagueSchool ? ATLANTIC_LEAGUE_SEASON_START : (isLeagueSchool ? leagueStart : (max || min || '')));
           setGlobalEndDate(isAtlanticLeagueSchool ? toYmd(new Date().toISOString()) : (max || min || ''));
-        } else {
+        } else if (reportType === 'Catching') {
           const typed = payload as unknown as CatchingFiltersPayload;
           const catchers = Array.from(new Set((typed.catchers ?? []).filter((entry) => entry && entry.trim())));
           setPlayersByTeam(catchers);
@@ -3190,6 +3425,28 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           const leagueStart = min && min > LEAGUE_SEASON_START ? min : LEAGUE_SEASON_START;
           setGlobalStartDate(isAtlanticLeagueSchool ? ATLANTIC_LEAGUE_SEASON_START : (isLeagueSchool ? leagueStart : (max || min || '')));
           setGlobalEndDate(isAtlanticLeagueSchool ? toYmd(new Date().toISOString()) : (max || min || ''));
+        } else {
+          const typed = payload as unknown as ForcePlateFiltersPayload;
+          const athletes = Array.from(new Set((typed.players ?? []).filter((entry) => entry && entry.trim())));
+          setPlayersByTeam(athletes);
+          setPlayersBySelectedTeam({});
+          setPlayerTeamCodeByName({});
+          setSchoolCode(typed.school_code ?? 'PCU');
+          setTeamTypeOptions(['All']);
+          setSessionTypeOptions(['All']);
+          setPitchTypeOptions(['All']);
+          setForcePlateMetricOptions(Array.isArray(typed.metrics) ? typed.metrics : []);
+          setForcePlateTestTypes(['All', ...Array.from(new Set((typed.test_types ?? []).filter(Boolean)))]);
+          const firstMetric = typed.metrics?.[0]?.value ?? '';
+          setCellConfigs((current) => Object.fromEntries(Object.entries(current).map(([cellId, config]) => [cellId, {
+            ...config,
+            tableMode: 'Force Plate Data',
+            splitBy: 'Date',
+            filterSelect: ['Dates'],
+            forcePlateMetrics: config.forcePlateMetrics?.length ? config.forcePlateMetrics : firstMetric ? [firstMetric] : [],
+          }])));
+          setGlobalStartDate((current) => current || '');
+          setGlobalEndDate((current) => current || toYmd(new Date().toISOString()));
         }
       } catch (err) {
         if (!active) return;
@@ -3203,6 +3460,47 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       active = false;
     };
   }, [reportType]);
+
+  useEffect(() => {
+    const activeSchool = String(schoolCode || initialSchoolCode).trim().toUpperCase();
+    if (activeSchool !== 'PCU' || !['Pitching', 'Hitting', 'Force Plates'].includes(reportType)) {
+      setForcePlateMetricOptions([]);
+      setForcePlateTestTypes([]);
+      return;
+    }
+
+    let active = true;
+    async function loadForcePlateCatalog() {
+      try {
+        const response = await fetch('/api/dashboard/force-plates/filters', { cache: 'no-store' });
+        const payload = (await response.json().catch(() => ({}))) as ForcePlateFiltersPayload & { error?: string };
+        if (!response.ok) throw new Error(payload.error ?? 'Failed to load force-plate metrics.');
+        if (!active) return;
+        const metrics = Array.isArray(payload.metrics) ? payload.metrics : [];
+        setForcePlateMetricOptions(metrics);
+        setForcePlateTestTypes(['All', ...Array.from(new Set((payload.test_types ?? []).filter(Boolean)))]);
+        const firstMetric = metrics[0]?.value ?? '';
+        if (firstMetric) {
+          setCellConfigs((current) => Object.fromEntries(Object.entries(current).map(([cellId, rawConfig]) => {
+            const config = normalizeCellConfig(rawConfig);
+            const isForcePlatePanel =
+              config.panelType === 'Force Plate Line Chart' ||
+              config.panelType === 'Force Plate Bar Chart' ||
+              (config.panelType === 'Summary Table' && config.tableMode === 'Force Plate Data');
+            return [cellId, isForcePlatePanel && !config.forcePlateMetrics.length
+              ? { ...config, forcePlateMetrics: [firstMetric], forcePlateTestType: 'All' }
+              : config];
+          })));
+        }
+      } catch (err) {
+        if (active) setError(err instanceof Error ? err.message : 'Failed to load force-plate metrics.');
+      }
+    }
+    void loadForcePlateCatalog();
+    return () => {
+      active = false;
+    };
+  }, [initialSchoolCode, reportType, schoolCode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3432,19 +3730,58 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           const normalizedPlayer = normalizeNameForApi(scopePlayer);
           const startDate = useGlobalDates ? globalStartDate : config.dateStart || globalStartDate;
           const endDate = useGlobalDates ? globalEndDate : config.dateEnd || globalEndDate;
+          const normalizedPanelType = normalizePanelType(config.panelType);
+          const isMetricChart = normalizedPanelType === 'Metric Line Chart' || normalizedPanelType === 'Metric Bar Chart';
+          const usesForcePlateData =
+            reportType === 'Force Plates' ||
+            normalizedPanelType === 'Force Plate Line Chart' ||
+            normalizedPanelType === 'Force Plate Bar Chart' ||
+            (normalizedPanelType === 'Summary Table' && config.tableMode === 'Force Plate Data');
+          if (usesForcePlateData) {
+            const selectedMetrics = isMetricChart && reportType !== 'Force Plates' && config.metricChartMetric
+              ? [config.metricChartMetric]
+              : config.forcePlateMetrics?.length
+                ? config.forcePlateMetrics
+              : forcePlateMetricOptions[0]?.value
+                ? [forcePlateMetricOptions[0].value]
+                : [];
+            if (!selectedMetrics.length) {
+              commitCellResult(cellId, {}, { status: 'ready', message: 'Choose at least one force-plate metric.' });
+              return;
+            }
+            const forceParams = new URLSearchParams({
+              player: normalizedPlayer || 'All',
+              metrics: selectedMetrics.join(','),
+              test_type: config.forcePlateTestType || 'All',
+            });
+            if (startDate) forceParams.set('start_date', startDate);
+            if (endDate) forceParams.set('end_date', endDate);
+            const forceKey = `/api/dashboard/force-plates/overview?${forceParams.toString()}`;
+            if (active) setCellRequestUrls((current) => current[cellId] === forceKey ? current : { ...current, [cellId]: forceKey });
+            const cached = cellsCacheRef.current.get(forceKey);
+            if (cached && Date.now() - cached.at < 60_000) {
+              commitCellResult(cellId, cached.payload, { status: 'ready' });
+              return;
+            }
+            const response = await fetch(forceKey, { cache: 'no-store', signal: controller.signal });
+            const payload = (await response.json().catch(() => ({}))) as OverviewLitePayload & { error?: string };
+            if (!response.ok) throw new Error(payload.error ?? 'Failed to load force-plate report data.');
+            cellsCacheRef.current.set(forceKey, { at: Date.now(), payload });
+            commitCellResult(cellId, payload, { status: 'ready' });
+            return;
+          }
           const ignoreDateWindow = reportType === 'Hitting' && useMostRecent200Pa;
           const cellFilters = config.filterSelect ?? ['Dates', 'Session Type', 'Pitch Types'];
           const impliedPitcherHand = reportType === 'Hitting' ? inferPitcherHandFromTitle(reportTitle) : '';
           const params = new URLSearchParams();
           const isProSchool = String(resolvedSchoolCode || '').trim().toUpperCase() === 'PRO';
-          const normalizedPanelType = normalizePanelType(config.panelType);
           const isHeatmapPanel = normalizedPanelType === 'Heatmap';
           const isMovementPanel = normalizedPanelType === 'Movement Plot';
           const isVelocityPanel =
             normalizedPanelType === 'Velocity Chart' ||
             normalizedPanelType === 'Velocity Bar Chart' ||
             normalizedPanelType === 'Velocity Distribution';
-          const needsChartPoints = normalizedPanelType !== '' && normalizedPanelType !== 'Summary Table' && normalizedPanelType !== 'Note Section';
+          const needsChartPoints = normalizedPanelType !== '' && normalizedPanelType !== 'Summary Table' && normalizedPanelType !== 'Note Section' && !isMetricChart;
           if (!ignoreDateWindow && startDate) params.set('start_date', startDate);
           if (!ignoreDateWindow && endDate) params.set('end_date', endDate);
           params.set('include_chart_points', needsChartPoints ? '1' : '0');
@@ -3470,7 +3807,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           }
           params.set('include_row_pitches', '0');
           params.set('include_trend_rows', '0');
-          const splitByApi = normalizeSplitByForApi(config.splitBy || 'Pitch Types');
+          const splitByApi = isMetricChart ? 'Date' : normalizeSplitByForApi(config.splitBy || 'Pitch Types');
           params.set('split_by', splitByApi);
           const selectedTableMode = config.tableMode || defaultTableMode;
           const matchedCustomTable = String(selectedTableMode).startsWith('custom_saved:')
@@ -3479,7 +3816,14 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                 return customTables.find((entry) => Number(entry.id) === id);
               })()
             : customTables.find((entry) => String(entry.name ?? '').trim() === selectedTableMode);
-          if (matchedCustomTable) {
+          if (isMetricChart && config.metricChartMetric) {
+            if (reportType === 'Catching' && CATCHING_METRIC_OPTIONS.includes(config.metricChartMetric)) {
+              params.set('table_mode', 'Catching Data');
+            } else {
+              params.set('table_mode', 'Custom');
+              params.set('custom_columns', config.metricChartMetric);
+            }
+          } else if (matchedCustomTable) {
             params.set('table_mode', 'Custom');
             if ((matchedCustomTable.columns ?? []).length) {
               params.set('custom_columns', matchedCustomTable.columns.join(','));
@@ -4089,11 +4433,21 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       setCellPercentileBaselineRows((current) => ({ ...current, ...outPercentileRows }));
       setCellLoadStates((current) => ({ ...current, ...nextCellStates }));
     }
-    const timer = window.setTimeout(loadCellsData, 60);
+    const timer = window.setTimeout(() => {
+      void loadCellsData().catch((loadError) => {
+        // Changing a filter or panel intentionally tears down the previous
+        // request effect. Fetch rejects on that abort; it is not a report
+        // failure and must never escape as an unhandled runtime exception.
+        if (!active || controller.signal.aborted || isAbortLikeError(loadError)) return;
+        setError(loadError instanceof Error ? loadError.message : 'Failed to load report data.');
+      });
+    }, 60);
     return () => {
       active = false;
-      controller.abort();
       window.clearTimeout(timer);
+      if (!controller.signal.aborted) {
+        controller.abort(new DOMException('Report request superseded.', 'AbortError'));
+      }
     };
   }, [
     visibleCellKeys,
@@ -4124,6 +4478,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     showCellPercentiles,
     customTables,
     defaultTableMode,
+    forcePlateMetricOptions,
   ]);
 
   // Fetches "Intended Target Miss" panel data. Kept as its own small,
@@ -5027,6 +5382,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                     { value: 'Pitching', label: 'Pitching' },
                     { value: 'Hitting', label: 'Hitting' },
                     { value: 'Catching', label: 'Catching' },
+                    ...(String(schoolCode || initialSchoolCode).trim().toUpperCase() === 'PCU' ? [{ value: 'Force Plates', label: 'Force Plates' }] : []),
                   ]}
                   value={reportType}
                   onChange={(next) => setReportType((next as ReportType) || 'Pitching')}
@@ -5606,9 +5962,19 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                     value: entry,
                     label: entry || 'Select',
                   }));
-                  const filterTokenOptions = FILTER_TOKENS.filter((entry) => entry !== 'Level' || isLeagueSchool).map((entry) => ({ value: entry, label: entry }));
-                  const splitByOptions = availableSplitByOptions.map((entry) => ({ value: entry, label: splitByLabel(entry) }));
                   const contentType = normalizePanelType(config.panelType);
+                  const isBenchmarkChart =
+                    contentType === 'Metric Line Chart' ||
+                    contentType === 'Metric Bar Chart' ||
+                    contentType === 'Force Plate Line Chart' ||
+                    contentType === 'Force Plate Bar Chart';
+                  const usesForcePlateData =
+                    reportType === 'Force Plates' ||
+                    contentType === 'Force Plate Line Chart' ||
+                    contentType === 'Force Plate Bar Chart' ||
+                    (contentType === 'Summary Table' && config.tableMode === 'Force Plate Data');
+                  const filterTokenOptions = (usesForcePlateData ? ['Dates'] as FilterToken[] : FILTER_TOKENS.filter((entry) => entry !== 'Level' || isLeagueSchool)).map((entry) => ({ value: entry, label: entry }));
+                  const splitByOptions = (usesForcePlateData ? ['Date', 'Test Type', 'Player'] : availableSplitByOptions).map((entry) => ({ value: entry, label: splitByLabel(entry) }));
                   const isNote = contentType === 'Note Section';
                   const isSummaryTable = contentType === 'Summary Table';
                   const isLocation = contentType === 'Location Plot';
@@ -5711,12 +6077,28 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                         <SearchableSingleSelect
                           options={panelTypeOptions}
                           value={contentType}
-                          onChange={(next) =>
-                            setCellConfigs((current) => ({
+                          onChange={(next) => setCellConfigs((current) => {
+                            const existing = normalizeCellConfig(current[cellId]);
+                            const panelType = normalizePanelType(next as PanelType) || 'Summary Table';
+                            const isForceChart = panelType === 'Force Plate Line Chart' || panelType === 'Force Plate Bar Chart';
+                            const isMetricChart = panelType === 'Metric Line Chart' || panelType === 'Metric Bar Chart';
+                            return {
                               ...current,
-                              [cellId]: { ...(current[cellId] ?? emptyCell()), panelType: normalizePanelType(next as PanelType) || 'Summary Table' },
-                            }))
-                          }
+                              [cellId]: {
+                                ...existing,
+                                panelType,
+                                forcePlateMetrics:
+                                  (isForceChart || (isMetricChart && reportType === 'Force Plates')) && !existing.forcePlateMetrics.length && forcePlateMetricOptions[0]?.value
+                                    ? [forcePlateMetricOptions[0].value]
+                                    : existing.forcePlateMetrics,
+                                forcePlateTestType: isForceChart ? (existing.forcePlateTestType || 'All') : existing.forcePlateTestType,
+                                metricChartMetric:
+                                  isMetricChart && !existing.metricChartMetric && metricChartOptions[0]?.value
+                                    ? metricChartOptions[0].value
+                                    : existing.metricChartMetric,
+                              },
+                            };
+                          })}
                         />
                         {reportScope === 'Single Player' ? (
                           <SearchableSingleSelect
@@ -5748,6 +6130,92 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                             }))
                           }
                         />
+                        {usesForcePlateData && !isNote ? (
+                          <>
+                            <label>VALD Metrics</label>
+                            <SearchableMultiSelect
+                              options={forcePlateMetricOptions.map((option) => ({ value: option.value, label: option.label }))}
+                              values={config.forcePlateMetrics}
+                              onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), forcePlateMetrics: next, forcePlateTestType: 'All' } }))}
+                            />
+                            {contentType === 'Force Plate Line Chart' || contentType === 'Force Plate Bar Chart' || contentType === 'Metric Line Chart' || contentType === 'Metric Bar Chart' ? <span className="portal-muted-text">Charts use the first selected metric; tables show every selected metric.</span> : null}
+                            <label>Test Type</label>
+                            <SearchableSingleSelect
+                              options={['All', ...Array.from(new Set(forcePlateMetricOptions.filter((option) => config.forcePlateMetrics.includes(option.value)).flatMap((option) => option.testTypes ?? forcePlateTestTypes.filter((value) => value !== 'All'))))].map((value) => ({ value, label: value }))}
+                              value={config.forcePlateTestType || 'All'}
+                              onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), forcePlateTestType: next || 'All' } }))}
+                            />
+                            {config.forcePlateMetrics.map((metric) => (
+                              <label key={`${cellId}-alias-${metric}`} title={forcePlateMetricOptions.find((option) => option.value === metric)?.label ?? dashboardMetricLabel(metric)}>
+                                Display Name · {forcePlateMetricOptions.find((option) => option.value === metric)?.label ?? dashboardMetricLabel(metric)}
+                                <input
+                                  value={config.forcePlateMetricLabels[metric] ?? ''}
+                                  placeholder="Optional shorter name"
+                                  onChange={(event) => setCellConfigs((current) => {
+                                    const existing = current[cellId] ?? emptyCell();
+                                    const labels = { ...existing.forcePlateMetricLabels };
+                                    if (event.target.value) labels[metric] = event.target.value;
+                                    else delete labels[metric];
+                                    return { ...current, [cellId]: { ...existing, forcePlateMetricLabels: labels } };
+                                  })}
+                                />
+                              </label>
+                            ))}
+                          </>
+                        ) : null}
+                        {(contentType === 'Metric Line Chart' || contentType === 'Metric Bar Chart') && reportType !== 'Force Plates' ? (
+                          <>
+                            <label>Metric</label>
+                            <SearchableSingleSelect
+                              options={metricChartOptions}
+                              value={config.metricChartMetric || metricChartOptions[0]?.value || ''}
+                              onChange={(next) => setCellConfigs((current) => ({
+                                ...current,
+                                [cellId]: { ...(current[cellId] ?? emptyCell()), metricChartMetric: next },
+                              }))}
+                            />
+                            <label>
+                              Display Name
+                              <input
+                                value={config.metricChartLabel}
+                                placeholder={dashboardMetricLabel(config.metricChartMetric || metricChartOptions[0]?.value || '')}
+                                onChange={(event) => setCellConfigs((current) => ({
+                                  ...current,
+                                  [cellId]: { ...(current[cellId] ?? emptyCell()), metricChartLabel: event.target.value },
+                                }))}
+                              />
+                            </label>
+                          </>
+                        ) : null}
+                        {isBenchmarkChart ? (
+                          <>
+                            <label>
+                              Goal / Benchmark
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                value={config.chartBenchmarkValue}
+                                placeholder="Optional target value"
+                                onChange={(event) => setCellConfigs((current) => ({
+                                  ...current,
+                                  [cellId]: { ...(current[cellId] ?? emptyCell()), chartBenchmarkValue: event.target.value },
+                                }))}
+                              />
+                            </label>
+                            <label>
+                              Benchmark Label
+                              <input
+                                value={config.chartBenchmarkLabel}
+                                placeholder="Goal"
+                                onChange={(event) => setCellConfigs((current) => ({
+                                  ...current,
+                                  [cellId]: { ...(current[cellId] ?? emptyCell()), chartBenchmarkLabel: event.target.value },
+                                }))}
+                              />
+                            </label>
+                            <span className="portal-muted-text">Leave the value blank to hide the benchmark line.</span>
+                          </>
+                        ) : null}
                         <label>Column Span</label>
                         {(() => {
                           const maxSpan = Math.max(1, reportCols - Number(cellId.match(/^r\d+c(\d+)$/)?.[1] ?? '1') + 1);
@@ -5778,12 +6246,24 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                             <SearchableSingleSelect
                               options={tableModeOptions}
                               value={config.tableMode || defaultTableMode}
-                              onChange={(next) =>
-                                setCellConfigs((current) => ({
+                              onChange={(next) => setCellConfigs((current) => {
+                                const existing = normalizeCellConfig(current[cellId]);
+                                const useForceTable = next === 'Force Plate Data';
+                                return {
                                   ...current,
-                                  [cellId]: { ...(current[cellId] ?? emptyCell()), tableMode: next },
-                                }))
-                              }
+                                  [cellId]: {
+                                    ...existing,
+                                    tableMode: next,
+                                    splitBy: useForceTable ? 'Date' : existing.splitBy,
+                                    filterSelect: useForceTable ? ['Dates'] : existing.filterSelect,
+                                    forcePlateMetrics:
+                                      useForceTable && !existing.forcePlateMetrics.length && forcePlateMetricOptions[0]?.value
+                                        ? [forcePlateMetricOptions[0].value]
+                                        : existing.forcePlateMetrics,
+                                    forcePlateTestType: useForceTable ? (existing.forcePlateTestType || 'All') : existing.forcePlateTestType,
+                                  },
+                                };
+                              })}
                             />
                             <label>Split By</label>
                             <SearchableSingleSelect
@@ -7783,6 +8263,38 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                         <div className="portal-custom-reports-ab-list">
                           <p className="portal-muted-text">No data for selected velocity chart.</p>
                         </div>
+                      ) : contentType === 'Metric Line Chart' || contentType === 'Metric Bar Chart' ? (
+                        reportType === 'Force Plates' ? (
+                          <ForcePlateReportChart
+                            points={chartPoints as unknown as Array<Record<string, unknown>>}
+                            metric={config.forcePlateMetrics[0] ?? forcePlateMetricOptions[0]?.value ?? ''}
+                            label={config.forcePlateMetricLabels[config.forcePlateMetrics[0] ?? ''] || forcePlateMetricOptions.find((option) => option.value === config.forcePlateMetrics[0])?.label || dashboardMetricLabel(config.forcePlateMetrics[0] ?? '')}
+                            kind={contentType === 'Metric Bar Chart' ? 'bar' : 'line'}
+                            benchmarkValue={config.chartBenchmarkValue}
+                            benchmarkLabel={config.chartBenchmarkLabel}
+                            onHover={setChartHover}
+                          />
+                        ) : (
+                          <MetricTableReportChart
+                            rows={tableRows}
+                            metric={config.metricChartMetric || metricChartOptions[0]?.value || ''}
+                            label={config.metricChartLabel || dashboardMetricLabel(config.metricChartMetric || metricChartOptions[0]?.value || '')}
+                            kind={contentType === 'Metric Bar Chart' ? 'bar' : 'line'}
+                            benchmarkValue={config.chartBenchmarkValue}
+                            benchmarkLabel={config.chartBenchmarkLabel}
+                            onHover={setChartHover}
+                          />
+                        )
+                      ) : contentType === 'Force Plate Line Chart' || contentType === 'Force Plate Bar Chart' ? (
+                        <ForcePlateReportChart
+                          points={chartPoints as unknown as Array<Record<string, unknown>>}
+                          metric={config.forcePlateMetrics[0] ?? ''}
+                          label={config.forcePlateMetricLabels[config.forcePlateMetrics[0] ?? ''] || forcePlateMetricOptions.find((option) => option.value === config.forcePlateMetrics[0])?.label || dashboardMetricLabel(config.forcePlateMetrics[0] ?? '')}
+                          kind={contentType === 'Force Plate Bar Chart' ? 'bar' : 'line'}
+                          benchmarkValue={config.chartBenchmarkValue}
+                          benchmarkLabel={config.chartBenchmarkLabel}
+                          onHover={setChartHover}
+                        />
                       ) : contentType === 'Summary Table' ? (
                         <div className={`portal-custom-reports-table-wrap${useCompactSummaryTable ? ' portal-custom-reports-table-wrap--compact' : ''}`}>
                           <table className={`portal-table${useCompactSummaryTable ? ' portal-table--compact' : ''}`}>
@@ -7813,7 +8325,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                         })
                                       }
                                     >
-                                      {column}
+                                      {usesForcePlateData ? (config.forcePlateMetricLabels[column] || forcePlateMetricOptions.find((option) => option.value === column)?.label || dashboardMetricLabel(column)) : column}
                                       {activeSort ? ` ${tableSort?.direction === 'asc' ? '↑' : '↓'}` : ''}
                                     </th>
                                   );
@@ -7841,7 +8353,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                       {(() => {
                                         const rawValue = getTableRowValue(row as Record<string, unknown>, column);
                                         const percentileValue = tableCellPercentile(row, column, rawValue, percentileDistributions);
-                                        const val = formatTableDisplayValue(column, rawValue);
+                                        const val = usesForcePlateData ? formatForcePlateMetricValue(column, rawValue) : formatTableDisplayValue(column, rawValue);
                                         const splitValue = getTableRowValue(row as Record<string, unknown>, tableColumns[0] ?? '');
                                         const isAllRow = String(splitValue ?? '').trim().toLowerCase() === 'all';
                                         const pitchStyle = !isAllRow && columnIndex === 0 ? pitchTypeCellStyle(val) : null;

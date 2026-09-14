@@ -1,4 +1,5 @@
 import { getAnthropicClient, DASHBOARD_CHAT_MODEL } from './anthropic-client';
+import { getOpenAiTranscriptionKey, sanitizeAiProcessingError } from './openai-transcription-config';
 import { canonicalReportMetric, type PlayerGoalReportEvidence } from './report-goal-evidence';
 
 function extractText(content: Array<{ type: string; text?: string }>): string {
@@ -148,18 +149,17 @@ Write 2-3 short paragraphs in plain language. Lead immediately with the main tak
 }
 
 export async function transcribeAudioFiles(paths: string[], prompt = 'Baseball player development, pitching, hitting, bullpen, TrackMan, IVB, horizontal break, velocity, release height.'): Promise<string> {
-  const key = process.env.OPENAI_API_KEY?.trim();
-  if (!key) throw new Error('Speech transcription is not configured yet. Add OPENAI_API_KEY to the server environment.');
+  const key = getOpenAiTranscriptionKey();
   const { readFile } = await import('node:fs/promises');
   const transcripts = await Promise.all(paths.map(async (path) => {
     const bytes = await readFile(path);
     const form = new FormData();
-    form.set('model', 'gpt-transcribe');
+    form.set('model', 'gpt-4o-transcribe');
     form.set('prompt', prompt);
     form.set('file', new File([bytes], path.split('/').pop() || 'audio.m4a', { type: 'audio/mp4' }));
     const response = await fetch('https://api.openai.com/v1/audio/transcriptions', { method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: form, signal: AbortSignal.timeout(240000) });
     const payload = await response.json().catch(() => ({})) as { text?: string; error?: { message?: string } };
-    if (!response.ok || !payload.text) throw new Error(payload.error?.message || 'Transcription failed.');
+    if (!response.ok || !payload.text) throw sanitizeAiProcessingError(payload.error?.message || 'Transcription failed.');
     return payload.text.trim();
   }));
   return transcripts.filter(Boolean).join('\n\n');

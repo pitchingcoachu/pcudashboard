@@ -14,6 +14,7 @@ import PortalThemeToggle from '../theme-toggle';
 import PortalNotificationsBell from '../notifications-bell';
 import PortalMessagesNavButton from '../messages-nav-button';
 import PortalNavOverflowMenu from '../nav-overflow-menu';
+import TrackmanSyncButton from '../trackman-sync-button';
 import { canViewPortalActivity } from '../../../lib/portal-activity';
 import { buildStaffMoreNavItems } from '../../../lib/portal-primary-nav';
 
@@ -179,6 +180,7 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
           )}
           <PortalMessagesNavButton />
           <PortalNotificationsBell />
+          {isStaff ? <TrackmanSyncButton /> : null}
           {session.role === 'player' ? <LogoutButton /> : null}
           <PortalThemeToggle />
           <div className="portal-social-row" aria-label="PCU Social Links">

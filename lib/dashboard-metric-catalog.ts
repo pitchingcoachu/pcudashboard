@@ -1,5 +1,26 @@
 export type DashboardMetricDomain = 'pitching' | 'hitting';
 
+const FORCE_PLATE_METRIC_PREFIX = 'force_plate:';
+
+export function forcePlateFlagMetric(metricName: string, metricUnit: string): string {
+  return `${FORCE_PLATE_METRIC_PREFIX}${encodeURIComponent(metricName)}:${encodeURIComponent(metricUnit)}`;
+}
+
+export function parseForcePlateFlagMetric(metric: string): { metricName: string; metricUnit: string } | null {
+  if (!metric.startsWith(FORCE_PLATE_METRIC_PREFIX)) return null;
+  const encoded = metric.slice(FORCE_PLATE_METRIC_PREFIX.length);
+  const separator = encoded.indexOf(':');
+  if (separator < 0) return null;
+  try {
+    return {
+      metricName: decodeURIComponent(encoded.slice(0, separator)),
+      metricUnit: decodeURIComponent(encoded.slice(separator + 1)),
+    };
+  } catch {
+    return null;
+  }
+}
+
 const SEPARATION_COLUMNS = ['fb', 'si'].flatMap((base) =>
   ['CH', 'SP', 'CT', 'SL', 'CB', 'SW'].flatMap((pitch) => [
     `${base}${pitch}ivbSEP`,
@@ -15,6 +36,7 @@ export const PITCHING_TABLE_METRICS = [
   'IZswing%', 'EdgeSwing%', 'PosSD%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'InZone%', 'Comp%', 'QP%',
   'Whiff%', 'SwStrk%', 'K%', 'BB%', 'K-BB%', 'GB%', 'Barrel%', 'CSW%', 'EV', 'LA',
   'Stuff+', 'Command+', 'Ctrl+', 'QP+', 'RV/100', 'PV/100',
+  'ITMissAvg', 'ITMissMed',
   'IP', 'H', 'XBH', 'HR', 'Barrels', 'BB', 'HBP', 'K', 'Whiffs', 'ERA', 'FIP', 'xFIP', 'SIERA', 'WHIP',
   'Fastball%', 'Sinker%', 'Cutter%', 'Slider%', 'Sweeper%', 'Curveball%', 'ChangeUp%', 'Splitter%',
   'FastSink%', 'Breaking%', 'Change/Split%', '2kFB%', '2kOS%',
@@ -53,15 +75,25 @@ export function dashboardMetricOptions(domain: DashboardMetricDomain): string[] 
 
 export function dashboardMetricLabel(metricInput: string): string {
   const metric = canonicalFlagMetric(metricInput);
+  const forcePlateMetric = parseForcePlateFlagMetric(metric);
+  if (forcePlateMetric) return `${forcePlateMetric.metricName}${forcePlateMetric.metricUnit ? ` (${forcePlateMetric.metricUnit})` : ''}`;
   if (['Velo', 'Max', 'EV', 'Exit Velocity', 'BatSpeed'].includes(metric)) return `${metric} (mph)`;
   if (['IVB', 'xIVB', 'dIVB', 'HB', 'xHB', 'dHB'].includes(metric) || /(?:ivb|hb|tot)SEP$/i.test(metric)) return `${metric} (in)`;
   if (['Height', 'Side', 'Ext'].includes(metric)) return `${metric} (ft)`;
-  if (['ITMissAvg', 'ITMissMed'].includes(metric)) return `${metric} (ft)`;
+  if (metric === 'ITMissAvg') return 'Average Miss Distance (in)';
+  if (metric === 'ITMissMed') return 'Median Miss Distance (in)';
   if (metric === 'Spin') return 'Spin (rpm)';
   if (['MagAngle', 'VAA', 'nVAA', 'HAA', 'LA'].includes(metric)) return `${metric} (°)`;
   if (metric === 'SpinEff') return 'SpinEff (%)';
   if (['rTilt', 'bTilt', 'TiltDev'].includes(metric)) return `${metric} (clock)`;
   return metric;
+}
+
+export function formatForcePlateMetricValue(metric: string, value: unknown): string {
+  const parsedMetric = parseForcePlateFlagMetric(metric);
+  const numericValue = typeof value === 'number' ? value : Number(value);
+  if (!parsedMetric || !Number.isFinite(numericValue)) return value === null || value === undefined || value === '' ? '—' : String(value);
+  return numericValue.toFixed(1);
 }
 
 export function metricSampleColumn(domain: DashboardMetricDomain, metricInput: string): 'P' | 'PA' {

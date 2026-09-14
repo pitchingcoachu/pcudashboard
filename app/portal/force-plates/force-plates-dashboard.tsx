@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ValdPlayerSnapshot } from '../../../lib/vald-forceplates';
 import LeaderboardCorrelationModal from '../dashboard/leaderboard-correlation-modal';
+import styles from './force-plates-dashboard.module.css';
 
 type Snapshot = {
   fetchedAt: string;
@@ -10,8 +11,306 @@ type Snapshot = {
   players: ValdPlayerSnapshot[];
 };
 
+type ForcePlateLeaderboardRow = {
+  playerName: string;
+  cmj: number | null;
+  sj: number | null;
+  cmjMax: number | null;
+  sjMax: number | null;
+  rsiModified: number | null;
+  sq: number | null;
+  metricAverages: Record<string, number | null>;
+};
+
+type SavedTableView = {
+  id: number;
+  viewType: 'athlete' | 'leaderboard';
+  name: string;
+  columns: string[];
+  columnLabels: Record<string, string>;
+};
+
+type PercentileStat = { percentile: number | null; sampleSize: number };
+type PercentileResponse = {
+  groups: Array<{ id: string; name: string; categoryName: string; label: string }>;
+  selectedGroupId: string;
+  selectedGroupLabel: string;
+  stats: {
+    latest: PercentileStat;
+    previous: PercentileStat;
+    change: PercentileStat;
+    average: PercentileStat;
+    peak: PercentileStat;
+  };
+};
+
+const BASE_TABLE_OPTIONS = [
+  { key: 'CMJ', label: 'CMJ' },
+  { key: 'SJ', label: 'SJ' },
+  { key: 'CMJMax', label: 'CMJ Max' },
+  { key: 'SJMax', label: 'SJ Max' },
+  { key: 'RSI', label: 'RSI' },
+  { key: 'SQ', label: 'SQ' },
+  { key: 'FBvelo', label: 'FBvelo' },
+  { key: 'VeloMax', label: 'VeloMax' },
+] as const;
+
 function metricKey(name: string, unit: string): string {
   return `${name}__${unit}`;
+}
+
+function splitMetricKey(key: string): { name: string; unit: string } {
+  const separator = key.lastIndexOf('__');
+  return separator >= 0 ? { name: key.slice(0, separator), unit: key.slice(separator + 2) } : { name: key, unit: '' };
+}
+
+function ordinal(value: number): string {
+  const normalized = Math.max(0, Math.min(100, Math.round(value)));
+  const mod100 = normalized % 100;
+  const suffix = mod100 >= 11 && mod100 <= 13
+    ? 'th'
+    : normalized % 10 === 1
+      ? 'st'
+      : normalized % 10 === 2
+        ? 'nd'
+        : normalized % 10 === 3
+          ? 'rd'
+          : 'th';
+  return `${normalized}${suffix}`;
+}
+
+function leaderboardValue(
+  row: ForcePlateLeaderboardRow & { fbVelo: number | null; veloMax: number | null },
+  column: string
+): number | null {
+  if (column === 'CMJ') return row.cmj;
+  if (column === 'SJ') return row.sj;
+  if (column === 'CMJMax') return row.cmjMax;
+  if (column === 'SJMax') return row.sjMax;
+  if (column === 'RSI') return row.rsiModified;
+  if (column === 'SQ') return row.sq;
+  if (column === 'FBvelo') return row.fbVelo;
+  if (column === 'VeloMax') return row.veloMax;
+  if (column.startsWith('metric:')) return row.metricAverages[column.slice('metric:'.length)] ?? null;
+  return null;
+}
+
+function percentileRank(value: number, population: number[]): number {
+  if (population.length <= 1) return 100;
+  let lower = 0;
+  let equal = 0;
+  for (const entry of population) {
+    if (entry < value) lower += 1;
+    else if (Math.abs(entry - value) < 1e-9) equal += 1;
+  }
+  return Math.round(((lower + Math.max(0, equal - 1) / 2) / (population.length - 1)) * 100);
+}
+
+function PercentileBadge({ stat, loading }: { stat: PercentileStat | undefined; loading: boolean }) {
+  if (loading) return <span className={styles.percentileBadge}>Ranking…</span>;
+  if (!stat || stat.percentile === null) return <span className={`${styles.percentileBadge} ${styles.percentileUnavailable}`}>No rank</span>;
+  return (
+    <span className={styles.percentileBadge} title={`Compared with ${stat.sampleSize} athlete${stat.sampleSize === 1 ? '' : 's'} with qualifying data`}>
+      {ordinal(stat.percentile)} percentile
+    </span>
+  );
+}
+
+function tableColumnLabel(column: string, options: ReadonlyArray<{ key: string; label: string }>, customLabels?: Record<string, string>): string {
+  const custom = customLabels?.[column]?.trim();
+  if (custom) return custom;
+  const configured = options.find((option) => option.key === column)?.label;
+  if (configured) return configured;
+  if (!column.startsWith('metric:')) return column;
+  const [name, unit = ''] = column.slice('metric:'.length).split('__');
+  return `${name}${unit ? ` (${unit})` : ''}`;
+}
+
+function reorderColumn(columns: string[], source: string, target: string): string[] {
+  const from = columns.indexOf(source);
+  const to = columns.indexOf(target);
+  if (from < 0 || to < 0 || from === to) return columns;
+  const next = [...columns];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
+}
+
+type ExportCell = string | number | null;
+
+function safeFileName(value: string): string {
+  return value.trim().replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'force-plate-export';
+}
+
+function csvCell(value: ExportCell): string {
+  const raw = value === null ? '' : String(value);
+  const protectedValue = /^[=+@]/.test(raw) || (/^-/.test(raw) && !/^-\d+(?:\.\d+)?$/.test(raw)) ? `'${raw}` : raw;
+  return `"${protectedValue.replace(/"/g, '""')}"`;
+}
+
+function downloadCsv(headers: string[], rows: ExportCell[][], fileName: string) {
+  const csv = `\uFEFF${[headers, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n')}`;
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function downloadTablePdf(args: {
+  title: string;
+  subtitle: string;
+  detail: string;
+  headers: string[];
+  rows: ExportCell[][];
+  fileName: string;
+}) {
+  const { jsPDF } = await import('jspdf');
+  const pdf = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const margin = 30;
+  const fixedWidth = 112;
+  const usableMetricWidth = pageWidth - margin * 2 - fixedWidth;
+  const columnsPerSection = Math.max(1, Math.floor(usableMetricWidth / 72));
+  const metricHeaders = args.headers.slice(1);
+  const sections = metricHeaders.length
+    ? Array.from({ length: Math.ceil(metricHeaders.length / columnsPerSection) }, (_, index) => ({
+        start: index * columnsPerSection,
+        headers: metricHeaders.slice(index * columnsPerSection, (index + 1) * columnsPerSection),
+      }))
+    : [{ start: 0, headers: [] }];
+  let pageNumber = 0;
+
+  const fitText = (value: ExportCell, width: number) => {
+    const text = value === null ? '—' : String(value);
+    if (pdf.getTextWidth(text) <= width) return text;
+    let fitted = text;
+    while (fitted.length > 1 && pdf.getTextWidth(`${fitted}…`) > width) fitted = fitted.slice(0, -1);
+    return `${fitted}…`;
+  };
+
+  for (const [sectionIndex, section] of sections.entries()) {
+    let rowIndex = 0;
+    do {
+      if (pageNumber > 0) pdf.addPage();
+      pageNumber += 1;
+      pdf.setFillColor(10, 10, 12);
+      pdf.rect(0, 0, pageWidth, pageHeight, 'F');
+      pdf.setFillColor(190, 12, 48);
+      pdf.rect(0, 0, 8, pageHeight, 'F');
+      pdf.setTextColor(247, 244, 242);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(19);
+      pdf.text(args.title, margin, 34);
+      pdf.setFontSize(10);
+      pdf.setTextColor(206, 198, 195);
+      pdf.text(args.subtitle, margin, 52);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(8);
+      pdf.setTextColor(155, 148, 146);
+      pdf.text(args.detail, margin, 68);
+      if (sections.length > 1) {
+        pdf.text(`Columns ${section.start + 1}–${section.start + section.headers.length} of ${metricHeaders.length}`, pageWidth - margin, 68, { align: 'right' });
+      }
+
+      const tableHeaders = [args.headers[0], ...section.headers];
+      const metricWidth = section.headers.length ? usableMetricWidth / section.headers.length : usableMetricWidth;
+      const widths = [fixedWidth, ...section.headers.map(() => metricWidth)];
+      let y = 84;
+      const headerHeight = 38;
+      let x = margin;
+      pdf.setFillColor(190, 12, 48);
+      pdf.rect(margin, y, pageWidth - margin * 2, headerHeight, 'F');
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(7.2);
+      pdf.setTextColor(255, 255, 255);
+      tableHeaders.forEach((header, index) => {
+        const lines = pdf.splitTextToSize(header.toUpperCase(), widths[index] - 10).slice(0, 2) as string[];
+        pdf.text(lines, x + widths[index] / 2, y + (lines.length > 1 ? 13 : 21), { align: 'center' });
+        x += widths[index];
+      });
+      y += headerHeight;
+
+      const rowHeight = 24;
+      const availableRows = Math.max(1, Math.floor((pageHeight - y - 38) / rowHeight));
+      const pageRows = args.rows.slice(rowIndex, rowIndex + availableRows);
+      pageRows.forEach((row, pageRowIndex) => {
+        const exportRow = [row[0], ...row.slice(section.start + 1, section.start + 1 + section.headers.length)];
+        if (pageRowIndex % 2 === 0) {
+          pdf.setFillColor(20, 19, 21);
+          pdf.rect(margin, y, pageWidth - margin * 2, rowHeight, 'F');
+        }
+        pdf.setDrawColor(47, 44, 46);
+        pdf.line(margin, y + rowHeight, pageWidth - margin, y + rowHeight);
+        pdf.setFontSize(8);
+        pdf.setTextColor(232, 227, 224);
+        let cellX = margin;
+        exportRow.forEach((cell, index) => {
+          pdf.setFont('helvetica', index === 0 ? 'bold' : 'normal');
+          pdf.text(fitText(cell, widths[index] - 10), cellX + widths[index] / 2, y + 15, { align: 'center' });
+          cellX += widths[index];
+        });
+        y += rowHeight;
+      });
+      rowIndex += pageRows.length;
+      if (!args.rows.length) rowIndex = 1;
+    } while (rowIndex < args.rows.length);
+  }
+
+  const totalPages = pdf.getNumberOfPages();
+  for (let page = 1; page <= totalPages; page += 1) {
+    pdf.setPage(page);
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(7.5);
+    pdf.setTextColor(120, 115, 114);
+    pdf.text(`PEARL · FORCE PLATES  |  PAGE ${page} OF ${totalPages}`, pageWidth - margin, pageHeight - 14, { align: 'right' });
+  }
+  pdf.save(args.fileName);
+}
+
+function TableExportMenu({ disabled, onCsv, onPdf }: { disabled: boolean; onCsv: () => void; onPdf: () => Promise<void> }) {
+  const [exportingPdf, setExportingPdf] = useState(false);
+  const [error, setError] = useState('');
+  return (
+    <details className={styles.exportMenu}>
+      <summary aria-label="Open export options"><span aria-hidden="true">⇩</span> Export</summary>
+      <div>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={(event) => {
+            onCsv();
+            event.currentTarget.closest('details')?.removeAttribute('open');
+          }}
+        >
+          <strong>CSV</strong><span>Spreadsheet data</span>
+        </button>
+        <button
+          type="button"
+          disabled={disabled || exportingPdf}
+          onClick={async (event) => {
+            setError('');
+            setExportingPdf(true);
+            try {
+              await onPdf();
+              event.currentTarget.closest('details')?.removeAttribute('open');
+            } catch (exportError) {
+              setError(exportError instanceof Error ? exportError.message : 'Could not export PDF.');
+            } finally {
+              setExportingPdf(false);
+            }
+          }}
+        >
+          <strong>{exportingPdf ? 'Building…' : 'PDF'}</strong><span>Print-ready report</span>
+        </button>
+        {error ? <p>{error}</p> : null}
+      </div>
+    </details>
+  );
 }
 
 function chartPath(points: Array<{ x: number; y: number }>): string {
@@ -58,6 +357,13 @@ function toIsoDate(value: string): string {
 function chartDateKey(value: string): string {
   const iso = toIsoDate(value);
   return iso || String(value ?? '');
+}
+
+function displayDate(value: string): string {
+  const iso = toIsoDate(value);
+  if (!iso) return value || '—';
+  const [year, month, day] = iso.split('-').map(Number);
+  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(year, month - 1, day));
 }
 
 function normalizeName(value: string): string {
@@ -203,24 +509,224 @@ function computeJumpStats(
   return { average, max };
 }
 
-export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot }) {
+function SavedViewControls({
+  viewType,
+  savedViews,
+  selectedId,
+  name,
+  columnCount,
+  canManage,
+  loading,
+  saving,
+  message,
+  onSelect,
+  onNameChange,
+  onNew,
+  onColumns,
+  onSave,
+  onDelete,
+}: {
+  viewType: 'athlete' | 'leaderboard';
+  savedViews: SavedTableView[];
+  selectedId: number | null;
+  name: string;
+  columnCount: number;
+  canManage: boolean;
+  loading: boolean;
+  saving: boolean;
+  message: string;
+  onSelect: (value: string) => void;
+  onNameChange: (value: string) => void;
+  onNew: () => void;
+  onColumns: () => void;
+  onSave: () => void;
+  onDelete: () => void;
+}) {
+  const options = savedViews.filter((view) => view.viewType === viewType);
+  return (
+    <div className={styles.savedViewShell}>
+      <div className={styles.savedViewBar}>
+        <label>
+          <span>Saved table</span>
+          <select value={selectedId ? String(selectedId) : 'working'} onChange={(event) => onSelect(event.target.value)}>
+            <option value="working" disabled>{loading ? 'Loading saved tables…' : 'Working table'}</option>
+            {options.map((view) => <option key={view.id} value={view.id}>{view.name}</option>)}
+          </select>
+        </label>
+        {canManage ? (
+          <label className={styles.viewNameField}>
+            <span>Table name</span>
+            <input value={name} maxLength={80} placeholder="Name this table" onChange={(event) => onNameChange(event.target.value)} />
+          </label>
+        ) : null}
+        <div className={styles.viewActions}>
+          <button type="button" onClick={onColumns}>{columnCount} columns</button>
+          {canManage ? <button type="button" onClick={onNew}>New table</button> : null}
+          {canManage ? <button type="button" className={styles.saveViewButton} disabled={saving} onClick={onSave}>{saving ? 'Saving…' : 'Save'}</button> : null}
+          {canManage && selectedId && selectedId > 0 ? <button type="button" className={styles.deleteViewButton} disabled={saving} onClick={onDelete}>Delete</button> : null}
+        </div>
+      </div>
+      {message ? <p className={styles.viewMessage}>{message}</p> : null}
+    </div>
+  );
+}
+
+function ColumnEditor({
+  options,
+  columns,
+  labels,
+  search,
+  onSearchChange,
+  onColumnsChange,
+  onLabelsChange,
+}: {
+  options: ReadonlyArray<{ key: string; label: string }>;
+  columns: string[];
+  labels: Record<string, string>;
+  search: string;
+  onSearchChange: (value: string) => void;
+  onColumnsChange: (columns: string[]) => void;
+  onLabelsChange: (labels: Record<string, string>) => void;
+}) {
+  const [draggedColumn, setDraggedColumn] = useState<string | null>(null);
+  const matchingOptions = options.filter((option) => option.label.toLowerCase().includes(search.trim().toLowerCase()));
+  const optionMap = new Map(options.map((option) => [option.key, option.label]));
+  const moveBy = (column: string, amount: number) => {
+    const index = columns.indexOf(column);
+    const target = index + amount;
+    if (index < 0 || target < 0 || target >= columns.length) return;
+    const next = [...columns];
+    const [moved] = next.splice(index, 1);
+    next.splice(target, 0, moved);
+    onColumnsChange(next);
+  };
+
+  return (
+    <div className={styles.columnEditor}>
+      <div className={styles.selectedColumnSection}>
+        <div className={styles.columnEditorHeading}>
+          <strong>Selected columns</strong>
+          <span>Drag to reorder · rename for display</span>
+        </div>
+        <div className={styles.selectedColumnList}>
+          {columns.map((column, index) => {
+            const originalLabel = optionMap.get(column) ?? tableColumnLabel(column, options);
+            return (
+              <div
+                key={`selected-${column}`}
+                className={`${styles.selectedColumnRow}${draggedColumn === column ? ` ${styles.draggingColumn}` : ''}`}
+                draggable
+                onDragStart={() => setDraggedColumn(column)}
+                onDragEnd={() => setDraggedColumn(null)}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={() => {
+                  if (draggedColumn) onColumnsChange(reorderColumn(columns, draggedColumn, column));
+                  setDraggedColumn(null);
+                }}
+              >
+                <span className={styles.dragHandle} title="Drag to reorder" aria-hidden="true">⠿</span>
+                <span className={styles.columnOrder}>{index + 1}</span>
+                <div className={styles.originalColumnName} title={originalLabel}>{originalLabel}</div>
+                <input
+                  value={labels[column] ?? ''}
+                  maxLength={48}
+                  aria-label={`Display name for ${originalLabel}`}
+                  placeholder="Custom display name"
+                  onChange={(event) => {
+                    const next = { ...labels };
+                    if (event.target.value) next[column] = event.target.value;
+                    else delete next[column];
+                    onLabelsChange(next);
+                  }}
+                />
+                <div className={styles.columnOrderButtons}>
+                  <button type="button" disabled={index === 0} aria-label={`Move ${originalLabel} left`} onClick={() => moveBy(column, -1)}>←</button>
+                  <button type="button" disabled={index === columns.length - 1} aria-label={`Move ${originalLabel} right`} onClick={() => moveBy(column, 1)}>→</button>
+                  <button type="button" aria-label={`Remove ${originalLabel}`} onClick={() => onColumnsChange(columns.filter((key) => key !== column))}>×</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <div className={styles.availableColumnSection}>
+        <div className={styles.columnEditorHeading}>
+          <strong>Available metrics</strong>
+          <span>Additions appear at the end</span>
+        </div>
+        <input type="search" value={search} placeholder="Search available columns…" onChange={(event) => onSearchChange(event.target.value)} />
+        <div className={styles.columnGrid}>
+          {matchingOptions.map((option) => {
+            const checked = columns.includes(option.key);
+            return (
+              <label key={`available-${option.key}`}>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(event) => onColumnsChange(event.target.checked ? [...columns, option.key] : columns.filter((key) => key !== option.key))}
+                />
+                <span>{option.label}</span>
+              </label>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function ForcePlatesDashboard({ snapshot, canManageViews }: { snapshot: Snapshot; canManageViews: boolean }) {
   const [activeTab, setActiveTab] = useState<'player' | 'leaderboard'>('player');
+  const [players, setPlayers] = useState(snapshot.players);
   const [selectedPlayer, setSelectedPlayer] = useState(snapshot.players[0]?.playerName ?? '');
-  const [pointMode, setPointMode] = useState<'average' | 'rep' | 'max'>('rep');
-  const player = useMemo(() => snapshot.players.find((entry) => entry.playerName === selectedPlayer) ?? null, [snapshot.players, selectedPlayer]);
+  const [loadedPlayerNames, setLoadedPlayerNames] = useState<Set<string>>(
+    () => new Set(snapshot.players.filter((entry) => entry.metricRows.length > 0).map((entry) => entry.playerName))
+  );
+  const [loadingPlayer, setLoadingPlayer] = useState(false);
+  const [playerLoadError, setPlayerLoadError] = useState('');
+  const [pointMode, setPointMode] = useState<'average' | 'max'>('average');
+  const [chartView, setChartView] = useState<'line' | 'bar'>('line');
+  const [metricSearch, setMetricSearch] = useState('');
+  const [metricPickerOpen, setMetricPickerOpen] = useState(false);
+  const [athleteSearch, setAthleteSearch] = useState('');
+  const [athletePickerOpen, setAthletePickerOpen] = useState(false);
+  const [percentileGroupId, setPercentileGroupId] = useState('all');
+  const [percentileData, setPercentileData] = useState<PercentileResponse | null>(null);
+  const [percentileLoading, setPercentileLoading] = useState(false);
+  const [percentileError, setPercentileError] = useState('');
+  const player = useMemo(() => players.find((entry) => entry.playerName === selectedPlayer) ?? null, [players, selectedPlayer]);
+  const visiblePlayers = useMemo(() => {
+    const query = athleteSearch.trim().toLowerCase();
+    return query ? players.filter((entry) => entry.playerName.toLowerCase().includes(query)) : players;
+  }, [athleteSearch, players]);
 
   useEffect(() => {
-    if (!snapshot.players.length) return;
-    const current = snapshot.players.find((entry) => entry.playerName === selectedPlayer) ?? null;
-    if (current && current.metricRows.length > 0) return;
-    const best =
-      snapshot.players.find((entry) => entry.metricRows.length > 0) ??
-      snapshot.players.find((entry) => entry.testsCount > 0) ??
-      snapshot.players[0];
-    if (best && best.playerName !== selectedPlayer) {
-      setSelectedPlayer(best.playerName);
-    }
-  }, [snapshot.players, selectedPlayer]);
+    if (!selectedPlayer) return;
+    const current = players.find((entry) => entry.playerName === selectedPlayer) ?? null;
+    if (current?.metricRows.length || loadedPlayerNames.has(selectedPlayer)) return;
+    let cancelled = false;
+    setLoadingPlayer(true);
+    setPlayerLoadError('');
+    void fetch(`/api/player/force-plate-data?player=${encodeURIComponent(selectedPlayer)}`, { cache: 'no-store' })
+      .then(async (response) => {
+        const payload = (await response.json().catch(() => ({}))) as { player?: ValdPlayerSnapshot | null; error?: string };
+        if (!response.ok) throw new Error(payload.error || 'Could not load force plate data.');
+        if (cancelled || !payload.player) return;
+        setPlayers((existing) => existing.map((entry) => entry.playerName === selectedPlayer ? payload.player! : entry));
+      })
+      .catch((error) => {
+        if (!cancelled) setPlayerLoadError(error instanceof Error ? error.message : 'Could not load force plate data.');
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadedPlayerNames((existing) => new Set(existing).add(selectedPlayer));
+          setLoadingPlayer(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadedPlayerNames, players, selectedPlayer]);
 
   const metricOptions = useMemo(() => {
     if (!player) return [];
@@ -236,13 +742,18 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
       .map((row) => ({ key: metricKey(row.name, row.unit), label: `${row.name}${row.unit ? ` (${row.unit})` : ''} • ${row.count}` }));
     return values;
   }, [player]);
-
   const [selectedMetricKey, setSelectedMetricKey] = useState('');
   const defaultMetricKey = useMemo(() => {
     if (!metricOptions.length) return '';
     const preferred = metricOptions.find((option) => option.key.toLowerCase().includes('jump height (flight time) in inches'));
     return preferred?.key ?? metricOptions[0].key;
   }, [metricOptions]);
+  const visibleMetricOptions = useMemo(() => {
+    const query = metricSearch.trim().toLowerCase();
+    if (!query) return metricOptions;
+    const activeKey = selectedMetricKey || defaultMetricKey;
+    return metricOptions.filter((option) => option.key === activeKey || option.label.toLowerCase().includes(query));
+  }, [defaultMetricKey, metricOptions, metricSearch, selectedMetricKey]);
 
   const metricRows = useMemo(() => {
     if (!player) return [];
@@ -252,30 +763,27 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
       const repRows = matchingRows.filter((row) => String(row.pointType ?? 'average') === 'rep');
       return repRows.length ? repRows : matchingRows.filter((row) => String(row.pointType ?? 'average') === 'average');
     }
-    const desiredType = pointMode === 'rep' ? 'rep' : 'average';
-    return matchingRows.filter((row) => String(row.pointType ?? 'average') === desiredType);
-  }, [player, selectedMetricKey, defaultMetricKey, pointMode]);
-
-  useEffect(() => {
-    if (!player) return;
-    const activeMetric = selectedMetricKey || defaultMetricKey;
-    if (!activeMetric) return;
-    const hasRepRows = player.metricRows.some(
-      (row) => metricKey(row.metricName, row.metricUnit) === activeMetric && String(row.pointType ?? 'average') === 'rep'
-    );
-    if (!hasRepRows && pointMode === 'rep') {
-      setPointMode('average');
-    }
+    return matchingRows.filter((row) => String(row.pointType ?? 'average') === 'average');
   }, [player, selectedMetricKey, defaultMetricKey, pointMode]);
 
   const [selectedTestType, setSelectedTestType] = useState('All');
   const [dateRangeByPlayer, setDateRangeByPlayer] = useState<Record<string, { start: string; end: string }>>({});
   const [leaderStartDate, setLeaderStartDate] = useState('');
   const [leaderEndDate, setLeaderEndDate] = useState('');
+  const [leaderForceRows, setLeaderForceRows] = useState<ForcePlateLeaderboardRow[]>([]);
+  const [leaderMetricOptions, setLeaderMetricOptions] = useState<Array<{ key: string; label: string }>>([]);
+  const [leaderboardBounds, setLeaderboardBounds] = useState({ min: '', max: '' });
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+  const [leaderboardError, setLeaderboardError] = useState('');
   const [leaderVelocityRows, setLeaderVelocityRows] = useState<Array<{ name: string; fbVelo: number | null; veloMax: number | null }>>([]);
   const [leaderColumns, setLeaderColumns] = useState<string[]>(['CMJ', 'CMJMax', 'SJ', 'SJMax', 'RSI', 'FBvelo', 'VeloMax']);
   const [leaderColumnMenuOpen, setLeaderColumnMenuOpen] = useState(false);
   const [leaderSort, setLeaderSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'CMJ', dir: 'desc' });
+  const [leaderTestType, setLeaderTestType] = useState('All');
+  const [leaderTestOptions, setLeaderTestOptions] = useState<string[]>([]);
+  const [leaderTestSearch, setLeaderTestSearch] = useState('');
+  const [leaderTestPickerOpen, setLeaderTestPickerOpen] = useState(false);
+  const [leaderDisplayMode, setLeaderDisplayMode] = useState<'value' | 'percentile'>('value');
   const [showLeaderboardCorrelation, setShowLeaderboardCorrelation] = useState(false);
   const testTypeOptions = useMemo(() => {
     if (!player) return ['All'];
@@ -322,40 +830,6 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
     () => Array.from(new Set(pointRows.map((row) => row.date))).sort((a, b) => chartDateKey(a).localeCompare(chartDateKey(b))),
     [pointRows]
   );
-  const metricTableRows = useMemo(() => {
-    const groups = new Map<
-      string,
-      {
-        date: string;
-        testType: string;
-        metricLabel: string;
-        values: number[];
-      }
-    >();
-    for (const row of filteredRows) {
-      const metricLabel = `${row.metricName}${row.metricUnit ? ` (${row.metricUnit})` : ''}`;
-      const key = `${row.testId}__${row.metricId}__${row.testType}__${row.date}__${metricLabel}`;
-      const current = groups.get(key) ?? {
-        date: row.date,
-        testType: row.testType,
-        metricLabel,
-        values: [],
-      };
-      current.values.push(row.value);
-      groups.set(key, current);
-    }
-    return Array.from(groups.values()).map((entry) => {
-      const avg = entry.values.length ? entry.values.reduce((sum, value) => sum + value, 0) / entry.values.length : null;
-      const max = entry.values.length ? Math.max(...entry.values) : null;
-      return {
-        date: entry.date,
-        testType: entry.testType,
-        metricLabel: entry.metricLabel,
-        average: avg,
-        max,
-      };
-    });
-  }, [filteredRows]);
   const chartPoints = useMemo(() => {
     if (pointRows.length < 1) return [];
     const values = pointRows.map((row) => row.value);
@@ -398,19 +872,240 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
   }, [yScale]);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const [playerColumns, setPlayerColumns] = useState<string[]>(['CMJ', 'CMJMax', 'SJ', 'SJMax', 'RSI', 'FBvelo', 'VeloMax']);
+  const [playerColumnLabels, setPlayerColumnLabels] = useState<Record<string, string>>({});
   const [playerColumnMenuOpen, setPlayerColumnMenuOpen] = useState(false);
-  const [playerSort, setPlayerSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'CMJ', dir: 'desc' });
+  const [playerColumnSearch, setPlayerColumnSearch] = useState('');
+  const [playerSort, setPlayerSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'Date', dir: 'desc' });
+  const [savedViews, setSavedViews] = useState<SavedTableView[]>([]);
+  const [viewsLoading, setViewsLoading] = useState(true);
+  const [viewSaveMessage, setViewSaveMessage] = useState('');
+  const [viewSaving, setViewSaving] = useState(false);
+  const [playerViewId, setPlayerViewId] = useState<number | null>(null);
+  const [playerViewName, setPlayerViewName] = useState('Performance Snapshot');
+  const [leaderViewId, setLeaderViewId] = useState<number | null>(null);
+  const [leaderViewName, setLeaderViewName] = useState('Team Performance');
+  const [leaderColumnLabels, setLeaderColumnLabels] = useState<Record<string, string>>({});
+  const [leaderColumnSearch, setLeaderColumnSearch] = useState('');
 
-  const latest = filteredRows[filteredRows.length - 1] ?? null;
+  const orderedFilteredRows = useMemo(
+    () => [...filteredRows].sort((a, b) => String(a.dateTime ?? a.date).localeCompare(String(b.dateTime ?? b.date))),
+    [filteredRows]
+  );
+  const latest = orderedFilteredRows[orderedFilteredRows.length - 1] ?? null;
   const avg = filteredRows.length ? filteredRows.reduce((sum, row) => sum + row.value, 0) / filteredRows.length : null;
+  const previous = latest
+    ? [...orderedFilteredRows].slice(0, -1).reverse().find((row) => row.testType === latest.testType) ?? null
+    : null;
+  const latestChange = latest && previous ? latest.value - previous.value : null;
+  const best = filteredRows.length ? Math.max(...filteredRows.map((row) => row.value)) : null;
+  const testCount = new Set(filteredRows.map((row) => row.testId)).size;
+  const activeMetricLabel = (
+    metricOptions.find((option) => option.key === (selectedMetricKey || defaultMetricKey))?.label ?? 'Select a metric'
+  ).replace(/\s*•\s*\d+$/, '');
+  const activeMetricIdentity = useMemo(
+    () => splitMetricKey(selectedMetricKey || defaultMetricKey),
+    [defaultMetricKey, selectedMetricKey]
+  );
 
-  const leaderboardBounds = useMemo(() => {
-    const dates = snapshot.players
-      .flatMap((entry) => entry.metricRows.map((row) => toIsoDate(String(row.dateTime ?? row.date))))
-      .filter(Boolean)
-      .sort();
-    return { min: dates[0] ?? '', max: dates[dates.length - 1] ?? '' };
-  }, [snapshot.players]);
+  useEffect(() => {
+    if (!selectedPlayer || !activeMetricIdentity.name || loadingPlayer) return;
+    let cancelled = false;
+    const params = new URLSearchParams({
+      player: selectedPlayer,
+      metricName: activeMetricIdentity.name,
+      metricUnit: activeMetricIdentity.unit,
+      groupId: percentileGroupId,
+      testType: selectedTestType,
+      mode: pointMode,
+    });
+    if (startDate) params.set('startDate', startDate);
+    if (endDate) params.set('endDate', endDate);
+    setPercentileLoading(true);
+    setPercentileError('');
+    void fetch(`/api/player/force-plate-percentiles?${params.toString()}`, { cache: 'no-store' })
+      .then(async (response) => {
+        const payload = (await response.json().catch(() => ({}))) as PercentileResponse & { error?: string };
+        if (!response.ok) throw new Error(payload.error || 'Could not calculate percentiles.');
+        if (!cancelled) setPercentileData(payload);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setPercentileData(null);
+          setPercentileError(error instanceof Error ? error.message : 'Could not calculate percentiles.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setPercentileLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeMetricIdentity.name, activeMetricIdentity.unit, endDate, loadingPlayer, percentileGroupId, pointMode, selectedPlayer, selectedTestType, startDate]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch('/api/player/force-plate-table-views', { cache: 'no-store' })
+      .then(async (response) => {
+        const payload = (await response.json().catch(() => ({}))) as { items?: SavedTableView[]; error?: string };
+        if (!response.ok) throw new Error(payload.error || 'Could not load saved tables.');
+        if (!cancelled) {
+          const rawItems = Array.isArray(payload.items) ? payload.items : [];
+          const athleteJumpDashboard = rawItems.find(
+            (view) => view.viewType === 'athlete' && view.name.trim().toLowerCase() === 'jump dashboard'
+          );
+          const leaderboardJumpDashboard = rawItems.find(
+            (view) => view.viewType === 'leaderboard' && view.name.trim().toLowerCase() === 'jump dashboard'
+          );
+          const mirroredJumpDashboard = !leaderboardJumpDashboard && athleteJumpDashboard
+            ? { ...athleteJumpDashboard, id: -athleteJumpDashboard.id, viewType: 'leaderboard' as const }
+            : null;
+          const items = mirroredJumpDashboard ? [...rawItems, mirroredJumpDashboard] : rawItems;
+          setSavedViews(items);
+          if (athleteJumpDashboard) {
+            setPlayerViewId(athleteJumpDashboard.id);
+            setPlayerViewName(athleteJumpDashboard.name);
+            setPlayerColumns(athleteJumpDashboard.columns);
+            setPlayerColumnLabels(athleteJumpDashboard.columnLabels ?? {});
+          }
+          const defaultLeaderboard = leaderboardJumpDashboard ?? mirroredJumpDashboard;
+          if (defaultLeaderboard) {
+            setLeaderViewId(defaultLeaderboard.id);
+            setLeaderViewName(defaultLeaderboard.name);
+            setLeaderColumns(defaultLeaderboard.columns);
+            setLeaderColumnLabels(defaultLeaderboard.columnLabels ?? {});
+            setLeaderSort({ key: defaultLeaderboard.columns[0] ?? 'Player', dir: 'desc' });
+          }
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) setViewSaveMessage(error instanceof Error ? error.message : 'Could not load saved tables.');
+      })
+      .finally(() => {
+        if (!cancelled) setViewsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const chooseSavedView = (viewType: 'athlete' | 'leaderboard', value: string) => {
+    if (value === 'new') {
+      if (viewType === 'athlete') {
+        setPlayerViewId(null);
+        setPlayerViewName('');
+        setPlayerColumnLabels({});
+      } else {
+        setLeaderViewId(null);
+        setLeaderViewName('');
+        setLeaderColumnLabels({});
+      }
+      setViewSaveMessage('New table ready. Name it, choose columns, and save.');
+      return;
+    }
+    const found = savedViews.find((view) => view.id === Number(value) && view.viewType === viewType);
+    if (!found) return;
+    if (viewType === 'athlete') {
+      setPlayerViewId(found.id);
+      setPlayerViewName(found.name);
+      setPlayerColumns(found.columns);
+      setPlayerColumnLabels(found.columnLabels ?? {});
+    } else {
+      setLeaderViewId(found.id);
+      setLeaderViewName(found.name);
+      setLeaderColumns(found.columns);
+      setLeaderColumnLabels(found.columnLabels ?? {});
+      setLeaderSort({ key: found.columns[0] ?? 'Player', dir: 'desc' });
+    }
+    setViewSaveMessage('');
+  };
+
+  const saveTableView = async (viewType: 'athlete' | 'leaderboard') => {
+    const name = (viewType === 'athlete' ? playerViewName : leaderViewName).trim();
+    const columns = viewType === 'athlete' ? playerColumns : leaderColumns;
+    const columnLabels = viewType === 'athlete' ? playerColumnLabels : leaderColumnLabels;
+    const selectedId = viewType === 'athlete' ? playerViewId : leaderViewId;
+    const id = selectedId && selectedId > 0 ? selectedId : null;
+    if (!name || !columns.length) {
+      setViewSaveMessage('Enter a table name and select at least one column.');
+      return;
+    }
+    setViewSaving(true);
+    setViewSaveMessage('');
+    try {
+      const response = await fetch('/api/player/force-plate-table-views', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: id ?? undefined, viewType, name, columns, columnLabels }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { item?: SavedTableView; error?: string };
+      if (!response.ok || !payload.item) throw new Error(payload.error || 'Could not save the table.');
+      const saved = payload.item;
+      setSavedViews((current) => [
+        saved,
+        ...current.filter((view) => (
+          view.id !== saved.id
+          && !(view.id < 0 && view.viewType === saved.viewType && view.name.trim().toLowerCase() === saved.name.trim().toLowerCase())
+        )),
+      ]);
+      if (viewType === 'athlete') {
+        setPlayerViewId(saved.id);
+        setPlayerViewName(saved.name);
+        setPlayerColumnLabels(saved.columnLabels ?? {});
+      } else {
+        setLeaderViewId(saved.id);
+        setLeaderViewName(saved.name);
+        setLeaderColumnLabels(saved.columnLabels ?? {});
+      }
+      setViewSaveMessage(`${saved.name} saved.`);
+    } catch (error) {
+      setViewSaveMessage(error instanceof Error ? error.message : 'Could not save the table.');
+    } finally {
+      setViewSaving(false);
+    }
+  };
+
+  const deleteTableView = async (viewType: 'athlete' | 'leaderboard') => {
+    const id = viewType === 'athlete' ? playerViewId : leaderViewId;
+    if (!id || id < 1) return;
+    setViewSaving(true);
+    setViewSaveMessage('');
+    try {
+      const response = await fetch(`/api/player/force-plate-table-views?id=${id}`, { method: 'DELETE' });
+      const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!response.ok || !payload.ok) throw new Error(payload.error || 'Could not delete the table.');
+      setSavedViews((current) => current.filter((view) => view.id !== id));
+      if (viewType === 'athlete') {
+        setPlayerViewId(null);
+        setPlayerViewName('Performance Snapshot');
+        setPlayerColumnLabels({});
+      } else {
+        setLeaderViewId(null);
+        setLeaderViewName('Team Performance');
+        setLeaderColumnLabels({});
+      }
+      setViewSaveMessage('Saved table deleted.');
+    } catch (error) {
+      setViewSaveMessage(error instanceof Error ? error.message : 'Could not delete the table.');
+    } finally {
+      setViewSaving(false);
+    }
+  };
+
+  const setPlayerDatePreset = (days: number | null) => {
+    if (!playerDateBounds.max) return;
+    const end = playerDateBounds.max;
+    if (days === null) {
+      setDateRangeByPlayer((current) => ({ ...current, [selectedPlayer]: { start: playerDateBounds.min, end } }));
+      return;
+    }
+    const endDateValue = new Date(`${end}T12:00:00Z`);
+    endDateValue.setUTCDate(endDateValue.getUTCDate() - Math.max(0, days - 1));
+    const start = endDateValue.toISOString().slice(0, 10);
+    setDateRangeByPlayer((current) => ({
+      ...current,
+      [selectedPlayer]: { start: start < playerDateBounds.min ? playerDateBounds.min : start, end },
+    }));
+  };
 
   useEffect(() => {
     if (!leaderStartDate && leaderboardBounds.min) setLeaderStartDate(leaderboardBounds.min);
@@ -418,45 +1113,75 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
   }, [leaderStartDate, leaderEndDate, leaderboardBounds.min, leaderboardBounds.max]);
 
   const leaderboardMetricOptions = useMemo(() => {
-    const metricMap = new Map<string, string>();
-    for (const playerEntry of snapshot.players) {
-      for (const row of playerEntry.metricRows) {
-        if (String(row.pointType ?? 'average') !== 'average') continue;
-        const key = `metric:${metricKey(row.metricName, row.metricUnit)}`;
-        if (!metricMap.has(key)) metricMap.set(key, `${row.metricName}${row.metricUnit ? ` (${row.metricUnit})` : ''}`);
-      }
-    }
     return [
-      { key: 'CMJ', label: 'CMJ' },
-      { key: 'SJ', label: 'SJ' },
-      { key: 'CMJMax', label: 'CMJ Max' },
-      { key: 'SJMax', label: 'SJ Max' },
-      { key: 'RSI', label: 'RSI' },
-      { key: 'SQ', label: 'SQ' },
-      { key: 'FBvelo', label: 'FBvelo' },
-      { key: 'VeloMax', label: 'VeloMax' },
-      ...Array.from(metricMap.entries())
-        .map(([key, label]) => ({ key, label }))
-        .sort((a, b) => a.label.localeCompare(b.label)),
+      ...BASE_TABLE_OPTIONS,
+      ...leaderMetricOptions,
     ];
-  }, [snapshot.players]);
+  }, [leaderMetricOptions]);
+  const visibleLeaderTestOptions = useMemo(() => {
+    const options = ['All', ...leaderTestOptions];
+    const query = leaderTestSearch.trim().toLowerCase();
+    return query
+      ? options.filter((option) => option === leaderTestType || option.toLowerCase().includes(query))
+      : options;
+  }, [leaderTestOptions, leaderTestSearch, leaderTestType]);
 
-  const playerTableMetricOptions = leaderboardMetricOptions;
+  const playerTableMetricOptions = useMemo(() => {
+    const map = new Map<string, { key: string; label: string }>();
+    for (const row of player?.metricRows ?? []) {
+      const key = metricKey(row.metricName, row.metricUnit);
+      if (!map.has(key)) map.set(key, { key: `metric:${key}`, label: `${row.metricName}${row.metricUnit ? ` (${row.metricUnit})` : ''}` });
+    }
+    return [...BASE_TABLE_OPTIONS, ...Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label))];
+  }, [player]);
 
   useEffect(() => {
-    setLeaderColumns((current) => current.filter((key) => leaderboardMetricOptions.some((opt) => opt.key === key)));
-  }, [leaderboardMetricOptions]);
+    if (activeTab !== 'leaderboard') return;
+    let cancelled = false;
+    setLeaderboardLoading(true);
+    setLeaderboardError('');
+    const params = new URLSearchParams();
+    if (leaderStartDate) params.set('startDate', leaderStartDate);
+    if (leaderEndDate) params.set('endDate', leaderEndDate);
+    if (leaderTestType !== 'All') params.set('testType', leaderTestType);
+    void fetch(`/api/player/force-plate-leaderboard?${params.toString()}`, { cache: 'no-store' })
+      .then(async (response) => {
+        const payload = (await response.json().catch(() => ({}))) as {
+          rows?: ForcePlateLeaderboardRow[];
+          metricOptions?: Array<{ key: string; label: string }>;
+          testOptions?: string[];
+          minDate?: string;
+          maxDate?: string;
+          error?: string;
+        };
+        if (!response.ok) throw new Error(payload.error || 'Could not load leaderboard data.');
+        if (cancelled) return;
+        setLeaderForceRows(Array.isArray(payload.rows) ? payload.rows : []);
+        setLeaderMetricOptions(Array.isArray(payload.metricOptions) ? payload.metricOptions : []);
+        const nextTestOptions = Array.isArray(payload.testOptions) ? payload.testOptions : [];
+        setLeaderTestOptions(nextTestOptions);
+        if (leaderTestType !== 'All' && !nextTestOptions.includes(leaderTestType)) setLeaderTestType('All');
+        setLeaderboardBounds({ min: payload.minDate ?? '', max: payload.maxDate ?? '' });
+      })
+      .catch((error) => {
+        if (!cancelled) setLeaderboardError(error instanceof Error ? error.message : 'Could not load leaderboard data.');
+      })
+      .finally(() => {
+        if (!cancelled) setLeaderboardLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, leaderStartDate, leaderEndDate, leaderTestType]);
 
   useEffect(() => {
-    setPlayerColumns((current) => current.filter((key) => playerTableMetricOptions.some((opt) => opt.key === key)));
-  }, [playerTableMetricOptions]);
-
-  useEffect(() => {
-    if (!leaderStartDate || !leaderEndDate) return;
+    const velocityStartDate = activeTab === 'player' ? startDate : leaderStartDate;
+    const velocityEndDate = activeTab === 'player' ? endDate : leaderEndDate;
+    if (!velocityStartDate || !velocityEndDate) return;
     let cancelled = false;
     const loadVelocity = async () => {
       try {
-        const params = new URLSearchParams({ startDate: leaderStartDate, endDate: leaderEndDate });
+        const params = new URLSearchParams({ startDate: velocityStartDate, endDate: velocityEndDate });
         const response = await fetch(`/api/player/force-plate-velo?${params.toString()}`, { cache: 'no-store' });
         const payload = (await response.json().catch(() => ({}))) as {
           rows?: Array<{ name: string; fbVelo: number | null; veloMax: number | null }>;
@@ -473,7 +1198,7 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
     return () => {
       cancelled = true;
     };
-  }, [leaderStartDate, leaderEndDate]);
+  }, [activeTab, startDate, endDate, leaderStartDate, leaderEndDate]);
 
   const resolveVeloForPlayer = (
     playerName: string,
@@ -495,95 +1220,64 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
     return fuzzy ? { fbVelo: fuzzy.fbVelo, veloMax: fuzzy.veloMax } : { fbVelo: null, veloMax: null };
   };
 
-  const leaderboardRows = useMemo(() => {
-    const inRange = (rowDate: string) =>
-      (!leaderStartDate || rowDate >= leaderStartDate) && (!leaderEndDate || rowDate <= leaderEndDate);
-    return snapshot.players.map((playerEntry) => {
-      const rangedAll = playerEntry.metricRows.filter((row) => {
-        const iso = toIsoDate(String(row.dateTime ?? row.date));
-        return iso ? inRange(iso) : false;
-      });
-      const avgRows = rangedAll.filter((row) => String(row.pointType ?? 'average') === 'average');
-      const repRows = rangedAll.filter((row) => String(row.pointType ?? 'average') === 'rep');
+  const leaderboardRows = useMemo(() => leaderForceRows.map((row) => {
+    const velo = resolveVeloForPlayer(row.playerName, leaderVelocityRows);
+    return { ...row, fbVelo: velo.fbVelo, veloMax: velo.veloMax };
+  }), [leaderForceRows, leaderVelocityRows]);
+
+  const playerDateRows = useMemo(() => {
+    if (!player) return [];
+    const rangedAll = player.metricRows.filter((row) => {
+      if (String(row.pointType ?? 'average') !== 'average') return false;
+      if (selectedTestType !== 'All' && row.testType !== selectedTestType) return false;
+      const iso = toIsoDate(String(row.dateTime ?? row.date));
+      if (startDate && iso && iso < startDate) return false;
+      if (endDate && iso && iso > endDate) return false;
+      return true;
+    });
+    const byDate = new Map<string, typeof rangedAll>();
+    for (const row of rangedAll) {
+      const date = toIsoDate(String(row.dateTime ?? row.date)) || String(row.date ?? '');
+      if (!date) continue;
+      const current = byDate.get(date) ?? [];
+      current.push(row);
+      byDate.set(date, current);
+    }
+    return Array.from(byDate.entries()).map(([date, rows]) => {
       const byMetric = new Map<string, number[]>();
-      for (const row of avgRows) {
+      for (const row of rows) {
         const key = metricKey(row.metricName, row.metricUnit);
-        const list = byMetric.get(key) ?? [];
-        list.push(row.value);
-        byMetric.set(key, list);
+        const values = byMetric.get(key) ?? [];
+        values.push(row.value);
+        byMetric.set(key, values);
       }
       const metricAverages = Object.fromEntries(
-        Array.from(byMetric.entries()).map(([key, values]) => [key, values.length ? values.reduce((a, b) => a + b, 0) / values.length : null])
+        Array.from(byMetric.entries()).map(([key, values]) => [key, mean(values)])
       ) as Record<string, number | null>;
-      const cmjStats = computeJumpStats(rangedAll, isCmjType);
-      const sjStats = computeJumpStats(rangedAll, isSjType);
-      const sqStats = computeJumpStats(rangedAll, isSqType);
-      const cmj = cmjStats.average;
-      const sq = sqStats.average;
-      const sj = sjStats.average;
-      const cmjMax = cmjStats.max;
-      const sjMax = sjStats.max;
-      const rsiRows = avgRows.filter((row) => String(row.metricName ?? '').toLowerCase().replace(/[^a-z0-9]/g, '').includes('rsimodified'));
-      const rsiValues = rsiRows.map((row) => row.value);
-      const rsiModified = rsiValues.length ? rsiValues.reduce((a, b) => a + b, 0) / rsiValues.length : null;
-      const velo = resolveVeloForPlayer(playerEntry.playerName, leaderVelocityRows);
+      const cmjStats = computeJumpStats(rows, isCmjType);
+      const sjStats = computeJumpStats(rows, isSjType);
+      const sqStats = computeJumpStats(rows, isSqType);
+      const rsiValues = rows
+        .filter((row) => String(row.metricName ?? '').toLowerCase().replace(/[^a-z0-9]/g, '').includes('rsimodified'))
+        .map((row) => row.value);
       return {
-        playerName: playerEntry.playerName,
-        cmj,
-        sj,
-        cmjMax,
-        sjMax,
-        rsiModified,
-        sq,
+        date,
+        cmj: cmjStats.average,
+        sj: sjStats.average,
+        cmjMax: cmjStats.max,
+        sjMax: sjStats.max,
+        rsiModified: mean(rsiValues),
+        sq: sqStats.average,
         metricAverages,
-        fbVelo: velo.fbVelo,
-        veloMax: velo.veloMax,
+        fbVelo: null as number | null,
+        veloMax: null as number | null,
       };
     });
-  }, [snapshot.players, leaderStartDate, leaderEndDate, leaderVelocityRows]);
+  }, [player, selectedTestType, startDate, endDate]);
 
-  const playerAggregateRows = useMemo(() => {
-    if (!player) return [];
-    const rangedAll = filteredRows;
-    const avgRows = filteredRows.filter((row) => String(row.pointType ?? 'average') === 'average');
-    const byMetric = new Map<string, number[]>();
-    for (const row of avgRows) {
-      const mk = metricKey(row.metricName, row.metricUnit);
-      const list = byMetric.get(mk) ?? [];
-      list.push(row.value);
-      byMetric.set(mk, list);
-    }
-    const metricAverages = Object.fromEntries(
-      Array.from(byMetric.entries()).map(([key, values]) => [key, values.length ? values.reduce((a, b) => a + b, 0) / values.length : null])
-    ) as Record<string, number | null>;
-    const cmjStats = computeJumpStats(rangedAll, isCmjType);
-    const sjStats = computeJumpStats(rangedAll, isSjType);
-    const sqStats = computeJumpStats(rangedAll, isSqType);
-    const cmj = cmjStats.average;
-    const sq = sqStats.average;
-    const sj = sjStats.average;
-    const cmjMax = cmjStats.max;
-    const sjMax = sjStats.max;
-    const rsiRows = avgRows.filter((row) => String(row.metricName ?? '').toLowerCase().replace(/[^a-z0-9]/g, '').includes('rsimodified'));
-    const rsiValues = rsiRows.map((row) => row.value);
-    const rsiModified = rsiValues.length ? rsiValues.reduce((a, b) => a + b, 0) / rsiValues.length : null;
-    const velo = resolveVeloForPlayer(player.playerName, leaderVelocityRows);
-    return [{
-      cmj,
-      sj,
-      cmjMax,
-      sjMax,
-      rsiModified,
-      sq,
-      metricAverages,
-      fbVelo: velo.fbVelo,
-      veloMax: velo.veloMax,
-    }];
-  }, [player, filteredRows, leaderVelocityRows]);
-
-  const sortedLeaderboardRows = useMemo(() => {
-    const valueFor = (row: (typeof leaderboardRows)[number], column: string): number | string | null => {
-      if (column === 'Player') return row.playerName;
+  const sortedPlayerDateRows = useMemo(() => {
+    const valueFor = (row: (typeof playerDateRows)[number], column: string): number | string | null => {
+      if (column === 'Date') return row.date;
       if (column === 'CMJ') return row.cmj;
       if (column === 'SJ') return row.sj;
       if (column === 'CMJMax') return row.cmjMax;
@@ -594,6 +1288,24 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
       if (column === 'VeloMax') return row.veloMax;
       if (column.startsWith('metric:')) return row.metricAverages[column.slice('metric:'.length)] ?? null;
       return null;
+    };
+    return [...playerDateRows].sort((a, b) => {
+      const aValue = valueFor(a, playerSort.key);
+      const bValue = valueFor(b, playerSort.key);
+      if (typeof aValue === 'string' || typeof bValue === 'string') {
+        const comparison = String(aValue ?? '').localeCompare(String(bValue ?? ''));
+        return playerSort.dir === 'asc' ? comparison : -comparison;
+      }
+      const aNumber = typeof aValue === 'number' ? aValue : Number.NEGATIVE_INFINITY;
+      const bNumber = typeof bValue === 'number' ? bValue : Number.NEGATIVE_INFINITY;
+      return playerSort.dir === 'asc' ? aNumber - bNumber : bNumber - aNumber;
+    });
+  }, [playerDateRows, playerSort]);
+
+  const sortedLeaderboardRows = useMemo(() => {
+    const valueFor = (row: (typeof leaderboardRows)[number], column: string): number | string | null => {
+      if (column === 'Player') return row.playerName;
+      return leaderboardValue(row, column);
     };
     const sorted = [...leaderboardRows].sort((a, b) => {
       const av = valueFor(a, leaderSort.key);
@@ -612,91 +1324,236 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
     return sorted;
   }, [leaderSort, leaderboardRows]);
 
+  const leaderboardPercentiles = useMemo(() => {
+    const result = new Map<string, Map<string, number>>();
+    for (const column of leaderColumns) {
+      const values = leaderboardRows
+        .map((row) => leaderboardValue(row, column))
+        .filter((value): value is number => value !== null && Number.isFinite(value));
+      const byPlayer = new Map<string, number>();
+      for (const row of leaderboardRows) {
+        const value = leaderboardValue(row, column);
+        if (value !== null && Number.isFinite(value)) byPlayer.set(row.playerName, percentileRank(value, values));
+      }
+      result.set(column, byPlayer);
+    }
+    return result;
+  }, [leaderColumns, leaderboardRows]);
+
   const correlationColumns = useMemo(
-    () => ['Player', ...leaderColumns.map((column) => leaderboardMetricOptions.find((opt) => opt.key === column)?.label ?? column)],
-    [leaderColumns, leaderboardMetricOptions]
+    () => ['Player', ...leaderColumns.map((column) => tableColumnLabel(column, leaderboardMetricOptions, leaderColumnLabels))],
+    [leaderColumns, leaderboardMetricOptions, leaderColumnLabels]
   );
 
   const correlationRows = useMemo(() => {
     return leaderboardRows.map((row) => {
       const out: Record<string, string | number | null> = { Player: row.playerName };
       for (const column of leaderColumns) {
-        const label = leaderboardMetricOptions.find((opt) => opt.key === column)?.label ?? column;
+        const label = tableColumnLabel(column, leaderboardMetricOptions, leaderColumnLabels);
         let value: number | null = null;
         if (column === 'CMJ') value = row.cmj;
-        else if (column === 'SJ') value = row.sj;
-        else if (column === 'CMJMax') value = row.cmjMax;
-        else if (column === 'SJMax') value = row.sjMax;
-        else if (column === 'RSI') value = row.rsiModified;
-        else if (column === 'SQ') value = row.sq;
-        else if (column === 'FBvelo') value = row.fbVelo;
-        else if (column === 'VeloMax') value = row.veloMax;
-        else if (column.startsWith('metric:')) value = row.metricAverages[column.slice('metric:'.length)] ?? null;
+        else value = leaderboardValue(row, column);
         out[label] = value;
       }
       return out;
     });
-  }, [leaderboardRows, leaderColumns, leaderboardMetricOptions]);
+  }, [leaderboardRows, leaderColumns, leaderboardMetricOptions, leaderColumnLabels]);
+
+  const playerExportHeaders = useMemo(
+    () => ['Date', ...playerColumns.map((column) => tableColumnLabel(column, playerTableMetricOptions, playerColumnLabels))],
+    [playerColumnLabels, playerColumns, playerTableMetricOptions]
+  );
+  const playerExportRows = useMemo<ExportCell[][]>(() => sortedPlayerDateRows.map((row) => [
+    displayDate(row.date),
+    ...playerColumns.map((column) => {
+      let value: number | null = null;
+      if (column === 'CMJ') value = row.cmj;
+      else if (column === 'SJ') value = row.sj;
+      else if (column === 'CMJMax') value = row.cmjMax;
+      else if (column === 'SJMax') value = row.sjMax;
+      else if (column === 'RSI') value = row.rsiModified;
+      else if (column === 'SQ') value = row.sq;
+      else if (column === 'FBvelo') value = row.fbVelo;
+      else if (column === 'VeloMax') value = row.veloMax;
+      else if (column.startsWith('metric:')) value = row.metricAverages[column.slice('metric:'.length)] ?? null;
+      return value === null ? null : value.toFixed(1);
+    }),
+  ]), [playerColumns, sortedPlayerDateRows]);
+  const leaderExportHeaders = useMemo(
+    () => [
+      'Player',
+      ...leaderColumns.map((column) => {
+        const label = tableColumnLabel(column, leaderboardMetricOptions, leaderColumnLabels);
+        return leaderDisplayMode === 'percentile' ? `${label} Percentile` : label;
+      }),
+    ],
+    [leaderColumnLabels, leaderColumns, leaderboardMetricOptions, leaderDisplayMode]
+  );
+  const leaderExportRows = useMemo<ExportCell[][]>(() => sortedLeaderboardRows.map((row) => [
+    row.playerName,
+    ...leaderColumns.map((column) => {
+      const value = leaderboardValue(row, column);
+      if (leaderDisplayMode === 'percentile') return leaderboardPercentiles.get(column)?.get(row.playerName) ?? null;
+      return value === null ? null : value.toFixed(1);
+    }),
+  ]), [leaderColumns, leaderboardPercentiles, leaderDisplayMode, sortedLeaderboardRows]);
+
+  const playerExportBaseName = safeFileName(`${selectedPlayer}-${playerViewName || 'force-plate-table'}-${endDate || 'all-dates'}`);
+  const leaderExportBaseName = safeFileName(`${leaderViewName || 'force-plate-leaderboard'}-${leaderTestType}-${leaderEndDate || 'all-dates'}`);
+  const playerExportDetail = `${selectedTestType === 'All' ? 'All tests' : selectedTestType}  ·  ${startDate || 'First test'} to ${endDate || 'Latest test'}  ·  ${playerExportRows.length} dates`;
+  const leaderExportDetail = `${leaderTestType === 'All' ? 'All tests' : leaderTestType}  ·  ${leaderStartDate || 'First test'} to ${leaderEndDate || 'Latest test'}  ·  ${leaderDisplayMode === 'percentile' ? 'Percentile ranks' : 'Metric values'}  ·  ${leaderExportRows.length} athletes`;
 
   return (
-    <div className="portal-admin-stack">
-      <article className="portal-admin-card">
-        <div className="portal-schedule-view-switch" role="group" aria-label="Force plate view">
+    <div className={`${styles.workspace} portal-admin-stack`}>
+      <section className={styles.commandBar}>
+        <div>
+          <p className={styles.eyebrow}>PERFORMANCE LAB</p>
+          <div className={styles.contextLine}>
+            <strong>{activeTab === 'player' ? selectedPlayer : 'Organization leaderboard'}</strong>
+            <span aria-hidden="true">/</span>
+            <span>{activeTab === 'player' ? activeMetricLabel : `${leaderboardRows.length} athletes with data`}</span>
+          </div>
+        </div>
+        <div className={styles.viewSwitch} role="group" aria-label="Force plate view">
           <button
             type="button"
-            className={`btn ${activeTab === 'player' ? 'btn-primary' : 'btn-ghost'}`}
+            className={activeTab === 'player' ? styles.activeView : styles.inactiveView}
             onClick={() => setActiveTab('player')}
           >
-            Player Data
+            Athlete Analysis
           </button>
           <button
             type="button"
-            className={`btn ${activeTab === 'leaderboard' ? 'btn-primary' : 'btn-ghost'}`}
+            className={activeTab === 'leaderboard' ? styles.activeView : styles.inactiveView}
             onClick={() => setActiveTab('leaderboard')}
           >
             Leaderboard
           </button>
         </div>
-      </article>
+      </section>
 
       {activeTab === 'player' ? (
-      <article className="portal-admin-card">
-        <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(6, minmax(180px, 1fr))' }}>
+      <section className={styles.filterDeck}>
+        <div className={styles.filterHeader}>
+          <div>
+            <p className={styles.sectionIndex}>01 · BUILD THE VIEW</p>
+            <h3>Analysis controls</h3>
+          </div>
+          <div className={styles.presets} aria-label="Date range presets">
+            <button type="button" onClick={() => setPlayerDatePreset(30)}>30D</button>
+            <button type="button" onClick={() => setPlayerDatePreset(90)}>90D</button>
+            <button type="button" onClick={() => setPlayerDatePreset(180)}>6M</button>
+            <button type="button" onClick={() => setPlayerDatePreset(null)}>ALL</button>
+          </div>
+        </div>
+        <div className={styles.primaryFilters}>
+          <div className={styles.playerField}>
+            <span>Athlete</span>
+            <div className={styles.metricPicker}>
+              <button
+                type="button"
+                aria-expanded={athletePickerOpen}
+                onClick={() => {
+                  setAthletePickerOpen((current) => !current);
+                  setMetricPickerOpen(false);
+                }}
+              >
+                <span>{selectedPlayer || 'Select an athlete'}</span>
+                <b aria-hidden="true">⌄</b>
+              </button>
+              {athletePickerOpen ? (
+                <div className={`${styles.metricMenu} ${styles.athleteMenu}`}>
+                  <input
+                    type="search"
+                    autoFocus
+                    value={athleteSearch}
+                    placeholder="Search athletes…"
+                    onChange={(event) => setAthleteSearch(event.target.value)}
+                  />
+                  <div className={styles.metricMenuList}>
+                    {visiblePlayers.length ? visiblePlayers.map((entry) => (
+                      <button
+                        type="button"
+                        key={entry.playerName}
+                        className={entry.playerName === selectedPlayer ? styles.metricOptionActive : undefined}
+                        onClick={() => {
+                          setSelectedPlayer(entry.playerName);
+                          setAthleteSearch('');
+                          setAthletePickerOpen(false);
+                        }}
+                      >
+                        {entry.playerName}
+                      </button>
+                    )) : <p>No athletes match that search.</p>}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+          <div className={styles.metricField}>
+            <span>Metric</span>
+            <div className={styles.metricPicker}>
+              <button
+                type="button"
+                onClick={() => {
+                  setMetricPickerOpen((current) => !current);
+                  setAthletePickerOpen(false);
+                }}
+                aria-expanded={metricPickerOpen}
+              >
+                <span>{activeMetricLabel}</span>
+                <b aria-hidden="true">⌄</b>
+              </button>
+              {metricPickerOpen ? (
+                <div className={styles.metricMenu}>
+                  <input
+                    type="search"
+                    autoFocus
+                    value={metricSearch}
+                    placeholder="Search jump, force, asymmetry…"
+                    onChange={(event) => setMetricSearch(event.target.value)}
+                  />
+                  <div className={styles.metricMenuList}>
+                    {visibleMetricOptions.length ? visibleMetricOptions.map((option) => (
+                      <button
+                        type="button"
+                        key={option.key}
+                        className={option.key === (selectedMetricKey || defaultMetricKey) ? styles.metricOptionActive : undefined}
+                        onClick={() => {
+                          setSelectedMetricKey(option.key);
+                          setMetricSearch('');
+                          setMetricPickerOpen(false);
+                        }}
+                      >
+                        {option.label}
+                      </button>
+                    )) : <p>No metrics match that search.</p>}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+        <div className={styles.secondaryFilters}>
           <label>
-            Player
-            <select value={selectedPlayer} onChange={(event) => setSelectedPlayer(event.target.value)}>
-              {snapshot.players.map((entry) => (
-                <option key={entry.playerName} value={entry.playerName}>
-                  {entry.playerName}
-                </option>
-              ))}
+            <span>Chart</span>
+            <select value={chartView} onChange={(event) => setChartView(event.target.value === 'bar' ? 'bar' : 'line')}>
+              <option value="line">Line graph</option>
+              <option value="bar">Bar graph</option>
             </select>
           </label>
           <label>
-            Metric
-            <select value={selectedMetricKey || defaultMetricKey || ''} onChange={(event) => setSelectedMetricKey(event.target.value)}>
-              {metricOptions.map((option) => (
-                <option key={option.key} value={option.key}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Chart Points
+            <span>Display</span>
             <select
               value={pointMode}
-              onChange={(event) =>
-                setPointMode(event.target.value === 'rep' ? 'rep' : event.target.value === 'max' ? 'max' : 'average')
-              }
+              onChange={(event) => setPointMode(event.target.value === 'max' ? 'max' : 'average')}
             >
               <option value="average">Average by Test</option>
-              <option value="rep">Individual Reps</option>
               <option value="max">Max by Date</option>
             </select>
           </label>
           <label>
-            Test Type
+            <span>Test type</span>
             <select value={selectedTestType} onChange={(event) => setSelectedTestType(event.target.value)}>
               {testTypeOptions.map((option) => (
                 <option key={option} value={option}>
@@ -706,7 +1563,16 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
             </select>
           </label>
           <label>
-            Start Date
+            <span>Percentile group</span>
+            <select value={percentileGroupId} onChange={(event) => setPercentileGroupId(event.target.value)}>
+              <option value="all">All</option>
+              {(percentileData?.groups ?? []).map((group) => (
+                <option key={group.id} value={group.id}>{group.label}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>From</span>
             <input
               type="date"
               value={startDate}
@@ -721,7 +1587,7 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
             />
           </label>
           <label>
-            End Date
+            <span>Through</span>
             <input
               type="date"
               value={endDate}
@@ -736,26 +1602,62 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
             />
           </label>
         </div>
-      </article>
+        {percentileError ? <p className={styles.filterError}>{percentileError}</p> : null}
+      </section>
+      ) : null}
+
+      {activeTab === 'player' && (loadingPlayer || playerLoadError) ? (
+        <article className="portal-admin-card">
+          <p className={playerLoadError ? 'auth-error' : 'portal-muted-text'} style={{ margin: 0 }}>
+            {playerLoadError || `Loading ${selectedPlayer} force plate data...`}
+          </p>
+        </article>
       ) : null}
 
       {activeTab === 'player' ? (
-      <article className="portal-admin-card">
-        <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
-          <p style={{ margin: 0 }}>
-            <strong>Data points:</strong> {filteredRows.length}
-          </p>
-          <p style={{ margin: 0 }}>
-            <strong>Latest:</strong> {latest ? `${latest.value.toFixed(1)}${latest.metricUnit ? ` ${latest.metricUnit}` : ''}` : '--'}
-          </p>
-          <p style={{ margin: 0 }}>
-            <strong>Average:</strong> {avg !== null ? `${avg.toFixed(1)}${latest?.metricUnit ? ` ${latest.metricUnit}` : ''}` : '--'}
-          </p>
+      <section className={styles.analysisPanel}>
+        <div className={styles.panelHeading}>
+          <div>
+            <p className={styles.sectionIndex}>02 · PERFORMANCE SIGNAL</p>
+            <h3>{activeMetricLabel}</h3>
+            <p>{selectedTestType === 'All' ? 'All qualifying test types' : selectedTestType} · {startDate || 'First test'} to {endDate || 'Latest test'}</p>
+          </div>
+          <span className={styles.liveBadge}><i /> {testCount} tests</span>
+        </div>
+        <div className={styles.kpiGrid}>
+          <div className={`${styles.kpiCard} ${styles.kpiPrimary}`}>
+            <div className={styles.kpiLabelRow}><span>Latest</span><PercentileBadge stat={percentileData?.stats.latest} loading={percentileLoading} /></div>
+            <strong>{latest ? latest.value.toFixed(1) : '—'}</strong>
+            <small>{latest?.metricUnit || 'No unit'} · {latest?.date || 'No date'}</small>
+          </div>
+          <div className={styles.kpiCard}>
+            <div className={styles.kpiLabelRow}><span>Previous</span><PercentileBadge stat={percentileData?.stats.previous} loading={percentileLoading} /></div>
+            <strong>{previous ? previous.value.toFixed(1) : '—'}</strong>
+            <small>{previous?.date || 'Not available'}</small>
+          </div>
+          <div className={styles.kpiCard}>
+            <div className={styles.kpiLabelRow}><span>Change</span><PercentileBadge stat={percentileData?.stats.change} loading={percentileLoading} /></div>
+            <strong className={latestChange === null ? '' : latestChange > 0 ? styles.positive : latestChange < 0 ? styles.negative : ''}>
+              {latestChange === null ? '—' : `${latestChange > 0 ? '+' : ''}${latestChange.toFixed(1)}`}
+            </strong>
+            <small>vs. previous test</small>
+          </div>
+          <div className={styles.kpiCard}>
+            <div className={styles.kpiLabelRow}><span>Range average</span><PercentileBadge stat={percentileData?.stats.average} loading={percentileLoading} /></div>
+            <strong>{avg === null ? '—' : avg.toFixed(1)}</strong>
+            <small>{filteredRows.length} data points</small>
+          </div>
+          <div className={styles.kpiCard}>
+            <div className={styles.kpiLabelRow}><span>Range peak</span><PercentileBadge stat={percentileData?.stats.peak} loading={percentileLoading} /></div>
+            <strong>{best === null ? '—' : best.toFixed(1)}</strong>
+            <small>Highest recorded value</small>
+          </div>
         </div>
         {chartPoints.length > 0 ? (
-          <div style={{ marginTop: 10, display: 'grid', gap: 12, gridTemplateColumns: selectedTestType === 'All' && seriesByTestType.length > 1 ? 'minmax(0, 1fr) 160px' : '1fr' }}>
-            <svg viewBox="0 0 560 232" width="100%" height="248" role="img" aria-label="Metric trend chart" className="portal-force-plate-chart">
-              <rect x="0" y="0" width="560" height="232" fill="rgba(2,6,23,0.4)" rx="10" />
+          <div className={styles.chartLayout} style={{ gridTemplateColumns: selectedTestType === 'All' && seriesByTestType.length > 1 ? 'minmax(0, 1fr) 180px' : '1fr' }}>
+            <div className={styles.chartCanvas}>
+            <svg viewBox="0 0 560 232" width="100%" height="320" role="img" aria-label="Metric trend chart" className="portal-force-plate-chart">
+              <rect x="0" y="0" width="560" height="232" fill="transparent" rx="10" />
               <line x1="56" y1="196" x2="532" y2="196" stroke="rgba(148,163,184,0.5)" strokeWidth="1" />
               <line x1="56" y1="20" x2="56" y2="196" stroke="rgba(148,163,184,0.5)" strokeWidth="1" />
               {chartDates.map((date, index) => {
@@ -788,22 +1690,22 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
               <text className="portal-force-plate-chart-axis-label" x="14" y="108" fill="rgba(203,213,225,0.9)" fontSize="10" textAnchor="middle" transform="rotate(-90, 14, 108)">
                 Value
               </text>
-              {seriesByTestType.map((series, index) =>
+              {chartView === 'line' ? seriesByTestType.map((series, index) =>
                 series.points.length > 1 ? (
                   <path key={`series-${series.testType}`} d={chartPath(series.points)} fill="none" stroke={testTypeColor(index)} strokeWidth="2.5" />
                 ) : null
-              )}
-              {chartPoints.map((point, index) => (
-                <circle
-                  key={`${point.date}-${index}`}
-                  cx={point.x}
-                  cy={point.y}
-                  r={hoverIndex === index ? '5' : '3.5'}
-                  fill={testTypeColor(seriesByTestType.findIndex((series) => series.testType === point.testType))}
-                  onMouseEnter={() => setHoverIndex(index)}
-                  onMouseLeave={() => setHoverIndex((current) => (current === index ? null : current))}
-                />
-              ))}
+              ) : null}
+              {chartPoints.map((point, index) => {
+                const seriesIndex = Math.max(0, seriesByTestType.findIndex((series) => series.testType === point.testType));
+                if (chartView === 'bar') {
+                  const seriesCount = Math.max(1, seriesByTestType.length);
+                  const slotWidth = Math.min(38, 420 / Math.max(1, chartDates.length));
+                  const barWidth = Math.max(3, (slotWidth - 3) / seriesCount);
+                  const x = point.x - slotWidth / 2 + seriesIndex * barWidth;
+                  return <rect key={`${point.date}-${index}`} x={x} y={point.y} width={barWidth} height={196 - point.y} rx="1.5" fill={testTypeColor(seriesIndex)} opacity={hoverIndex === index ? 1 : 0.84} onMouseEnter={() => setHoverIndex(index)} onMouseLeave={() => setHoverIndex((current) => (current === index ? null : current))} />;
+                }
+                return <circle key={`${point.date}-${index}`} cx={point.x} cy={point.y} r={hoverIndex === index ? '5' : '3.5'} fill={testTypeColor(seriesIndex)} onMouseEnter={() => setHoverIndex(index)} onMouseLeave={() => setHoverIndex((current) => (current === index ? null : current))} />;
+              })}
               {hoverIndex !== null && chartPoints[hoverIndex] ? (
                 (() => {
                   const point = chartPoints[hoverIndex];
@@ -827,10 +1729,12 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
                 })()
               ) : null}
             </svg>
+            </div>
             {selectedTestType === 'All' && seriesByTestType.length > 1 ? (
-              <div style={{ alignSelf: 'start', display: 'grid', gap: 6, paddingTop: 8 }}>
+              <div className={styles.legend}>
+                <span>Test series</span>
                 {seriesByTestType.map((series, index) => (
-                  <div key={`legend-${series.testType}`} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div key={`legend-${series.testType}`}>
                     <span style={{ width: 10, height: 10, borderRadius: 999, background: testTypeColor(index), display: 'inline-block' }} />
                     <span className="portal-force-plate-chart-legend-text" style={{ color: 'rgba(226,232,240,0.92)', fontSize: 12 }}>{series.testType}</span>
                   </div>
@@ -839,77 +1743,81 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
             ) : null}
           </div>
         ) : (
-          <p className="portal-muted-text" style={{ marginTop: 12 }}>
+          <div className={styles.emptyChart}>
             Not enough metric values for a trend line yet.
-          </p>
+          </div>
         )}
-      </article>
+      </section>
       ) : null}
 
       {activeTab === 'player' ? (
-      <article className="portal-admin-card">
-        <div className="portal-row-between">
-          <h4 style={{ marginTop: 0 }}>Player Metrics</h4>
-          <div style={{ minWidth: 220, position: 'relative' }}>
-            <button
-              type="button"
-              className="btn btn-ghost"
-              style={{ width: '100%', justifyContent: 'space-between' }}
-              onClick={() => setPlayerColumnMenuOpen((current) => !current)}
-            >
-              {playerColumns.length ? `${playerColumns.length} selected` : 'Select columns'}
-            </button>
-            {playerColumnMenuOpen ? (
-              <div
-                style={{
-                  position: 'absolute',
-                  top: 'calc(100% + 4px)',
-                  left: 0,
-                  right: 0,
-                  maxHeight: 260,
-                  overflowY: 'auto',
-                  border: '1px solid var(--border)',
-                  borderRadius: 10,
-                  background: 'var(--panel-strong)',
-                  padding: '0.5rem',
-                  zIndex: 25,
-                  display: 'grid',
-                  gap: '0.35rem',
-                }}
-              >
-                {playerTableMetricOptions.map((option) => {
-                  const checked = playerColumns.includes(option.key);
-                  return (
-                    <label
-                      key={`player-col-${option.key}`}
-                      style={{ display: 'grid', gridTemplateColumns: '16px minmax(0, 1fr)', gap: 8, alignItems: 'center', fontSize: '0.84rem', lineHeight: 1.15, minHeight: 22 }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={(event) => {
-                          const isChecked = event.target.checked;
-                          setPlayerColumns((current) => {
-                            if (isChecked) return current.includes(option.key) ? current : [...current, option.key];
-                            return current.filter((key) => key !== option.key);
-                          });
-                        }}
-                      />
-                      <span>{option.label}</span>
-                    </label>
-                  );
-                })}
-              </div>
-            ) : null}
+      <section className={styles.summaryPanel}>
+        <div className={styles.panelHeading}>
+          <div>
+            <p className={styles.sectionIndex}>03 · CUSTOM SNAPSHOT</p>
+            <h3>{playerViewName || 'New athlete table'}</h3>
+            <p>One row per testing date inside the active date range. Every selected metric is calculated independently.</p>
           </div>
+          <TableExportMenu
+            disabled={!playerExportRows.length || !playerColumns.length}
+            onCsv={() => downloadCsv(playerExportHeaders, playerExportRows, `${playerExportBaseName}.csv`)}
+            onPdf={() => downloadTablePdf({
+              title: playerViewName || 'Force Plate Athlete Table',
+              subtitle: selectedPlayer,
+              detail: playerExportDetail,
+              headers: playerExportHeaders,
+              rows: playerExportRows,
+              fileName: `${playerExportBaseName}.pdf`,
+            })}
+          />
         </div>
-        {playerAggregateRows.length ? (
+        <SavedViewControls
+          viewType="athlete"
+          savedViews={savedViews}
+          selectedId={playerViewId}
+          name={playerViewName}
+          columnCount={playerColumns.length}
+          canManage={canManageViews}
+          loading={viewsLoading}
+          saving={viewSaving}
+          message={activeTab === 'player' ? viewSaveMessage : ''}
+          onSelect={(value) => chooseSavedView('athlete', value)}
+          onNameChange={setPlayerViewName}
+          onNew={() => chooseSavedView('athlete', 'new')}
+          onColumns={() => setPlayerColumnMenuOpen((current) => !current)}
+          onSave={() => void saveTableView('athlete')}
+          onDelete={() => void deleteTableView('athlete')}
+        />
+        {playerColumnMenuOpen ? (
+          <ColumnEditor
+            options={playerTableMetricOptions}
+            columns={playerColumns}
+            labels={playerColumnLabels}
+            search={playerColumnSearch}
+            onSearchChange={setPlayerColumnSearch}
+            onColumnsChange={setPlayerColumns}
+            onLabelsChange={setPlayerColumnLabels}
+          />
+        ) : null}
+        {sortedPlayerDateRows.length ? (
           <div className="portal-table-wrap">
             <table className="portal-table">
             <thead>
               <tr>
+                <th
+                  style={{
+                    textAlign: 'center',
+                    whiteSpace: 'nowrap',
+                    cursor: 'pointer',
+                    background: playerSort.key === 'Date' ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : undefined,
+                    color: playerSort.key === 'Date' ? '#fff' : undefined,
+                  }}
+                  onClick={() => setPlayerSort((current) => ({ key: 'Date', dir: current.key === 'Date' && current.dir === 'desc' ? 'asc' : 'desc' }))}
+                >
+                  <span style={{ userSelect: 'none' }}>Date{playerSort.key === 'Date' ? ` ${playerSort.dir === 'asc' ? '↑' : '↓'}` : ''}</span>
+                </th>
                 {playerColumns.map((column) => {
-                  const option = playerTableMetricOptions.find((opt) => opt.key === column);
+                  const optionLabel = tableColumnLabel(column, playerTableMetricOptions, playerColumnLabels);
                   return (
                     <th
                       key={`player-metric-head-${column}`}
@@ -929,7 +1837,7 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
                       }
                     >
                       <span style={{ userSelect: 'none' }}>
-                        {option?.label ?? column}
+                        {optionLabel}
                         {playerSort.key === column ? ` ${playerSort.dir === 'asc' ? '↑' : '↓'}` : ''}
                       </span>
                     </th>
@@ -938,8 +1846,17 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
               </tr>
             </thead>
             <tbody>
-              {playerAggregateRows.map((row, rowIndex) => (
-                <tr key={`player-aggregate-row-${rowIndex}`}>
+              {sortedPlayerDateRows.map((row) => (
+                <tr key={`player-date-row-${row.date}`}>
+                  <td
+                    style={
+                      playerSort.key === 'Date'
+                        ? { background: 'rgba(var(--portal-accent-rgb, 59,130,246), 0.18)', color: '#fff', fontWeight: 700, textAlign: 'center', whiteSpace: 'nowrap' }
+                        : { textAlign: 'center', whiteSpace: 'nowrap', fontWeight: 700 }
+                    }
+                  >
+                    {displayDate(row.date)}
+                  </td>
                   {playerColumns.map((column) => {
                     let value: number | null = null;
                     if (column === 'CMJ') value = row.cmj;
@@ -954,7 +1871,7 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
                     const isActiveSortColumn = playerSort.key === column;
                     return (
                       <td
-                        key={`player-aggregate-cell-${rowIndex}-${column}`}
+                        key={`player-date-cell-${row.date}-${column}`}
                         style={
                           isActiveSortColumn
                             ? { background: 'rgba(var(--portal-accent-rgb, 59,130,246), 0.18)', color: '#fff', fontWeight: 700, textAlign: 'center' }
@@ -971,22 +1888,87 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
             </table>
           </div>
         ) : (
-          <p className="portal-muted-text">No metric rows available for this filter.</p>
+          <p className="portal-muted-text">No testing dates are available inside the current filters.</p>
         )}
-      </article>
+      </section>
       ) : null}
 
       {activeTab === 'leaderboard' ? (
-      <article className="portal-admin-card">
+      <article className={`${styles.leaderboardPanel} portal-admin-card`}>
         <div className="portal-row-between">
-          <h3 style={{ marginTop: 0 }}>Leaderboard</h3>
-          <button type="button" className="btn btn-ghost" onClick={() => setShowLeaderboardCorrelation(true)}>
-            View Chart
-          </button>
+          <div>
+            <p className={styles.sectionIndex}>ORGANIZATION VIEW</p>
+            <h3 style={{ marginTop: 0, marginBottom: 4 }}>{leaderViewName || 'New leaderboard table'}</h3>
+            <p className="portal-muted-text" style={{ margin: 0 }}>
+              {leaderTestType === 'All' ? 'All force-plate tests' : leaderTestType} · showing {leaderDisplayMode === 'percentile' ? 'percentile ranks' : 'metric values'}.
+            </p>
+          </div>
+          <div className={styles.panelActions}>
+            <TableExportMenu
+              disabled={!leaderExportRows.length || !leaderColumns.length || leaderboardLoading}
+              onCsv={() => downloadCsv(leaderExportHeaders, leaderExportRows, `${leaderExportBaseName}.csv`)}
+              onPdf={() => downloadTablePdf({
+                title: leaderViewName || 'Force Plate Leaderboard',
+                subtitle: leaderTestType === 'All' ? 'All force-plate tests' : leaderTestType,
+                detail: leaderExportDetail,
+                headers: leaderExportHeaders,
+                rows: leaderExportRows,
+                fileName: `${leaderExportBaseName}.pdf`,
+              })}
+            />
+            <button type="button" className="btn btn-ghost" onClick={() => setShowLeaderboardCorrelation(true)}>
+              View Chart
+            </button>
+          </div>
         </div>
-        <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(3, minmax(180px, 1fr))' }}>
+        {leaderboardLoading ? <p className="portal-muted-text">Loading organization metrics…</p> : null}
+        {leaderboardError ? <p className="auth-error">{leaderboardError}</p> : null}
+        <div className={styles.leaderFilters}>
+          <div className={styles.metricField}>
+            <span>Test</span>
+            <div className={styles.metricPicker}>
+              <button type="button" aria-expanded={leaderTestPickerOpen} onClick={() => setLeaderTestPickerOpen((current) => !current)}>
+                <span>{leaderTestType}</span>
+                <b aria-hidden="true">⌄</b>
+              </button>
+              {leaderTestPickerOpen ? (
+                <div className={styles.metricMenu}>
+                  <input
+                    type="search"
+                    autoFocus
+                    value={leaderTestSearch}
+                    placeholder="Search force plate tests…"
+                    onChange={(event) => setLeaderTestSearch(event.target.value)}
+                  />
+                  <div className={styles.metricMenuList}>
+                    {visibleLeaderTestOptions.map((option) => (
+                      <button
+                        type="button"
+                        key={`leader-test-${option}`}
+                        className={option === leaderTestType ? styles.metricOptionActive : undefined}
+                        onClick={() => {
+                          setLeaderTestType(option);
+                          setLeaderTestSearch('');
+                          setLeaderTestPickerOpen(false);
+                        }}
+                      >
+                        {option}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+          <div className={styles.displayModeField}>
+            <span>Display</span>
+            <div className={styles.displayModeToggle} role="group" aria-label="Leaderboard display">
+              <button type="button" className={leaderDisplayMode === 'value' ? styles.displayModeActive : undefined} onClick={() => setLeaderDisplayMode('value')}>Values</button>
+              <button type="button" className={leaderDisplayMode === 'percentile' ? styles.displayModeActive : undefined} onClick={() => setLeaderDisplayMode('percentile')}>Percentiles</button>
+            </div>
+          </div>
           <label>
-            Start Date
+            <span>Start date</span>
             <input
               type="date"
               value={leaderStartDate}
@@ -994,77 +1976,42 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
             />
           </label>
           <label>
-            End Date
+            <span>End date</span>
             <input
               type="date"
               value={leaderEndDate}
               onChange={(event) => setLeaderEndDate(event.target.value)}
             />
           </label>
-          <label>
-            Columns
-            <div style={{ position: 'relative' }}>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                style={{ width: '100%', justifyContent: 'space-between' }}
-                onClick={() => setLeaderColumnMenuOpen((current) => !current)}
-              >
-                {leaderColumns.length ? `${leaderColumns.length} selected` : 'Select columns'}
-              </button>
-              {leaderColumnMenuOpen ? (
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: 'calc(100% + 4px)',
-                    left: 0,
-                    right: 0,
-                    maxHeight: 260,
-                    overflowY: 'auto',
-                    border: '1px solid var(--border)',
-                    borderRadius: 10,
-                    background: 'var(--panel-strong)',
-                    padding: '0.5rem',
-                    zIndex: 25,
-                    display: 'grid',
-                    gap: '0.35rem',
-                  }}
-                >
-                  {leaderboardMetricOptions.map((option) => {
-                    const checked = leaderColumns.includes(option.key);
-                    return (
-                      <label
-                        key={`leader-col-${option.key}`}
-                        style={{
-                          display: 'grid',
-                          gridTemplateColumns: '16px minmax(0, 1fr)',
-                          gap: 8,
-                          alignItems: 'center',
-                          fontSize: '0.84rem',
-                          lineHeight: 1.15,
-                          minHeight: 22,
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={(event) => {
-                            const isChecked = event.target.checked;
-                            setLeaderColumns((current) => {
-                              if (isChecked) return current.includes(option.key) ? current : [...current, option.key];
-                              return current.filter((key) => key !== option.key);
-                            });
-                          }}
-                        />
-                        <span>{option.label}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </div>
-          </label>
         </div>
+        <SavedViewControls
+          viewType="leaderboard"
+          savedViews={savedViews}
+          selectedId={leaderViewId}
+          name={leaderViewName}
+          columnCount={leaderColumns.length}
+          canManage={canManageViews}
+          loading={viewsLoading}
+          saving={viewSaving}
+          message={activeTab === 'leaderboard' ? viewSaveMessage : ''}
+          onSelect={(value) => chooseSavedView('leaderboard', value)}
+          onNameChange={setLeaderViewName}
+          onNew={() => chooseSavedView('leaderboard', 'new')}
+          onColumns={() => setLeaderColumnMenuOpen((current) => !current)}
+          onSave={() => void saveTableView('leaderboard')}
+          onDelete={() => void deleteTableView('leaderboard')}
+        />
+        {leaderColumnMenuOpen ? (
+          <ColumnEditor
+            options={leaderboardMetricOptions}
+            columns={leaderColumns}
+            labels={leaderColumnLabels}
+            search={leaderColumnSearch}
+            onSearchChange={setLeaderColumnSearch}
+            onColumnsChange={setLeaderColumns}
+            onLabelsChange={setLeaderColumnLabels}
+          />
+        ) : null}
         <div className="portal-table-wrap">
           <table className="portal-table">
           <thead>
@@ -1091,7 +2038,7 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
                 </span>
               </th>
               {leaderColumns.map((column) => {
-                const option = leaderboardMetricOptions.find((opt) => opt.key === column);
+                const optionLabel = tableColumnLabel(column, leaderboardMetricOptions, leaderColumnLabels);
                 return (
                   <th
                     key={`head-${column}`}
@@ -1111,7 +2058,7 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
                     }
                   >
                     <span style={{ userSelect: 'none' }}>
-                      {option?.label ?? column}
+                      {optionLabel}
                       {leaderSort.key === column ? ` ${leaderSort.dir === 'asc' ? '↑' : '↓'}` : ''}
                     </span>
                   </th>
@@ -1137,16 +2084,8 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
                   {row.playerName}
                 </td>
                 {leaderColumns.map((column) => {
-                  let value: number | null = null;
-                  if (column === 'CMJ') value = row.cmj;
-                  else if (column === 'SJ') value = row.sj;
-                  else if (column === 'CMJMax') value = row.cmjMax;
-                  else if (column === 'SJMax') value = row.sjMax;
-                  else if (column === 'RSI') value = row.rsiModified;
-                  else if (column === 'SQ') value = row.sq;
-                  else if (column === 'FBvelo') value = row.fbVelo;
-                  else if (column === 'VeloMax') value = row.veloMax;
-                  else if (column.startsWith('metric:')) value = row.metricAverages[column.slice('metric:'.length)] ?? null;
+                  const value = leaderboardValue(row, column);
+                  const percentile = leaderboardPercentiles.get(column)?.get(row.playerName) ?? null;
                   const isActiveSortColumn = leaderSort.key === column;
                   return (
                     <td
@@ -1162,7 +2101,9 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
                           : { textAlign: 'center' }
                       }
                     >
-                      {value === null ? '-' : value.toFixed(1)}
+                      {leaderDisplayMode === 'percentile'
+                        ? (percentile === null ? '-' : ordinal(percentile))
+                        : (value === null ? '-' : value.toFixed(1))}
                     </td>
                   );
                 })}

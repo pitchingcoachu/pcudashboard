@@ -1,10 +1,11 @@
 import type { FlagRuleRow } from './ai-workspace-db';
 import { getDbPool } from './auth-db';
-import { canonicalFlagMetric, metricSampleColumn } from './dashboard-metric-catalog';
+import { canonicalFlagMetric, metricSampleColumn, parseForcePlateFlagMetric } from './dashboard-metric-catalog';
 import { resolveDashboardApiBaseUrl } from './dashboard-access';
 import { parseSortableNumber } from './table-sort';
 
-type FlagDomain = 'pitching' | 'hitting';
+type FlagDomain = 'pitching' | 'hitting' | 'force_plates';
+type DashboardFlagRule = FlagRuleRow & { domain: 'pitching' | 'hitting' };
 type Point = Record<string, unknown>;
 
 function parseMetricValue(metric: string, value: unknown): number | null {
@@ -29,6 +30,7 @@ function selectedPitchTypes(rule: FlagRuleRow): string[] {
 }
 
 function filterKey(rule: FlagRuleRow): string {
+  if (rule.domain === 'force_plates') return `${rule.domain}\u0000${String(rule.testType ?? 'All').trim().toLowerCase()}`;
   const pitches = selectedPitchTypes(rule)
     .filter((value) => value.toLowerCase() !== 'all')
     .map((value) => value.toLowerCase())
@@ -51,13 +53,14 @@ async function mapConcurrent<T, R>(values: T[], limit: number, map: (value: T) =
 
 /** Load daily values from the same overview engine used by Summary Tables. */
 export async function loadFlagMetricPoints(input: {
+  organizationId: number;
   schoolCode: string;
   startDate: string;
   endDate: string;
   domains: FlagDomain[];
   rules: FlagRuleRow[];
   allowedPlayerNames?: string[];
-}): Promise<{ pitching: Point[]; hitting: Point[] }> {
+}): Promise<{ pitching: Point[]; hitting: Point[]; force_plates: Point[] }> {
   const schoolCode = String(input.schoolCode ?? '').trim().toUpperCase();
   const playerKey = (value: unknown) => String(value ?? '')
     .trim()
@@ -67,19 +70,25 @@ export async function loadFlagMetricPoints(input: {
   const allowedPlayerKeys = input.allowedPlayerNames
     ? new Set(input.allowedPlayerNames.map(playerKey).filter(Boolean))
     : null;
+  const dashboardDomains = input.domains.filter((domain): domain is 'pitching' | 'hitting' => domain !== 'force_plates');
   const table = schoolCode === 'PRO' ? 'public.pro_pitch_events' : 'public.pitch_events';
-  const dateResult = await getDbPool().query<{ session_date: string }>(
-    `SELECT DISTINCT session_date::text AS session_date
-       FROM ${table}
-      WHERE school_code = $1
-        AND session_date >= $2::date
-        AND session_date <= $3::date
-      ORDER BY session_date DESC`,
-    [schoolCode, input.startDate, input.endDate]
-  );
+  const dateResult = dashboardDomains.length
+    ? await getDbPool().query<{ session_date: string }>(
+        `SELECT DISTINCT session_date::text AS session_date
+           FROM ${table}
+          WHERE school_code = $1
+            AND session_date >= $2::date
+            AND session_date <= $3::date
+          ORDER BY session_date DESC`,
+        [schoolCode, input.startDate, input.endDate]
+      )
+    : { rows: [] };
   const dates = dateResult.rows.map((row) => String(row.session_date).slice(0, 10)).filter(Boolean);
-  const groups = new Map<string, FlagRuleRow[]>();
-  for (const rule of input.rules.filter((entry) => entry.enabled && input.domains.includes(entry.domain))) {
+  const dashboardRules = input.rules.filter(
+    (entry): entry is DashboardFlagRule => entry.enabled && entry.domain !== 'force_plates' && input.domains.includes(entry.domain)
+  );
+  const groups = new Map<string, DashboardFlagRule[]>();
+  for (const rule of dashboardRules) {
     const key = filterKey(rule);
     groups.set(key, [...(groups.get(key) ?? []), rule]);
   }
@@ -132,7 +141,62 @@ export async function loadFlagMetricPoints(input: {
     return { domain, points };
   });
 
-  const output: { pitching: Point[]; hitting: Point[] } = { pitching: [], hitting: [] };
+  const output: { pitching: Point[]; hitting: Point[]; force_plates: Point[] } = { pitching: [], hitting: [], force_plates: [] };
   for (const batch of batches) output[batch.domain].push(...batch.points);
+  const forcePlateRules = input.rules.filter((rule) => rule.enabled && rule.domain === 'force_plates');
+  if (forcePlateRules.length) {
+    const metricIdentities = Array.from(new Set(forcePlateRules.flatMap((rule) => {
+      const parsed = parseForcePlateFlagMetric(rule.metric);
+      return parsed ? [`${parsed.metricName}\u001f${parsed.metricUnit}`] : [];
+    })));
+    const playerNorms = input.allowedPlayerNames
+      ? Array.from(new Set(input.allowedPlayerNames.map((name) => String(name ?? '').trim().toLowerCase().replace(/\./g, '').replace(/[^a-z0-9]+/g, ' ')).filter(Boolean)))
+      : [];
+    if (metricIdentities.length && playerNorms.length) {
+      const forceRows = await getDbPool().query<{
+        player_name: string;
+        session_date: string;
+        test_type: string;
+        metric_name: string;
+        metric_unit: string;
+        metric_value: number;
+        samples: number;
+      }>(
+        `SELECT player_name,
+                date_time_utc::date::text AS session_date,
+                test_type,
+                metric_name,
+                metric_unit,
+                AVG(value)::double precision AS metric_value,
+                COUNT(DISTINCT test_id)::integer AS samples
+         FROM force_plate_metric_rows
+         WHERE organization_id = $1
+           AND school_code = $2
+           AND player_name_norm = ANY($3::text[])
+           AND point_type = 'average'
+           AND date_time_utc >= $4::date
+           AND date_time_utc < $5::date + INTERVAL '1 day'
+           AND (metric_name || chr(31) || metric_unit) = ANY($6::text[])
+         GROUP BY player_name, date_time_utc::date, test_type, metric_name, metric_unit
+         ORDER BY session_date DESC, player_name, test_type, metric_name, metric_unit`,
+        [input.organizationId, schoolCode, playerNorms, input.startDate, input.endDate, metricIdentities]
+      );
+      for (const row of forceRows.rows) {
+        for (const rule of forcePlateRules) {
+          const parsed = parseForcePlateFlagMetric(rule.metric);
+          if (!parsed || parsed.metricName !== row.metric_name || parsed.metricUnit !== row.metric_unit) continue;
+          if (rule.testType !== 'All' && rule.testType !== row.test_type) continue;
+          output.force_plates.push({
+            __rule_id: rule.id,
+            player_name: row.player_name,
+            session_date: row.session_date,
+            test_type: row.test_type,
+            [rule.metric]: Number(row.metric_value),
+            [`${rule.metric}_n`]: Number(row.samples),
+          });
+        }
+      }
+    }
+  }
   return output;
 }

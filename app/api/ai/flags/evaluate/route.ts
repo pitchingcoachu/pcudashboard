@@ -6,7 +6,7 @@ import { evaluateFlagRules } from '../../../../../lib/flag-evaluation';
 import { loadFlagMetricPoints } from '../../../../../lib/flag-metric-data';
 import { createNotificationsForUsers, listPlayerSummariesByOrganization } from '../../../../../lib/training-db';
 import { sendPushNotificationToUsers } from '../../../../../lib/push-notifications';
-import { dashboardMetricLabel } from '../../../../../lib/dashboard-metric-catalog';
+import { dashboardMetricLabel, parseForcePlateFlagMetric } from '../../../../../lib/dashboard-metric-catalog';
 import { formatTableDisplayValue } from '../../../../../lib/table-sort';
 
 export const maxDuration = 300;
@@ -46,6 +46,7 @@ export async function GET(request: Request) {
       assignedCoachUserId: null,
     });
     const points = await loadFlagMetricPoints({
+      organizationId: access.organizationId,
       schoolCode,
       startDate: ymd(start),
       endDate: ymd(end),
@@ -62,7 +63,10 @@ export async function GET(request: Request) {
       if (!rule?.notificationsEnabled || !rule.createdByUserId || change === null || changePercent === null) return;
       if (!(await claimFlagNotification(rule.id, result.player, result.sessionDate))) return;
       const direction = change >= 0 ? 'increased' : 'decreased';
-      const detail = `${result.player}: ${dashboardMetricLabel(result.metric)} ${direction} by ${formatTableDisplayValue(result.metric, Math.abs(change))} (${Math.abs(changePercent).toFixed(1)}%) versus the ${rule.baselineDays}-day session baseline.`;
+      const formattedChange = parseForcePlateFlagMetric(result.metric)
+        ? Math.abs(change).toFixed(1)
+        : formatTableDisplayValue(result.metric, Math.abs(change));
+      const detail = `${result.player}: ${dashboardMetricLabel(result.metric)} ${direction} by ${formattedChange} (${Math.abs(changePercent).toFixed(1)}%) versus the ${rule.baselineDays}-day session baseline.`;
       await createNotificationsForUsers({ recipientUserIds: [rule.createdByUserId], eventType: 'metric_flag', title: `Flag: ${rule.name}`, detail, path: '/portal/dashboard?suite=flags', playerName: result.player });
       await sendPushNotificationToUsers({ userIds: [rule.createdByUserId], title: `Flag: ${rule.name}`, body: detail, data: { path: '/portal/dashboard?suite=pitching&page=flags' } });
     }));

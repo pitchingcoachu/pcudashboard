@@ -48,7 +48,6 @@ export function buildStaffMoreNavItems(input: {
     ...(input.canAccessActivityTracker ? [{ href: '/portal/admin/activity', label: 'Activity Tracker' }] : []),
     ...(input.canAccessEmailAutomations ? [{ href: '/portal/admin/email-templates', label: 'Email Automations' }] : []),
     ...(!isTrial ? [{ href: '/portal/force-plates', label: 'Force Plate Data' }] : []),
-    ...(!isTrial ? [{ href: '/portal/admin/force-plates-live', label: 'Force Plate Live Search' }] : []),
     ...(!isTrial && isStaff ? [{ href: '/portal/admin/csv-uploads', label: 'CSV Uploads' }] : []),
   ];
 }

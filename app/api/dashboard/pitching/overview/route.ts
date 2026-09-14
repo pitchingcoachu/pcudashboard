@@ -5,7 +5,7 @@ import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../..
 import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, shouldScopeDashboardPlayer } from '../../../../../lib/dashboard-player-scope';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 import { ensureAuthDbReady, getDbPool, isDatabaseConfigured } from '../../../../../lib/auth-db';
-import { getIntendedZonePitcherLeaderboard, getPlayerProLinkByPlayerName, nameOrderingVariants } from '../../../../../lib/training-db';
+import { getIntendedZoneDailyStats, getIntendedZonePitchTypeStats, getIntendedZonePitcherLeaderboard, getPlayerProLinkByPlayerName, nameOrderingVariants } from '../../../../../lib/training-db';
 import { isCrossSchoolPlayerSelection } from '../../../../../lib/cross-school-player-data';
 import { fetchDashboardGroupSplit } from '../../../../../lib/dashboard-group-split';
 import { resolveSchoolScopedOrganizationId } from '../../../../../lib/programming-scope';
@@ -225,7 +225,16 @@ const INTENDED_TARGET_MISS_DIRECTION_LABELS: Record<string, string> = {
  * these columns are opt-in extras, not something every table needs data for. */
 async function withIntendedTargetTableColumns(
   payload: unknown,
-  input: { organizationId: number; startDate: string; endDate: string; requestedColumns: string[] }
+  input: {
+    organizationId: number;
+    startDate: string;
+    endDate: string;
+    requestedColumns: string[];
+    splitBy: string;
+    pitcherName: string;
+    pitchTypes: string[];
+    ballTypes: string[];
+  }
 ): Promise<unknown> {
   if (!payload || typeof payload !== 'object') return payload;
   const requested = new Set(input.requestedColumns);
@@ -234,6 +243,140 @@ async function withIntendedTargetTableColumns(
   if (!Array.isArray(data.table_rows) || !Array.isArray(data.table_columns)) return payload;
   const splitColumn = String(data.table_columns[0] ?? '').trim();
   if (!splitColumn || input.organizationId <= 0) return payload;
+
+  const requestedHitRates: Record<string, number> = { 'ITHit4%': 4, 'ITHit8%': 8, 'ITHit12%': 12, 'ITHit16%': 16, 'ITHit20%': 20 };
+  const appendRequestedColumns = (rows: unknown[]) => {
+    const existingColumns = new Set(data.table_columns!.map((column) => String(column ?? '').trim()));
+    const columnsToAppend = INTENDED_TARGET_TABLE_COLUMNS.filter((column) => requested.has(column) && !existingColumns.has(column));
+    return {
+      ...(payload as Record<string, unknown>),
+      table_rows: rows,
+      table_columns: columnsToAppend.length ? [...data.table_columns!, ...columnsToAppend] : data.table_columns,
+    };
+  };
+
+  // Generic metric charts request a Date split. Build those rows from the
+  // same daily Intended Target series used by Player Plans so Average and
+  // Median Miss Distance graph correctly instead of trying to match a date
+  // row to a pitcher's name.
+  if (String(input.splitBy ?? '').trim().toLowerCase() === 'date' && input.pitcherName && input.pitcherName.toLowerCase() !== 'all') {
+    const dailyStats = await getIntendedZoneDailyStats({
+      organizationId: input.organizationId,
+      pitcherName: input.pitcherName,
+      startDate: input.startDate || null,
+      endDate: input.endDate || null,
+      pitchTypes: input.pitchTypes.length ? input.pitchTypes : null,
+      ballTypes: input.ballTypes.length ? input.ballTypes : null,
+    }).catch((error) => {
+      console.error('[overview] Intended Target daily metric merge failed:', error);
+      return [];
+    });
+    if (!dailyStats.length) return appendRequestedColumns(data.table_rows);
+
+    const normalizeDateKey = (value: unknown): string => {
+      const raw = String(value ?? '').trim();
+      const iso = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+      if (iso) return `${iso[1]}-${iso[2].padStart(2, '0')}-${iso[3].padStart(2, '0')}`;
+      const us = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/);
+      if (!us) return raw;
+      const year = us[3].length === 2 ? `20${us[3]}` : us[3];
+      return `${year}-${us[1].padStart(2, '0')}-${us[2].padStart(2, '0')}`;
+    };
+    const dailyByDate = new Map(dailyStats.map((stat) => [normalizeDateKey(stat.sessionDate), stat]));
+    const matchedDates = new Set<string>();
+    const mergedRows = data.table_rows.map((row) => {
+      if (!row || typeof row !== 'object') return row;
+      const rowObj = row as Record<string, unknown>;
+      const dateKey = normalizeDateKey(rowObj[splitColumn]);
+      const stat = dailyByDate.get(dateKey);
+      if (!stat) return row;
+      matchedDates.add(dateKey);
+      const next: Record<string, unknown> = { ...rowObj };
+      if (requested.has('ITMissAvg')) next.ITMissAvg = Number((stat.avgMissDistanceFt * 12).toFixed(1));
+      if (requested.has('ITMissMed')) next.ITMissMed = Number((stat.medianMissDistanceFt * 12).toFixed(1));
+      for (const [column, targetInches] of Object.entries(requestedHitRates)) {
+        if (!requested.has(column)) continue;
+        const rate = stat.targetHitRates.find((entry) => entry.targetInches === targetInches);
+        next[column] = rate ? Number(rate.hitPct.toFixed(1)) : null;
+      }
+      return next;
+    });
+    // Some upstream table builders discard custom columns they do not own
+    // and can return no Date rows. Keep this repo-owned metric independent
+    // by supplying any missing daily rows directly.
+    for (const stat of dailyStats) {
+      const dateKey = normalizeDateKey(stat.sessionDate);
+      if (matchedDates.has(dateKey)) continue;
+      const next: Record<string, unknown> = { [splitColumn]: stat.sessionDate };
+      if (requested.has('ITMissAvg')) next.ITMissAvg = Number((stat.avgMissDistanceFt * 12).toFixed(1));
+      if (requested.has('ITMissMed')) next.ITMissMed = Number((stat.medianMissDistanceFt * 12).toFixed(1));
+      for (const [column, targetInches] of Object.entries(requestedHitRates)) {
+        if (!requested.has(column)) continue;
+        const rate = stat.targetHitRates.find((entry) => entry.targetInches === targetInches);
+        next[column] = rate ? Number(rate.hitPct.toFixed(1)) : null;
+      }
+      mergedRows.push(next);
+    }
+    return appendRequestedColumns(mergedRows);
+  }
+
+  // A Custom table split by Pitch Types (one row per pitch type -- either
+  // for a single selected pitcher, or aggregated across every pitcher when
+  // the Pitcher filter is "All") needs miss distance/hit-rate matched by
+  // pitch type, not by pitcher name or date -- neither of the branches
+  // above apply. Uses the same per-pitch-type aggregation as the Intended
+  // Target page's "This Pitcher" view (getIntendedZonePitchTypeStats),
+  // matched by the row's pitch-type label instead of a pitcher name.
+  // pitcherName omitted/empty naturally aggregates across the whole org,
+  // same as fetchIntendedZoneStatRows' other callers rely on.
+  if (String(input.splitBy ?? '').trim().toLowerCase() === 'pitch types') {
+    const scopedPitcherName = input.pitcherName && input.pitcherName.toLowerCase() !== 'all' ? input.pitcherName : null;
+    let pitchTypeStats: Awaited<ReturnType<typeof getIntendedZonePitchTypeStats>>;
+    try {
+      pitchTypeStats = await getIntendedZonePitchTypeStats({
+        organizationId: input.organizationId,
+        pitcherName: scopedPitcherName,
+        startDate: input.startDate || null,
+        endDate: input.endDate || null,
+        pitchTypes: input.pitchTypes.length ? input.pitchTypes : null,
+        ballTypes: input.ballTypes.length ? input.ballTypes : null,
+      });
+    } catch (error) {
+      console.error('[overview] Intended Target pitch-type column merge failed:', error);
+      return payload;
+    }
+    if (!pitchTypeStats.length) return payload;
+
+    const statsByPitchType = new Map(pitchTypeStats.map((stat) => [stat.pitchType.trim().toLowerCase(), stat]));
+    // The per-pitch-type breakdown has its own "All" aggregate row (every
+    // pitch type combined for this pitcher) -- match the table's own "All"
+    // row to it instead of leaving that row's Intended Target columns blank.
+    const allStat = pitchTypeStats.find((stat) => stat.pitchType.trim().toLowerCase() === 'all');
+
+    const nextRows = data.table_rows.map((row) => {
+      if (!row || typeof row !== 'object') return row;
+      const rowObj = row as Record<string, unknown>;
+      const rowPitchType = String(rowObj[splitColumn] ?? '').trim();
+      if (!rowPitchType) return row;
+      const stat = rowPitchType.toLowerCase() === 'all' ? allStat : statsByPitchType.get(rowPitchType.toLowerCase());
+      if (!stat) return row;
+
+      const next: Record<string, unknown> = { ...rowObj };
+      if (requested.has('ITMissAvg')) next.ITMissAvg = stat.avgMissDistanceFt !== null ? Number((stat.avgMissDistanceFt * 12).toFixed(1)) : null;
+      if (requested.has('ITMissMed')) next.ITMissMed = stat.medianMissDistanceFt !== null ? Number((stat.medianMissDistanceFt * 12).toFixed(1)) : null;
+      if (requested.has('ITMissDir')) {
+        next.ITMissDir = stat.topMissDirection ? INTENDED_TARGET_MISS_DIRECTION_LABELS[stat.topMissDirection] ?? stat.topMissDirection : null;
+      }
+      for (const [column, targetInches] of Object.entries(requestedHitRates)) {
+        if (!requested.has(column)) continue;
+        const rate = stat.targetHitRates.find((entry) => entry.targetInches === targetInches);
+        next[column] = rate ? Number(rate.hitPct.toFixed(1)) : null;
+      }
+      return next;
+    });
+
+    return appendRequestedColumns(nextRows);
+  }
 
   let stats: Awaited<ReturnType<typeof getIntendedZonePitcherLeaderboard>>;
   try {
@@ -258,8 +401,6 @@ async function withIntendedTargetTableColumns(
     }
   }
 
-  const hitRateColumn: Record<string, number> = { 'ITHit4%': 4, 'ITHit8%': 8, 'ITHit12%': 12, 'ITHit16%': 16, 'ITHit20%': 20 };
-
   const nextRows = data.table_rows.map((row) => {
     if (!row || typeof row !== 'object') return row;
     const rowObj = row as Record<string, unknown>;
@@ -269,12 +410,12 @@ async function withIntendedTargetTableColumns(
     if (!stat) return row;
 
     const next: Record<string, unknown> = { ...rowObj };
-    if (requested.has('ITMissAvg')) next.ITMissAvg = stat.avgMissDistanceFt !== null ? Number(stat.avgMissDistanceFt.toFixed(2)) : null;
-    if (requested.has('ITMissMed')) next.ITMissMed = stat.medianMissDistanceFt !== null ? Number(stat.medianMissDistanceFt.toFixed(2)) : null;
+    if (requested.has('ITMissAvg')) next.ITMissAvg = stat.avgMissDistanceFt !== null ? Number((stat.avgMissDistanceFt * 12).toFixed(1)) : null;
+    if (requested.has('ITMissMed')) next.ITMissMed = stat.medianMissDistanceFt !== null ? Number((stat.medianMissDistanceFt * 12).toFixed(1)) : null;
     if (requested.has('ITMissDir')) {
       next.ITMissDir = stat.topMissDirection ? INTENDED_TARGET_MISS_DIRECTION_LABELS[stat.topMissDirection] ?? stat.topMissDirection : null;
     }
-    for (const [column, targetInches] of Object.entries(hitRateColumn)) {
+    for (const [column, targetInches] of Object.entries(requestedHitRates)) {
       if (!requested.has(column)) continue;
       const rate = stat.targetHitRates.find((entry) => entry.targetInches === targetInches);
       next[column] = rate ? Number(rate.hitPct.toFixed(1)) : null;
@@ -282,11 +423,7 @@ async function withIntendedTargetTableColumns(
     return next;
   });
 
-  const existingColumns = new Set(data.table_columns.map((column) => String(column ?? '').trim()));
-  const columnsToAppend = INTENDED_TARGET_TABLE_COLUMNS.filter((column) => requested.has(column) && !existingColumns.has(column));
-  const nextColumns = columnsToAppend.length ? [...data.table_columns, ...columnsToAppend] : data.table_columns;
-
-  return { ...(payload as Record<string, unknown>), table_rows: nextRows, table_columns: nextColumns };
+  return appendRequestedColumns(nextRows);
 }
 
 function resolveOverviewTimeoutMs(schoolCode: string, hasProLinkMerge = false): number {
@@ -1194,6 +1331,38 @@ export async function GET(request: Request) {
     });
     if (directHeatmapRollup) return directHeatmapRollup;
 
+    const requestedCustomColumns = customColumns
+      .split(',')
+      .map((column) => column.trim())
+      .filter(Boolean);
+    const intendedTargetOnlyRequest =
+      requestedCustomColumns.length > 0 &&
+      requestedCustomColumns.every((column) => INTENDED_TARGET_TABLE_COLUMNS.includes(column as (typeof INTENDED_TARGET_TABLE_COLUMNS)[number]));
+    const intendedTargetPitcher = scopedPitcher || pitcher;
+    if (
+      splitBy.trim().toLowerCase() === 'date' &&
+      intendedTargetOnlyRequest &&
+      intendedTargetPitcher &&
+      intendedTargetPitcher.toLowerCase() !== 'all'
+    ) {
+      const intendedTargetPayload = await withIntendedTargetTableColumns(
+        { table_columns: ['Date'], table_rows: [] },
+        {
+          organizationId: resolveSchoolScopedOrganizationId(session),
+          startDate,
+          endDate,
+          requestedColumns: requestedCustomColumns,
+          splitBy,
+          pitcherName: intendedTargetPitcher,
+          pitchTypes: String(pitchTypes ?? '').split(/[;,]/).map((value) => value.trim()).filter((value) => value && value.toLowerCase() !== 'all'),
+          ballTypes: String(effectiveBallTypes ?? '').split(/[;,]/).map((value) => value.trim()).filter((value) => value && value.toLowerCase() !== 'all'),
+        }
+      );
+      return NextResponse.json(intendedTargetPayload, {
+        headers: { ...RESPONSE_CACHE_HEADERS, 'x-dashboard-source': 'intended-target-daily' },
+      });
+    }
+
   const hasUnsupportedLeagueDirectChartFilters =
     hasValue(oppHitter) ||
     hasValue(withVideo) ||
@@ -1906,6 +2075,10 @@ export async function GET(request: Request) {
       startDate,
       endDate,
       requestedColumns: customColumns ? customColumns.split(',').map((column) => column.trim()) : [],
+      splitBy,
+      pitcherName: scopedPitcher || pitcher,
+      pitchTypes: String(pitchTypes ?? '').split(/[;,]/).map((value) => value.trim()).filter((value) => value && value.toLowerCase() !== 'all'),
+      ballTypes: String(effectiveBallTypes ?? '').split(/[;,]/).map((value) => value.trim()).filter((value) => value && value.toLowerCase() !== 'all'),
     });
     const payloadWithRollupHeatmaps = await maybeAttachPitchingHeatmapRollup({
       request,

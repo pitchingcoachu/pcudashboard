@@ -484,6 +484,9 @@ function isDrillEligibleCategory(category: string): boolean {
   return value.includes('drill') || value.includes('plyo') || value.includes('throw') || (value.includes('medicine') && value.includes('ball'));
 }
 
+const DEFAULT_DRILL_CATEGORIES = ['Plyos', 'Throwing', 'Medicine Ball'] as const;
+const CREATE_DRILL_CATEGORY_VALUE = '__create_drill_category__';
+
 export default function ScheduleBoard({ players, workouts, exercises, schoolCode, schoolLogoSrc, schoolLogoAlt, initialPlayerId }: ScheduleBoardProps) {
   const resolveInitialPlayer = () => {
     if (initialPlayerId && players.some((player) => player.id === initialPlayerId)) {
@@ -624,6 +627,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   );
   const [newDrillName, setNewDrillName] = useState('');
   const [newDrillCategory, setNewDrillCategory] = useState('Plyos');
+  const [newDrillCustomCategory, setNewDrillCustomCategory] = useState('');
   const [newDrillVideoUrl, setNewDrillVideoUrl] = useState('');
   const [newDrillSaveToLibrary, setNewDrillSaveToLibrary] = useState(true);
   const [drillVideoPreview, setDrillVideoPreview] = useState<{ title: string; url: string } | null>(null);
@@ -633,6 +637,15 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const [catchPlayMediumDay, setCatchPlayMediumDay] = useState('');
   const [catchPlayLowDay, setCatchPlayLowDay] = useState('');
   const [cycleNotes, setCycleNotes] = useState('');
+
+  const drillCategoryOptions = useMemo(() => {
+    const categories = new Set<string>(DEFAULT_DRILL_CATEGORIES);
+    for (const exercise of drillExerciseOptions) {
+      const category = exercise.category.trim();
+      if (category) categories.add(category);
+    }
+    return Array.from(categories);
+  }, [drillExerciseOptions]);
 
   const loadBubbleCategories = useCallback(async () => {
     setBubbleCategoriesLoading(true);
@@ -3893,7 +3906,14 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     const updateRows = isPre ? setDrillsRows : setPostDrillsRows;
     return (
       <section key={`drill-section-${section}`} className="portal-panel portal-drills-section">
-        <h3>{isPre ? 'Pre-Throw Plyos and Drills' : 'Post-Throw Plyos and Drills'}</h3>
+        <div className="portal-drills-section-heading">
+          <div>
+            <span className="portal-drills-eyebrow">{isPre ? '01 · Prepare' : '02 · Restore'}</span>
+            <h3>{isPre ? 'Pre-Throw Plyos & Drills' : 'Post-Throw Plyos & Drills'}</h3>
+            <p>{isPre ? 'Prime movement quality and throwing readiness.' : 'Finish with focused arm care and recovery work.'}</p>
+          </div>
+          <span className="portal-drills-slot-count">{sectionRowCount} slots</span>
+        </div>
         <div className="portal-table-wrap">
           <table className="portal-drills-table">
             <colgroup>
@@ -3943,7 +3963,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                       }}
                       onDragEnd={() => setDrillRowDrag(null)}
                     >
-                      <span aria-hidden="true">||</span>
+                      <span aria-hidden="true">⋮⋮</span>
                     </button>
                   </td>
                   {(['drill', 'sets', 'reps', 'weight', 'notes'] as const).map((field) => (
@@ -3973,10 +3993,14 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                             return (
                               <button
                                 type="button"
-                                className="btn btn-ghost"
+                                className="portal-drill-video-trigger"
                                 onClick={() => setDrillVideoPreview({ title: selected?.name ?? 'Drill Video', url: videoUrl })}
+                                aria-label={`Preview ${selected?.name ?? 'drill'} video`}
+                                title="Preview drill video"
                               >
-                                Video
+                                <svg viewBox="0 0 20 20" aria-hidden="true">
+                                  <path d="M7 5.4 14.2 10 7 14.6Z" />
+                                </svg>
                               </button>
                             );
                           })()}
@@ -4006,7 +4030,14 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
 
   const renderHittingDrillSection = () => (
     <section key="hitting-drill-section" className="portal-panel portal-drills-section">
-      <h3>Hitting Drills</h3>
+      <div className="portal-drills-section-heading">
+        <div>
+          <span className="portal-drills-eyebrow">01 · Drill Progression</span>
+          <h3>Hitting Drills</h3>
+          <p>Sequence the session from movement prep through game-speed execution.</p>
+        </div>
+        <span className="portal-drills-slot-count">{hittingDrillsRowCount} slots</span>
+      </div>
       <div className="portal-table-wrap">
         <table className="portal-drills-table portal-hitting-drills-table">
           <colgroup>
@@ -4053,7 +4084,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                     }}
                     onDragEnd={() => setHittingDrillRowDrag(null)}
                   >
-                    <span aria-hidden="true">||</span>
+                    <span aria-hidden="true">⋮⋮</span>
                   </button>
                 </td>
                 {(['drill', 'sets', 'reps', 'notes'] as const).map((field) => (
@@ -4083,10 +4114,14 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                           return (
                             <button
                               type="button"
-                              className="btn btn-ghost"
+                              className="portal-drill-video-trigger"
                               onClick={() => setDrillVideoPreview({ title: selected?.name ?? 'Drill Video', url: videoUrl })}
+                              aria-label={`Preview ${selected?.name ?? 'drill'} video`}
+                              title="Preview drill video"
                             >
-                              Video
+                              <svg viewBox="0 0 20 20" aria-hidden="true">
+                                <path d="M7 5.4 14.2 10 7 14.6Z" />
+                              </svg>
                             </button>
                           );
                         })()}
@@ -4217,7 +4252,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   };
 
   return (
-    <div className="portal-admin-stack">
+    <div className={`portal-admin-stack portal-schedule-workspace${builderMode === 'schedule' && (view === 'drills' || view === 'hitting-drills') ? ' portal-drills-workspace' : ''}`}>
       <div className="portal-schedule-toolbar">
         <div className="portal-schedule-view-switch" role="group" aria-label="Builder mode">
           {(['schedule', 'template'] as BuilderMode[]).map((mode) => (
@@ -4357,6 +4392,19 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                 </button>
               ))}
             </div>
+            {view === 'drills' || view === 'hitting-drills' ? (
+              <header className="portal-drills-workspace-heading">
+                <div>
+                  <span className="portal-drills-eyebrow">{view === 'drills' ? 'Pitching Development' : 'Hitting Development'}</span>
+                  <h2>{view === 'drills' ? 'Pitching Drill Builder' : 'Hitting Drill Builder'}</h2>
+                  <p>{view === 'drills' ? 'Build the work before and after throwing, then save it as a repeatable template.' : 'Create a focused drill progression and save it for fast assignment.'}</p>
+                </div>
+                <div className="portal-drills-workspace-meta" aria-label="Current drill plan">
+                  <span>{players.find((player) => player.id === playerId)?.name || 'Select a player'}</span>
+                  <strong>{view === 'drills' ? `${drillsRowCount + postDrillsRowCount} drill slots` : `${hittingDrillsRowCount} drill slots`}</strong>
+                </div>
+              </header>
+            ) : null}
             {view === 'throwing' && (
               <>
                 <div className="portal-schedule-view-switch" role="group" aria-label="Throwing mode">
@@ -4906,46 +4954,77 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
               </div>
             )}
             {view === 'drills' && (
-              <div style={{ display: 'grid', gap: 8 }}>
-                <div style={{ borderTop: '1px solid var(--calendar-grid-border, var(--border))', paddingTop: 8, display: 'grid', gap: 8 }}>
-                  <strong style={{ fontSize: '0.92rem' }}>Quick Add Drill Exercise</strong>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <div className="portal-drills-setup-stack">
+                <section className="portal-drills-quick-add">
+                  <div className="portal-drills-quick-add-heading">
+                    <span className="portal-drills-quick-add-icon" aria-hidden="true">+</span>
+                    <div>
+                      <strong>Quick Add Exercise</strong>
+                      <span>Create a drill here without leaving the builder.</span>
+                    </div>
+                  </div>
+                  <div className="portal-drills-quick-add-fields">
                     <input
-                      className="portal-schedule-control"
+                      className="portal-schedule-control portal-drills-new-name"
                       placeholder="Exercise name"
                       value={newDrillName}
                       onChange={(event) => setNewDrillName(event.target.value)}
-                      style={{ minWidth: 220 }}
                     />
-                    <select className="portal-schedule-control" value={newDrillCategory} onChange={(event) => setNewDrillCategory(event.target.value)}>
-                      <option value="Plyos">Plyos</option>
-                      <option value="Throwing">Throwing</option>
-                      <option value="Medicine Ball">Medicine Ball</option>
+                    <select
+                      className="portal-schedule-control portal-drills-new-category"
+                      value={newDrillCategory}
+                      onChange={(event) => setNewDrillCategory(event.target.value)}
+                    >
+                      {drillCategoryOptions.map((category) => (
+                        <option key={category} value={category}>{category}</option>
+                      ))}
+                      <option value={CREATE_DRILL_CATEGORY_VALUE}>+ Create new category</option>
                     </select>
+                    {newDrillCategory === CREATE_DRILL_CATEGORY_VALUE ? (
+                      <input
+                        className="portal-schedule-control portal-drills-custom-category"
+                        placeholder="New category name"
+                        value={newDrillCustomCategory}
+                        onChange={(event) => setNewDrillCustomCategory(event.target.value)}
+                        autoFocus
+                      />
+                    ) : null}
                     <input
-                      className="portal-schedule-control"
+                      className="portal-schedule-control portal-drills-new-video"
                       placeholder="Video URL (optional)"
                       value={newDrillVideoUrl}
                       onChange={(event) => setNewDrillVideoUrl(event.target.value)}
-                      style={{ minWidth: 260 }}
                     />
-                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <label className="portal-drills-library-toggle">
                       <input type="checkbox" checked={newDrillSaveToLibrary} onChange={(event) => setNewDrillSaveToLibrary(event.target.checked)} />
-                      Add to Exercise Library
+                      <span>Add to library</span>
                     </label>
                     <button
                       type="button"
                       className="btn btn-primary"
                       onClick={async () => {
                         const name = newDrillName.trim();
+                        const customCategory = newDrillCustomCategory.trim();
+                        const selectedCategory = newDrillCategory === CREATE_DRILL_CATEGORY_VALUE
+                          ? customCategory
+                          : newDrillCategory.trim();
+                        const category = selectedCategory && isDrillEligibleCategory(selectedCategory)
+                          ? selectedCategory
+                          : selectedCategory
+                            ? `${selectedCategory} Drills`
+                            : '';
                         if (!name) {
                           setError('Exercise name is required.');
+                          return;
+                        }
+                        if (!category) {
+                          setError('Category name is required.');
                           return;
                         }
                         if (newDrillSaveToLibrary) {
                           const form = new FormData();
                           form.set('name', name);
-                          form.set('category', newDrillCategory);
+                          form.set('category', category);
                           form.set('repMeasure', 'reps');
                           form.set('trackingType', 'body_weight');
                           form.set('instructionVideoUrl', newDrillVideoUrl.trim());
@@ -4971,12 +5050,14 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                             {
                               id: Number.MIN_SAFE_INTEGER + prev.length,
                               name,
-                              category: newDrillCategory,
+                              category,
                               instructionVideoUrl: newDrillVideoUrl.trim() || null,
                             },
                           ].sort((a, b) => a.name.localeCompare(b.name));
                         });
                         setNewDrillName('');
+                        setNewDrillCategory(category);
+                        setNewDrillCustomCategory('');
                         setNewDrillVideoUrl('');
                         setError('');
                       }}
@@ -4984,7 +5065,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                       Add Drill
                     </button>
                   </div>
-                </div>
+                </section>
                 <div className="portal-drills-template-controls">
                   {(['pre', 'post'] as const).map((section) => {
                     const isPre = section === 'pre';
@@ -4994,7 +5075,13 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                     const rowCount = isPre ? drillsRowCount : postDrillsRowCount;
                     return (
                       <div key={`drill-controls-${section}`} className="portal-drills-template-control">
-                        <strong>{isPre ? 'Pre-Throw' : 'Post-Throw'}</strong>
+                        <div className="portal-drills-template-heading">
+                          <span>{isPre ? '01' : '02'}</span>
+                          <div>
+                            <strong>{isPre ? 'Pre-Throw Template' : 'Post-Throw Template'}</strong>
+                            <small>{isPre ? 'Preparation sequence' : 'Recovery sequence'}</small>
+                          </div>
+                        </div>
                         <label>
                           Template
                           <select className="portal-schedule-control" value={selectedId} onChange={(event) => applyDrillTemplate(section, event.target.value)}>
@@ -5045,7 +5132,13 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
               <div style={{ display: 'grid', gap: 8, width: '100%' }}>
                 <div className="portal-drills-template-controls portal-hitting-drills-controls">
                   <div className="portal-drills-template-control">
-                    <strong>Hitting Drills</strong>
+                    <div className="portal-drills-template-heading">
+                      <span>01</span>
+                      <div>
+                        <strong>Hitting Drill Template</strong>
+                        <small>Build and save a repeatable progression</small>
+                      </div>
+                    </div>
                     <label>
                       Template
                       <select className="portal-schedule-control" value={selectedHittingDrillTemplateId} onChange={(event) => applyHittingDrillTemplate(event.target.value)}>
@@ -5724,7 +5817,8 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
             <div className="portal-drills-sections">
               <section className="portal-drills-note-section">
                 <label>
-                  <strong>Player Note</strong>
+                  <span className="portal-drills-eyebrow">Player Context</span>
+                  <strong>Plan Note</strong>
                   <textarea
                     ref={drillsNoteTextareaRef}
                     className="portal-schedule-control"
@@ -5740,8 +5834,9 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
               </section>
               {renderDrillSection('pre')}
               {renderDrillSection('post')}
-              <section className="portal-panel" style={{ marginTop: '1rem', gridColumn: '1 / -1', width: '100%', paddingBottom: '0.6rem' }}>
-                <h4 style={{ marginTop: 0 }}>Catch Play Drills and Routine</h4>
+              <section className="portal-panel portal-drills-catch-play">
+                <span className="portal-drills-eyebrow">03 · Throwing Routine</span>
+                <h4>Catch Play Drills & Routine</h4>
                 <p className="portal-muted-text" style={{ marginBottom: '0.6rem' }}>
                   These notes will display for this player when they open a Throwing (High) or Throwing (Medium) workout.
                 </p>
@@ -5787,7 +5882,8 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
             <div className="portal-drills-sections portal-hitting-drills-sections">
               <section className="portal-drills-note-section">
                 <label>
-                  <strong>Player Note</strong>
+                  <span className="portal-drills-eyebrow">Player Context</span>
+                  <strong>Plan Note</strong>
                   <textarea
                     className="portal-schedule-control"
                     rows={2}

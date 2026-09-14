@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import NativeDateInput from '../components/native-date-input';
 import { uploadPlayerMediaFile } from '../../../lib/upload-player-media';
+import FormattedPlayerNote from '../components/formatted-player-note';
 
 type NoteAttachment = {
   id: number;
@@ -207,7 +208,7 @@ export default function PlayerOwnNotes({ playerId, currentUserId }: { playerId: 
                     </small>
                     <small className="portal-muted-text">{isOwn ? 'You' : 'Coach'}</small>
                   </div>
-                  <p style={{ margin: '8px 0', whiteSpace: 'pre-wrap' }}>{note.noteText}</p>
+                  <FormattedPlayerNote text={note.noteText} category={note.category} />
                   {note.attachments && note.attachments.length > 0 ? (
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                       {note.attachments.map((attachment) => (

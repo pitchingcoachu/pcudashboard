@@ -6,6 +6,7 @@ import NativeDateInput from '../components/native-date-input';
 import { NOTE_ATTACHMENT_DATA_URL_MAX_LENGTH, formatNoteAttachmentLimit } from '../../../lib/note-attachment-limits';
 import { uploadPlayerMediaFile } from '../../../lib/upload-player-media';
 import { PlayerAssessmentForm, type PlayerAssessmentAnswers } from '../components/player-assessment-form';
+import FormattedPlayerNote, { playerNoteCategoryLabel } from '../components/formatted-player-note';
 
 type Domain = 'Pitching' | 'Hitting' | 'Catching' | 'General';
 
@@ -1059,7 +1060,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
               </span>
             ) : null}
             <span style={{ ...categoryBadgeStyle(note.category), borderRadius: 999, padding: '2px 8px', fontSize: 12, fontWeight: 700 }}>
-              {note.category}
+              {playerNoteCategoryLabel(note.category)}
             </span>
           </div>
           {parseNoteAttachments(note).length > 0 ? (
@@ -1127,7 +1128,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
             }}
           />
         ) : (
-          <p style={{ margin: '12px 0 18px 0', whiteSpace: 'pre-wrap', color: '#ffffff' }}>{note.noteText}</p>
+          <FormattedPlayerNote text={note.noteText} category={note.category} />
         )}
         {editingNoteId === note.id ? (
           <label className="portal-inline-filter" style={{ marginTop: 4 }}>

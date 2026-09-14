@@ -9,6 +9,7 @@ import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { deleteObjectFromR2, getR2Bucket, getR2Client } from './biomechanics-storage';
 import { getAiSessionForOrganization, syncAiSessionPlayerNotes, updateAiSessionResult } from './ai-workspace-db';
 import { summarizeTranscript, transcribeAudioFiles } from './ai-generation';
+import { sanitizeAiProcessingError } from './openai-transcription-config';
 
 function runFfmpeg(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -44,7 +45,8 @@ export async function processAiSession(sessionId: number, organizationId: number
     await updateAiSessionResult({ id:sessionId,organizationId,status:'ready',transcript,bullets,audioR2Key:audioKey,audioContentType:'audio/mp4',sourceR2Key:null,error:null });
     await syncAiSessionPlayerNotes(sessionId, organizationId);
   } catch (error) {
-    await updateAiSessionResult({ id:sessionId,organizationId,status:'failed',sourceR2Key:session.sourceR2Key,error:error instanceof Error?error.message:'Processing failed.' }).catch(()=>{});
-    throw error;
+    const safeError = sanitizeAiProcessingError(error);
+    await updateAiSessionResult({ id:sessionId,organizationId,status:'failed',sourceR2Key:session.sourceR2Key,error:safeError.message }).catch(()=>{});
+    throw safeError;
   } finally { await rm(dir,{recursive:true,force:true}); }
 }

@@ -1,7 +1,6 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { notFound } from 'next/navigation';
-import SyncForcePlatesButton from './sync-force-plates-button';
 import { requirePortalSession } from '../../../lib/portal-session';
 import { resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
 import { resolveSessionDashboardSchoolOptions } from '../../../lib/dashboard-school-options';
@@ -20,6 +19,7 @@ import PortalThemeToggle from '../theme-toggle';
 import PortalMessagesNavButton from '../messages-nav-button';
 import { resolveStaffPrimaryNavigation } from '../../../lib/portal-primary-nav-server';
 import StaffPrimaryNav, { staffPrimaryMobileItems } from '../staff-primary-nav';
+import styles from './force-plates-dashboard.module.css';
 
 function normalizeName(value: string): string {
   return String(value ?? '')
@@ -125,16 +125,28 @@ export default async function ForcePlatesPage({
     error = 'No PCU players found in programming list.';
   } else {
     try {
+      const preferredPlayerNames = selectedPlayers.length ? selectedPlayers : candidateNames.slice(0, 1);
       const fromNeon = await loadForcePlateSnapshotFromNeon({
         organizationId: orgId,
         schoolCode: selectedSchoolCode,
         allowedPlayerNames: candidateNames,
+        metricPlayerNames: preferredPlayerNames,
+        pointTypes: ['average'],
+        includeMetrics: false,
       });
       const cached = fromNeon.snapshot
         ? { snapshot: fromNeon.snapshot }
         : await loadForcePlateSnapshot({ organizationId: orgId, schoolCode: selectedSchoolCode });
       if (!cached.snapshot) throw new Error('Force plate cache is empty. Ask an admin to run Force Plate Sync.');
       const fullSnapshot = cached.snapshot;
+      const preferredNorm = normalizeName(preferredPlayerNames[0] ?? '');
+      if (preferredNorm) {
+        fullSnapshot.players.sort((a, b) => {
+          const aPreferred = normalizeName(a.playerName) === preferredNorm ? 0 : 1;
+          const bPreferred = normalizeName(b.playerName) === preferredNorm ? 0 : 1;
+          return aPreferred - bPreferred || a.playerName.localeCompare(b.playerName);
+        });
+      }
       availablePlayers = fullSnapshot.players
         .filter((player) => player.testsCount > 0 || player.metricRows.length > 0 || player.recentTests.length > 0)
         .map((player) => player.playerName);
@@ -218,12 +230,11 @@ export default async function ForcePlatesPage({
       sectionClassName="portal-panel portal-admin-panel"
     >
       <div className="portal-admin-stack">
-        <div className="portal-admin-headline" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.75rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+        <div className={`portal-admin-headline ${styles.pageHeadline}`}>
+          <div className={styles.pageTitleGroup}>
             <h2 style={{ margin: 0 }}>VALD Force Plate Data</h2>
-            {session.role !== 'player' ? <SyncForcePlatesButton /> : null}
           </div>
-          <div style={{ position: 'relative', width: '220px', height: '56px', overflow: 'hidden', flexShrink: 0 }}>
+          <div className={styles.valdLogo}>
             <Image src="/vald.webp" alt="VALD" fill style={{ objectFit: 'cover', objectPosition: 'center' }} />
           </div>
         </div>
@@ -237,7 +248,7 @@ export default async function ForcePlatesPage({
 
         {snapshot ? (
           <>
-            <ForcePlatesDashboard snapshot={snapshot} />
+            <ForcePlatesDashboard snapshot={snapshot} canManageViews={isStaff} />
             <article className="portal-admin-card">
               <p className="portal-muted-text" style={{ margin: 0 }}>
                 Last sync: {formatShortDateTime(snapshot.fetchedAt)}

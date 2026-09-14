@@ -1,7 +1,7 @@
 import type { FlagRuleRow } from './ai-workspace-db';
 import { canonicalFlagMetric } from './dashboard-metric-catalog';
 
-export type FlagResult = { ruleId:number; ruleName:string; domain:'pitching'|'hitting'; player:string; sessionDate:string; metric:string; pitchType:string; sessionAverage:number; baselineAverage:number|null; change:number|null; changePercent:number|null; sample:number; triggered:boolean };
+export type FlagResult = { ruleId:number; ruleName:string; domain:'pitching'|'hitting'|'force_plates'; player:string; sessionDate:string; metric:string; pitchType:string; testType:string; sessionAverage:number; baselineAverage:number|null; change:number|null; changePercent:number|null; sample:number; triggered:boolean };
 
 const METRIC_KEYS:Record<string,string[]>={
   velocity:['rel_speed','velo','velocity'],ivb:['ivb','induced_vert_break','inducedverticalbreak'],hb:['hb','horizontal_break','horzbreak'],
@@ -16,7 +16,7 @@ const firstLast=(value:string)=>{const raw=value.replace(/\s+/g,' ').trim();if(!
 const personKey=(value:string)=>firstLast(value).toLowerCase().replace(/[^a-z0-9]+/g,'');
 const pitchTypeKey=(value:string)=>{const token=value.toLowerCase().replace(/[^a-z0-9]+/g,'');if(['fastball','fourseamfastball','fourseam','ff','fa'].includes(token))return'fastball';if(['sinker','oneseamfastball','twoseamfastball','twoseamfasball','twoseam','si','ft'].includes(token))return'sinker';if(['changeup','ch'].includes(token))return'changeup';if(['sweeper','st'].includes(token))return'sweeper';if(['splitter','splitfinger','splitfingerfastball','sp','fs'].includes(token))return'splitter';if(['curveball','cu','knucklecurve','kc'].includes(token))return'curveball';if(['cutter','fc'].includes(token))return'cutter';if(['slider','sl'].includes(token))return'slider';if(['knuckleball','kn'].includes(token))return'knuckleball';return token;};
 
-export function evaluateFlagRules(rules:FlagRuleRow[],pointsByDomain:{pitching:Array<Record<string,unknown>>;hitting:Array<Record<string,unknown>>}):FlagResult[]{
+export function evaluateFlagRules(rules:FlagRuleRow[],pointsByDomain:{pitching:Array<Record<string,unknown>>;hitting:Array<Record<string,unknown>>;force_plates:Array<Record<string,unknown>>}):FlagResult[]{
   const results:FlagResult[]=[];
   for(const rule of rules.filter((r)=>r.enabled)){
     const rows=pointsByDomain[rule.domain]??[];const canonicalMetric=canonicalFlagMetric(rule.metric);const keys=[canonicalMetric,...(METRIC_KEYS[rule.metric]??[rule.metric])];const countKeys=[`${canonicalMetric}_n`,...(METRIC_COUNT_KEYS[rule.metric]??[])];
@@ -25,7 +25,7 @@ export function evaluateFlagRules(rules:FlagRuleRow[],pointsByDomain:{pitching:A
     const grouped=new Map<string,{player:string;date:string;weightedSum:number;weight:number;sample:number}>();
     for(const row of rows){
       const taggedRuleId=numeric(row,['__rule_id']);if(taggedRuleId!==null&&taggedRuleId!==rule.id)continue;
-      const player=text(row,rule.domain==='pitching'?['pitcher','player_name','name']:['batter','hitter','player_name','name']);
+      const player=text(row,rule.domain==='pitching'?['pitcher','player_name','name']:rule.domain==='hitting'?['batter','hitter','player_name','name']:['player_name','name']);
       const date=text(row,['session_date','date','game_date']).slice(0,10);if(!player||!date||date<cutoffDate)continue;
       if(rule.targetPlayer!=='All'&&personKey(player)!==personKey(rule.targetPlayer))continue;
       const type=text(row,['pitch_type','tagged_pitch_type','taggedpitchtype']);if(taggedRuleId===null&&!allPitchTypes&&!selectedPitchTypeKeys.has(pitchTypeKey(type)))continue;
@@ -45,7 +45,7 @@ export function evaluateFlagRules(rules:FlagRuleRow[],pointsByDomain:{pitching:A
       const change=baselineAverage===null?null:current.average-baselineAverage;
       const changePercent=change===null||baselineAverage===null||baselineAverage===0?null:(change/baselineAverage)*100;
       const magnitude=rule.thresholdType==='percent'?Math.abs(changePercent??0):Math.abs(change??0);
-      results.push({ruleId:rule.id,ruleName:rule.name,domain:rule.domain,player,sessionDate:current.date,metric:canonicalMetric,pitchType:allPitchTypes?'All':selectedPitchTypes.join(', '),sessionAverage:current.average,baselineAverage,change,changePercent,sample:current.sample,triggered:baselineAverage!==null&&magnitude>=rule.threshold});
+      results.push({ruleId:rule.id,ruleName:rule.name,domain:rule.domain,player,sessionDate:current.date,metric:canonicalMetric,pitchType:allPitchTypes?'All':selectedPitchTypes.join(', '),testType:rule.testType,sessionAverage:current.average,baselineAverage,change,changePercent,sample:current.sample,triggered:baselineAverage!==null&&magnitude>=rule.threshold});
     }
   }
   return results.sort((a,b)=>b.sessionDate.localeCompare(a.sessionDate)||Math.abs(b.change??0)-Math.abs(a.change??0));

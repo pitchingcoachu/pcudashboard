@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { requireAiAccess } from '../../../../../lib/ai-access';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
-import { dashboardMetricOptions } from '../../../../../lib/dashboard-metric-catalog';
+import { dashboardMetricOptions, forcePlateFlagMetric } from '../../../../../lib/dashboard-metric-catalog';
+import { loadForcePlateMetricCatalog } from '../../../../../lib/force-plate-neon-db';
 
 type Domain = 'pitching' | 'hitting';
 
@@ -42,6 +43,21 @@ export async function GET(request: Request) {
       return dashboardMetricOptions(domain);
     }
   };
-  const [pitching, hitting] = await Promise.all([load('pitching'), load('hitting')]);
-  return NextResponse.json({ metrics: { pitching, hitting } });
+  const [pitching, hitting, forcePlateCatalog] = await Promise.all([
+    load('pitching'),
+    load('hitting'),
+    loadForcePlateMetricCatalog({ organizationId: access.organizationId, schoolCode }).catch(() => ({ metrics: [], testTypes: [] })),
+  ]);
+  return NextResponse.json({
+    metrics: {
+      pitching,
+      hitting,
+      force_plates: forcePlateCatalog.metrics.map((metric) => forcePlateFlagMetric(metric.metricName, metric.metricUnit)),
+    },
+    forcePlateTestTypes: forcePlateCatalog.testTypes,
+    forcePlateTestTypesByMetric: Object.fromEntries(forcePlateCatalog.metrics.map((metric) => [
+      forcePlateFlagMetric(metric.metricName, metric.metricUnit),
+      metric.testTypes,
+    ])),
+  });
 }

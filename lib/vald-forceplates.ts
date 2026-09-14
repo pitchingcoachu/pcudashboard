@@ -140,20 +140,38 @@ const DEFAULT_MULTI_PLAYER_TRIAL_FETCH_LIMIT = 0;
 const DEFAULT_RECENT_TEST_LIMIT = 150;
 const VALD_TEST_PAGE_LIMIT = 50;
 
-const regionBases: Record<ValdRegion, { profiles: string; forcedecks: string }> = {
+const regionBases: Record<ValdRegion, { profiles: string; forcedecks: string; tenants: string }> = {
   use: {
     profiles: 'https://prd-use-api-externalprofile.valdperformance.com',
     forcedecks: 'https://prd-use-api-extforcedecks.valdperformance.com',
+    tenants: 'https://prd-use-api-externaltenants.valdperformance.com',
   },
   aue: {
     profiles: 'https://prd-aue-api-externalprofile.valdperformance.com',
     forcedecks: 'https://prd-aue-api-extforcedecks.valdperformance.com',
+    tenants: 'https://prd-aue-api-externaltenants.valdperformance.com',
   },
   euw: {
     profiles: 'https://prd-euw-api-externalprofile.valdperformance.com',
     forcedecks: 'https://prd-euw-api-extforcedecks.valdperformance.com',
+    tenants: 'https://prd-euw-api-externaltenants.valdperformance.com',
   },
 };
+
+export type ValdProfileGroup = {
+  id: string;
+  name: string;
+  categoryId: string;
+  categoryName: string;
+};
+
+type ValdGroupDirectoryCache = {
+  expiresAt: number;
+  groups: ValdProfileGroup[];
+};
+
+const valdGroupDirectoryCache = new Map<string, ValdGroupDirectoryCache>();
+const valdGroupMembersCache = new Map<string, { expiresAt: number; names: string[] }>();
 
 function readRegion(): ValdRegion {
   const raw = String(process.env.VALD_REGION ?? 'use').trim().toLowerCase();
@@ -346,6 +364,67 @@ async function valdGetJson<T>(baseUrl: string, path: string, query: Record<strin
   throw new Error('VALD request failed (429).');
 }
 
+export async function fetchValdProfileGroupDirectory(tenantId: string): Promise<ValdProfileGroup[]> {
+  const cleanTenantId = String(tenantId ?? '').trim();
+  if (!cleanTenantId) return [];
+  const cached = valdGroupDirectoryCache.get(cleanTenantId);
+  if (cached && cached.expiresAt > Date.now()) return cached.groups.map((group) => ({ ...group }));
+
+  const region = readRegion();
+  const defaults = regionBases[region];
+  const tenantsBase = String(process.env.VALD_TENANTS_BASE_URL ?? defaults.tenants).trim() || defaults.tenants;
+  const [groupsPayload, categoriesPayload] = await Promise.all([
+    valdGetJson<unknown>(tenantsBase, '/groups', { TenantId: cleanTenantId }),
+    valdGetJson<unknown>(tenantsBase, '/categories', { TenantId: cleanTenantId }),
+  ]);
+  const rawGroups = Array.isArray((groupsPayload as { groups?: unknown[] })?.groups)
+    ? (groupsPayload as { groups: unknown[] }).groups
+    : [];
+  const rawCategories = Array.isArray((categoriesPayload as { categories?: unknown[] })?.categories)
+    ? (categoriesPayload as { categories: unknown[] }).categories
+    : [];
+  const categoryNames = new Map(
+    rawCategories.map((entry) => {
+      const row = entry as Record<string, unknown>;
+      return [String(row.id ?? '').trim(), String(row.name ?? '').trim()];
+    })
+  );
+  const groups = rawGroups
+    .map((entry) => {
+      const row = entry as Record<string, unknown>;
+      const categoryId = String(row.categoryId ?? '').trim();
+      return {
+        id: String(row.id ?? '').trim(),
+        name: String(row.name ?? '').trim(),
+        categoryId,
+        categoryName: categoryNames.get(categoryId) ?? '',
+      };
+    })
+    .filter((group) => group.id && group.name)
+    .sort((a, b) => a.categoryName.localeCompare(b.categoryName) || a.name.localeCompare(b.name));
+  valdGroupDirectoryCache.set(cleanTenantId, { expiresAt: Date.now() + 300_000, groups });
+  return groups.map((group) => ({ ...group }));
+}
+
+export async function fetchValdProfileNamesForGroup(tenantId: string, groupId: string): Promise<string[]> {
+  const cleanTenantId = String(tenantId ?? '').trim();
+  const cleanGroupId = String(groupId ?? '').trim();
+  if (!cleanTenantId || !cleanGroupId) return [];
+  const cacheKey = `${cleanTenantId}:${cleanGroupId}`;
+  const cached = valdGroupMembersCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return [...cached.names];
+  const region = readRegion();
+  const defaults = regionBases[region];
+  const profilesBase = String(process.env.VALD_PROFILES_BASE_URL ?? defaults.profiles).trim() || defaults.profiles;
+  const payload = await valdGetJson<unknown>(profilesBase, '/profiles', {
+    TenantId: cleanTenantId,
+    GroupId: cleanGroupId,
+  });
+  const names = coerceProfiles(payload).map((profile) => profile.fullName);
+  valdGroupMembersCache.set(cacheKey, { expiresAt: Date.now() + 300_000, names });
+  return [...names];
+}
+
 async function fetchTrialMetricsForTest(
   baseUrl: string,
   teamId: string,
@@ -365,8 +444,6 @@ async function fetchTrialMetricsForTest(
   const raw: ValdTrialMetricPoint[] = [];
   for (const trial of trials) {
     const data = trial as Record<string, unknown>;
-    const trialId = String(data.id ?? '').trim();
-    const recordedUTC = String(data.recordedUTC ?? '').trim();
     const trialLimb = String(data.limb ?? '').trim();
     const results = Array.isArray(data.results) ? (data.results as Array<Record<string, unknown>>) : [];
     for (const row of results) {
@@ -374,8 +451,6 @@ async function fetchTrialMetricsForTest(
       const limb = (resultLimb === 'Trial' || resultLimb === 'Both' || !resultLimb) && /^(left|right)$/i.test(trialLimb)
         ? trialLimb
         : resultLimb || trialLimb || 'Trial';
-      const repeatRaw = Number(row.repeat ?? 0);
-      const repeat = Number.isFinite(repeatRaw) && repeatRaw >= 0 ? Math.floor(repeatRaw) : 0;
       const resultId = Number(row.resultId ?? 0);
       const value = Number(row.value);
       if (!Number.isFinite(resultId) || resultId <= 0 || !Number.isFinite(value)) continue;
@@ -396,16 +471,9 @@ async function fetchTrialMetricsForTest(
       current.sum += normalizedValue;
       current.count += 1;
       aggregate.set(aggregateKey, current);
-      raw.push({
-        trialId: trialId || `:`,
-        dateTime: recordedUTC,
-        resultId,
-        metricName,
-        metricUnit,
-        value: normalizedValue,
-        limb,
-        repeat,
-      });
+      // Repeated efforts are intentionally folded into one calculated value
+      // per test/result/limb. The Force Plate Data page is a test history,
+      // not a raw-rep or force-time trace viewer.
     }
   }
   const aggregateRows = Array.from(aggregate.values())
