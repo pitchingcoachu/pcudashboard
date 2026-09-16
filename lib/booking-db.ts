@@ -21,7 +21,14 @@ export async function ensureBookingTables(): Promise<void> {
   if (bookingTablesReady || !isDatabaseConfigured()) return;
   await ensureAuthDbReady();
   const pool = getDbPool();
-  await pool.query(`
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Multiple serverless instances can cold-start on the same request burst.
+    // Serialize the idempotent DDL so two instances cannot both drop/add the
+    // same constraint at once.
+    await client.query(`SELECT pg_advisory_xact_lock(72765011);`);
+  await client.query(`
     CREATE TABLE IF NOT EXISTS booking_slots (
       id BIGSERIAL PRIMARY KEY,
       organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -37,8 +44,8 @@ export async function ensureBookingTables(): Promise<void> {
     );
   `);
   // Migrate away from the old coach/session-type-catalog schema, if present.
-  await pool.query(`ALTER TABLE booking_slots ADD COLUMN IF NOT EXISTS session_type TEXT;`);
-  await pool.query(`
+  await client.query(`ALTER TABLE booking_slots ADD COLUMN IF NOT EXISTS session_type TEXT;`);
+  await client.query(`
     DO $$
     BEGIN
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='booking_slots' AND column_name='session_type_id')
@@ -48,25 +55,25 @@ export async function ensureBookingTables(): Promise<void> {
       END IF;
     END $$;
   `);
-  await pool.query(`UPDATE booking_slots SET session_type='regular' WHERE session_type IS NULL;`);
-  await pool.query(`ALTER TABLE booking_slots ALTER COLUMN session_type SET NOT NULL;`);
-  await pool.query(`ALTER TABLE booking_slots ALTER COLUMN session_type SET DEFAULT 'regular';`);
+  await client.query(`UPDATE booking_slots SET session_type='regular' WHERE session_type IS NULL;`);
+  await client.query(`ALTER TABLE booking_slots ALTER COLUMN session_type SET NOT NULL;`);
+  await client.query(`ALTER TABLE booking_slots ALTER COLUMN session_type SET DEFAULT 'regular';`);
   // The original table was created with CHECK (ends_at > starts_at); bullpen/point-in-time
   // slots now use ends_at = starts_at, so relax this to >= if the old stricter constraint is present.
-  await pool.query(`ALTER TABLE booking_slots DROP CONSTRAINT IF EXISTS booking_slots_check;`);
-  await pool.query(`ALTER TABLE booking_slots ADD CONSTRAINT booking_slots_check CHECK (ends_at >= starts_at);`);
-  await pool.query(`ALTER TABLE booking_slots DROP CONSTRAINT IF EXISTS booking_slots_session_type_check;`);
-  await pool.query(`ALTER TABLE booking_slots ADD CONSTRAINT booking_slots_session_type_check CHECK (session_type IN ('bullpen','regular'));`);
-  await pool.query(`ALTER TABLE booking_slots DROP CONSTRAINT IF EXISTS booking_slots_coach_user_id_fkey;`);
-  await pool.query(`ALTER TABLE booking_slots DROP CONSTRAINT IF EXISTS booking_slots_session_type_id_fkey;`);
-  await pool.query(`ALTER TABLE booking_slots DROP COLUMN IF EXISTS coach_user_id;`);
-  await pool.query(`ALTER TABLE booking_slots DROP COLUMN IF EXISTS session_type_id;`);
-  await pool.query(`DROP INDEX IF EXISTS uq_booking_slot_identity;`);
-  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_booking_slot_identity ON booking_slots (organization_id, session_type, starts_at);`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_booking_slots_org_start ON booking_slots (organization_id, starts_at);`);
-  await pool.query(`DROP TABLE IF EXISTS booking_session_types;`);
+  await client.query(`ALTER TABLE booking_slots DROP CONSTRAINT IF EXISTS booking_slots_check;`);
+  await client.query(`ALTER TABLE booking_slots ADD CONSTRAINT booking_slots_check CHECK (ends_at >= starts_at);`);
+  await client.query(`ALTER TABLE booking_slots DROP CONSTRAINT IF EXISTS booking_slots_session_type_check;`);
+  await client.query(`ALTER TABLE booking_slots ADD CONSTRAINT booking_slots_session_type_check CHECK (session_type IN ('bullpen','regular'));`);
+  await client.query(`ALTER TABLE booking_slots DROP CONSTRAINT IF EXISTS booking_slots_coach_user_id_fkey;`);
+  await client.query(`ALTER TABLE booking_slots DROP CONSTRAINT IF EXISTS booking_slots_session_type_id_fkey;`);
+  await client.query(`ALTER TABLE booking_slots DROP COLUMN IF EXISTS coach_user_id;`);
+  await client.query(`ALTER TABLE booking_slots DROP COLUMN IF EXISTS session_type_id;`);
+  await client.query(`DROP INDEX IF EXISTS uq_booking_slot_identity;`);
+  await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_booking_slot_identity ON booking_slots (organization_id, session_type, starts_at);`);
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_booking_slots_org_start ON booking_slots (organization_id, starts_at);`);
+  await client.query(`DROP TABLE IF EXISTS booking_session_types;`);
 
-  await pool.query(`
+  await client.query(`
     CREATE TABLE IF NOT EXISTS session_bookings (
       id BIGSERIAL PRIMARY KEY,
       organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -81,10 +88,17 @@ export async function ensureBookingTables(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
-  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_session_booking_active_player ON session_bookings (slot_id, player_id) WHERE status IN ('booked', 'attended');`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_session_bookings_slot_status ON session_bookings (slot_id, status);`);
-  await pool.query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS min_booking_lead_hours INTEGER NOT NULL DEFAULT 4;`);
-  bookingTablesReady = true;
+  await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_session_booking_active_player ON session_bookings (slot_id, player_id) WHERE status IN ('booked', 'attended');`);
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_session_bookings_slot_status ON session_bookings (slot_id, status);`);
+  await client.query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS min_booking_lead_hours INTEGER NOT NULL DEFAULT 4;`);
+    await client.query('COMMIT');
+    bookingTablesReady = true;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function getMinBookingLeadHours(organizationId: number): Promise<number> {
