@@ -18,6 +18,7 @@ const TRACKMAN_SYNC_WORKFLOWS: Record<string, string> = {
   GUND: 'gunderson-trackman-sync.yml',
   LI: 'long-island-indy-trackman-sync.yml',
   INDY: 'long-island-indy-trackman-sync.yml',
+  SEMO: 'semo-trackman-sync.yml',
 };
 
 function workflowDispatchUrl(workflowFile: string): string {
