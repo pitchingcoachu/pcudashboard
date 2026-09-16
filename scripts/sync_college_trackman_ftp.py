@@ -393,6 +393,24 @@ SCHOOL_PLAYER_NAME_ALIASES: dict[str, dict[str, str]] = {
     },
 }
 
+# Permanently skipped source files, keyed by school code. Each value is the
+# exact `trackman://{source}{path}` identity stored in
+# public.pitch_data_files.source_file (e.g. what sync_file() builds as
+# `stable_source`). Use this for known-bad/misfiled exports that should never
+# be re-ingested even though they still exist on the FTP server -- deleting
+# the row alone is not enough, since the next run would just re-insert it.
+SCHOOL_EXCLUDED_SOURCE_FILES: dict[str, set[str]] = {
+    "SEMO": {
+        # TrackMan filed this under the 2026-09-15 FTP directory despite the
+        # filename's 08/26 date; confirmed bad/misfiled data, removed 2026-09-16.
+        "trackman://v3/v3/2026/09/15/CSV/20260826-SEMissouriState-Private-1_unverified.csv",
+    },
+}
+
+
+def is_excluded_source_file(school_code: str, stable_source: str) -> bool:
+    return stable_source in SCHOOL_EXCLUDED_SOURCE_FILES.get(school_code.strip().upper(), set())
+
 
 def canonical_player_name(school_code: str, value: object) -> object:
     if value is None:
@@ -508,6 +526,22 @@ def sync_file(
 ) -> tuple[int, bool]:
     preseason_markers = preseason_team_markers or set()
     stable_source = f"trackman://{remote.source}{remote.path}"
+    if is_excluded_source_file(school_code, stable_source):
+        existing = conn.execute(
+            """SELECT file_id FROM public.pitch_data_files
+               WHERE school_code = %s AND source_file = %s""",
+            (school_code, stable_source),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "DELETE FROM public.pitch_events WHERE school_code = %s AND file_id = %s",
+                (school_code, existing[0]),
+            )
+            conn.execute(
+                "DELETE FROM public.pitch_data_files WHERE school_code = %s AND file_id = %s",
+                (school_code, existing[0]),
+            )
+        return 0, True
     checksum = source_checksum(
         remote,
         markers,
