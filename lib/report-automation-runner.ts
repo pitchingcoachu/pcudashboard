@@ -27,6 +27,30 @@ function reportDomain(automation: ReportAutomationRow): 'pitching' | 'hitting' |
   return 'pitching';
 }
 
+function reportIsBullpen(automation: ReportAutomationRow): boolean {
+  return `${automation.reportKey} ${automation.reportTitle}`.toLowerCase().includes('bullpen');
+}
+
+function validHttpOrigin(value: string): string | null {
+  try {
+    const url = new URL(/^https?:\/\//i.test(value) ? value : `https://${value}`);
+    if (url.hostname.toLowerCase() === 'pcudashboard.com') url.hostname = 'www.pcudashboard.com';
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+export function resolveReportAutomationOrigin(requestUrl: string): string {
+  const requestOrigin = new URL(requestUrl).origin;
+  const configuredOrigin = validHttpOrigin(
+    String(process.env.REPORT_AUTOMATIONS_PUBLIC_ORIGIN ?? process.env.NEXT_PUBLIC_APP_URL ?? '').trim(),
+  );
+  if (configuredOrigin) return configuredOrigin;
+  const requestHost = new URL(requestOrigin).hostname.toLowerCase();
+  return requestHost.endsWith('.vercel.app') ? 'https://www.pcudashboard.com' : requestOrigin;
+}
+
 function reportQuery(automation: ReportAutomationRow, playerName: string, date: string): URLSearchParams {
   const domain = reportDomain(automation);
   const params = new URLSearchParams({ start_date:date, end_date:date, include_chart_points:'0' });
@@ -136,6 +160,21 @@ function setQueryValue(params:URLSearchParams, names:string[], value:string, fal
   else params.set(fallback,value);
 }
 
+async function readJsonResponse(response: Response, context: string): Promise<Record<string,unknown> & {error?:string}> {
+  const contentType = String(response.headers.get('content-type') ?? '').toLowerCase();
+  if (!contentType.includes('application/json')) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(`${context} returned non-JSON content (${response.status}). Check the report automation public origin.`);
+  }
+  try {
+    const payload = await response.json();
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('Invalid JSON payload.');
+    return payload as Record<string,unknown> & {error?:string};
+  } catch {
+    throw new Error(`${context} returned invalid JSON (${response.status}).`);
+  }
+}
+
 async function fetchConfiguredPanel(
   origin:string,
   token:string,
@@ -156,8 +195,9 @@ async function fetchConfiguredPanel(
   if (existingPlayerParams.length) existingPlayerParams.forEach((name) => url.searchParams.set(name,playerName));
   else url.searchParams.set(domain === 'hitting' ? 'hitter' : domain === 'catching' ? 'catcher' : 'pitcher',playerName);
   if (url.searchParams.has('playerId')) url.searchParams.set('playerId',String(playerId));
+  if (reportIsBullpen(automation)) url.searchParams.set('session_type','Bullpen');
   const response = await fetch(url,{headers:{cookie:`pcu_session_v3=${token}`},cache:'no-store',signal:AbortSignal.timeout(240_000)});
-  const payload = await response.json().catch(() => ({})) as Record<string,unknown> & {error?:string};
+  const payload = await readJsonResponse(response,`${panel.title} request`);
   if (!response.ok) throw new Error(payload.error ?? `${panel.title} request failed (${response.status}).`);
   const data = rowsFromPayload(payload,['chart_points','stats','dailyEvents','workload','events']);
   return {title:panel.title,startDate:range.startDate,endDate:range.endDate,...data};
@@ -180,7 +220,7 @@ async function fetchReportData(origin: string, token: string, automation: Report
   else if (key.includes('pulse')) { url.searchParams.set('start',date); url.searchParams.set('end',date); }
   else url.search = reportQuery(automation, playerName, date).toString();
   const response = await fetch(url, { headers:{ cookie:`pcu_session_v3=${token}` }, cache:'no-store', signal:AbortSignal.timeout(240_000) });
-  let payload = await response.json().catch(() => ({})) as Record<string,unknown> & {error?:string};
+  let payload = await readJsonResponse(response,'Report data request');
   if (!response.ok) throw new Error(payload.error ?? `Report data request failed (${response.status}).`);
   if (key.includes('pulse')) {
     const match = Array.isArray(payload.players) ? (payload.players as Array<Record<string,unknown>>).find((item) => String(item.playerName??'').toLowerCase() === playerName.toLowerCase()) : null;
@@ -188,7 +228,7 @@ async function fetchReportData(origin: string, token: string, automation: Report
     if (match.playerKey) {
       url.searchParams.set('player', String(match.playerKey));
       const selectedResponse = await fetch(url, {headers:{cookie:`pcu_session_v3=${token}`},cache:'no-store',signal:AbortSignal.timeout(240_000)});
-      payload = await selectedResponse.json().catch(() => ({})) as Record<string,unknown> & {error?:string};
+      payload = await readJsonResponse(selectedResponse,'PULSE report data request');
       if (!selectedResponse.ok) throw new Error(payload.error ?? 'PULSE report data request failed.');
     }
   }
@@ -297,6 +337,7 @@ async function buildReportPdf(title: string, playerName: string, date: string, p
 }
 
 export async function executeReportAutomation(automation: ReportAutomationRow, origin: string, now = new Date(), options:{force?:boolean}={}): Promise<{saved:number;skipped:number;failed:number}> {
+  origin = resolveReportAutomationOrigin(origin);
   const reportDate = localDate(now, automation.timeZone);
   const allPlayers = await listPlayerSummariesByOrganization({ organizationId:automation.organizationId, assignedCoachUserId:null });
   const selectedSet = new Set(automation.playerIds);
@@ -346,6 +387,7 @@ export async function executeReportAutomation(automation: ReportAutomationRow, o
       }
       await finishAutomationRun(runId, 'saved', aiSummaryError ? `Report saved without AI summary: ${aiSummaryError}` : 'Report saved to player profile.', created.id); counts.saved += 1;
     } catch (error) {
+      console.error(`[report-automation] failed automation ${automation.id} for player ${player.playerId}`,error);
       await finishAutomationRun(runId, 'failed', error instanceof Error ? error.message : 'Report generation failed.'); counts.failed += 1;
     }
   }

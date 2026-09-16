@@ -639,6 +639,24 @@
   background: rgba(255, 255, 255, 0.025);
 }
 
+.percentileLow {
+  border-color: rgba(255, 101, 127, 0.4);
+  color: #ff657f;
+  background: rgba(255, 101, 127, 0.12);
+}
+
+.percentileMid {
+  border-color: rgba(240, 180, 41, 0.42);
+  color: #f0b429;
+  background: rgba(240, 180, 41, 0.12);
+}
+
+.percentileHigh {
+  border-color: rgba(64, 216, 146, 0.4);
+  color: #40d892;
+  background: rgba(64, 216, 146, 0.12);
+}
+
 .kpiCard strong {
   margin-top: 6px;
   color: var(--fp-ink);
@@ -769,7 +787,7 @@
 
 .displayModeToggle {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   min-height: 48px;
   padding: 4px;
   border: 1px solid var(--fp-line);

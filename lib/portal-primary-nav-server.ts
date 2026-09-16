@@ -13,7 +13,7 @@ export async function resolveStaffPrimaryNavigation(session: PortalSession): Pro
   ]);
   const school = selectedSchool.trim().toUpperCase();
   const isTrial = school === 'TRIAL';
-  const canAccessSessionBooking = school === 'PCU' || school === 'GUND';
+  const canAccessSessionBooking = school === 'PCU';
 
   return {
     canAccessSchedule,

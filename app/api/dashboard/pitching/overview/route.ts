@@ -426,7 +426,7 @@ async function withIntendedTargetTableColumns(
   return appendRequestedColumns(nextRows);
 }
 
-function resolveOverviewTimeoutMs(schoolCode: string, hasProLinkMerge = false): number {
+function resolveOverviewTimeoutMs(schoolCode: string, hasProLinkMerge = false, historicalSchoolRange = false): number {
   const upper = String(schoolCode ?? '').trim().toUpperCase();
   if (upper === 'LEAGUE') return 30000;
   if (upper === 'PRO') return 60000;
@@ -435,6 +435,7 @@ function resolveOverviewTimeoutMs(schoolCode: string, hasProLinkMerge = false): 
   // the same headroom PRO's own page gets, only when that second query
   // actually fires.
   if (hasProLinkMerge) return 60000;
+  if (historicalSchoolRange) return 60000;
   return 30000;
 }
 
@@ -1959,7 +1960,15 @@ export async function GET(request: Request) {
       cacheKey: `pitching:overview:${PITCHING_OVERVIEW_CACHE_VERSION}:${url.toString()}${gameSplitCacheBuster}${customShapeCacheBuster}${editCacheBuster}`,
       ttlMs: cachePolicy.ttlMs,
       staleTtlMs: cachePolicy.staleTtlMs,
-      timeoutMs: resolveOverviewTimeoutMs(schoolCode, hasProLinkMerge),
+      timeoutMs: resolveOverviewTimeoutMs(
+        schoolCode,
+        hasProLinkMerge,
+        (() => {
+          const start = Date.parse(url.searchParams.get('start_date') ?? '');
+          const end = Date.parse(url.searchParams.get('end_date') ?? '');
+          return Number.isFinite(start) && Number.isFinite(end) && end - start >= 365 * 24 * 60 * 60 * 1000;
+        })(),
+      ),
       retries: resolveOverviewRetries(schoolCode),
       fetcher: (signal) => fetch(url.toString(), { cache: 'no-store', signal }),
     });

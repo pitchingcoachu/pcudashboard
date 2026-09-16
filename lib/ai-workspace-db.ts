@@ -48,7 +48,9 @@ declare global {
   var __pcuAiWorkspaceReadyPromise: Promise<void> | undefined;
 }
 
-const AI_WORKSPACE_SCHEMA_VERSION = 5;
+const AI_WORKSPACE_SCHEMA_VERSION = 6;
+
+export const AI_SESSION_FIXED_TYPES = ['Assessment', 'Meeting', 'Bullpen', 'Training', 'Other'] as const;
 
 export async function ensureAiWorkspaceReady(): Promise<void> {
   if (!isDatabaseConfigured() || global.__pcuAiWorkspaceSchemaVersion === AI_WORKSPACE_SCHEMA_VERSION) return;
@@ -81,6 +83,15 @@ export async function ensureAiWorkspaceReady(): Promise<void> {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
       CREATE INDEX IF NOT EXISTS idx_ai_sessions_org_created ON ai_sessions (organization_id, created_at DESC);
+      CREATE TABLE IF NOT EXISTS ai_session_types (
+        id SERIAL PRIMARY KEY,
+        organization_id BIGINT NOT NULL,
+        name TEXT NOT NULL,
+        created_by_user_id BIGINT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (organization_id, name)
+      );
+      CREATE INDEX IF NOT EXISTS idx_ai_session_types_org ON ai_session_types (organization_id);
       CREATE TABLE IF NOT EXISTS ai_session_players (
         session_id BIGINT NOT NULL REFERENCES ai_sessions(id) ON DELETE CASCADE,
         player_id BIGINT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
@@ -208,6 +219,30 @@ export async function createAiSession(input: { organizationId: number; userId: n
     await client.query('COMMIT');
     return id;
   } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+}
+
+export async function listAiSessionTypes(organizationId: number): Promise<string[]> {
+  await ensureAiWorkspaceReady();
+  const result = await getDbPool().query<{ name: string }>(
+    `SELECT name FROM ai_session_types WHERE organization_id = $1 ORDER BY LOWER(TRIM(name))`,
+    [organizationId]
+  );
+  const custom = result.rows.map((row) => row.name);
+  const fixed = AI_SESSION_FIXED_TYPES.filter((type) => type !== 'Other');
+  return [...fixed, ...custom.filter((name) => !fixed.some((type) => type.toLowerCase() === name.toLowerCase())), 'Other'];
+}
+
+export async function createAiSessionType(input: { organizationId: number; userId: number; name: string }): Promise<{ ok: true } | { ok: false; error: string }> {
+  await ensureAiWorkspaceReady();
+  const name = input.name.trim();
+  if (!name) return { ok: false, error: 'Category name is required.' };
+  if (AI_SESSION_FIXED_TYPES.some((type) => type.toLowerCase() === name.toLowerCase())) return { ok: true };
+  await getDbPool().query(
+    `INSERT INTO ai_session_types (organization_id, name, created_by_user_id) VALUES ($1, $2, $3)
+     ON CONFLICT (organization_id, name) DO NOTHING`,
+    [input.organizationId, name, input.userId]
+  );
+  return { ok: true };
 }
 
 export async function getAiSessionForOrganization(id: number, organizationId: number): Promise<(AiSessionRow & { sourceR2Key: string | null; sourceFileName: string; sourceContentType: string; audioR2Key: string | null; audioContentType: string }) | null> {

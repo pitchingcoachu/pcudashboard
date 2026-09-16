@@ -44,6 +44,20 @@ type PercentileResponse = {
   };
 };
 
+const KG_TO_LB = 2.2046226218;
+const BODY_WEIGHT_KG_KEY = metricKey('Body Weight', 'kg');
+
+// Fixed athlete-tab summary panels: exact (metricName, metricUnit) identities
+// confirmed against production force_plate_metric_rows data. Body Weight is
+// stored in kg and converted to lb for display (convert: kg -> lb).
+const FIXED_PANEL_METRICS = [
+  { label: 'Jump Height', name: 'Jump Height (Flight Time) in Inches', unit: 'Inch', displayUnit: 'in', lowerIsBetter: false, convert: (value: number) => value },
+  { label: 'Peak Power/BM', name: 'Peak Power / BM', unit: 'Watt Per Kilo', displayUnit: 'W/kg', lowerIsBetter: false, convert: (value: number) => value },
+  { label: 'RSI-Modified', name: 'RSI-modified', unit: 'RSIModified', displayUnit: '', lowerIsBetter: false, convert: (value: number) => value },
+  { label: 'Eccentric Braking RFD/BM', name: 'Eccentric Braking RFD / BM', unit: 'Newton Per Second Per Kilo', displayUnit: 'N/s/kg', lowerIsBetter: false, convert: (value: number) => value },
+  { label: 'Body Weight', name: 'Body Weight', unit: 'kg', displayUnit: 'lb', lowerIsBetter: false, convert: (value: number) => value * KG_TO_LB },
+] as const;
+
 const BASE_TABLE_OPTIONS = [
   { key: 'CMJ', label: 'CMJ' },
   { key: 'SJ', label: 'SJ' },
@@ -95,22 +109,47 @@ function leaderboardValue(
   return null;
 }
 
-function percentileRank(value: number, population: number[]): number {
+// Every fixed base metric (CMJ/SJ height, RSI, velocity, etc.) is higher-is-better.
+// Custom metrics are only inverted when their unit is a pure duration -- braking
+// phase duration, contraction time, time to peak force, time to takeoff, etc. are
+// all genuinely lower-is-better; everything else (force, power, velocity, percent
+// ratios, "No Unit") stays higher-is-better since a ratio/percentage isn't itself
+// a duration even when it's built from one.
+const DURATION_UNITS = new Set(['millisecond', 'second', 's', 'ms']);
+
+function isLowerBetterColumn(column: string): boolean {
+  if (!column.startsWith('metric:')) return false;
+  const { unit } = splitMetricKey(column.slice('metric:'.length));
+  return DURATION_UNITS.has(unit.trim().toLowerCase());
+}
+
+function percentileRank(value: number, population: number[], invert = false): number {
   if (population.length <= 1) return 100;
+  const sign = invert ? -1 : 1;
+  const target = value * sign;
   let lower = 0;
   let equal = 0;
-  for (const entry of population) {
-    if (entry < value) lower += 1;
-    else if (Math.abs(entry - value) < 1e-9) equal += 1;
+  for (const raw of population) {
+    const entry = raw * sign;
+    if (entry < target) lower += 1;
+    else if (Math.abs(entry - target) < 1e-9) equal += 1;
   }
   return Math.round(((lower + Math.max(0, equal - 1) / 2) / (population.length - 1)) * 100);
+}
+
+// Red/yellow/green tiering for percentile badges: bottom third, middle
+// third, top third.
+function percentileTierClass(percentile: number): string {
+  if (percentile < 34) return styles.percentileLow;
+  if (percentile < 67) return styles.percentileMid;
+  return styles.percentileHigh;
 }
 
 function PercentileBadge({ stat, loading }: { stat: PercentileStat | undefined; loading: boolean }) {
   if (loading) return <span className={styles.percentileBadge}>Ranking…</span>;
   if (!stat || stat.percentile === null) return <span className={`${styles.percentileBadge} ${styles.percentileUnavailable}`}>No rank</span>;
   return (
-    <span className={styles.percentileBadge} title={`Compared with ${stat.sampleSize} athlete${stat.sampleSize === 1 ? '' : 's'} with qualifying data`}>
+    <span className={`${styles.percentileBadge} ${percentileTierClass(stat.percentile)}`} title={`Compared with ${stat.sampleSize} athlete${stat.sampleSize === 1 ? '' : 's'} with qualifying data`}>
       {ordinal(stat.percentile)} percentile
     </span>
   );
@@ -330,12 +369,19 @@ function testTypeColor(index: number): string {
   return palette[index % palette.length];
 }
 
-function valueRange(values: number[]): { min: number; max: number } {
+function valueRange(values: number[], lowerPaddingRatio = 0): { min: number; max: number } {
   const min = Math.min(...values);
   const max = Math.max(...values);
   if (!Number.isFinite(min) || !Number.isFinite(max)) return { min: 0, max: 1 };
   if (min === max) return { min: min - 1, max: max + 1 };
-  return { min, max };
+  return { min: min - (max - min) * lowerPaddingRatio, max };
+}
+
+function chartXPosition(index: number, count: number, view: 'line' | 'bar'): number {
+  const plotLeft = 56;
+  const plotWidth = 476;
+  if (view === 'bar') return plotLeft + ((index + 0.5) / Math.max(1, count)) * plotWidth;
+  return plotLeft + (index / Math.max(1, count - 1)) * plotWidth;
 }
 
 function toIsoDate(value: string): string {
@@ -685,7 +731,7 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
   const [loadingPlayer, setLoadingPlayer] = useState(false);
   const [playerLoadError, setPlayerLoadError] = useState('');
   const [pointMode, setPointMode] = useState<'average' | 'max'>('average');
-  const [chartView, setChartView] = useState<'line' | 'bar'>('line');
+  const [chartView, setChartView] = useState<'line' | 'bar'>('bar');
   const [metricSearch, setMetricSearch] = useState('');
   const [metricPickerOpen, setMetricPickerOpen] = useState(false);
   const [athleteSearch, setAthleteSearch] = useState('');
@@ -694,6 +740,8 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
   const [percentileData, setPercentileData] = useState<PercentileResponse | null>(null);
   const [percentileLoading, setPercentileLoading] = useState(false);
   const [percentileError, setPercentileError] = useState('');
+  const [panelPercentiles, setPanelPercentiles] = useState<Record<string, PercentileStat | undefined>>({});
+  const [panelPercentilesLoading, setPanelPercentilesLoading] = useState(false);
   const player = useMemo(() => players.find((entry) => entry.playerName === selectedPlayer) ?? null, [players, selectedPlayer]);
   const visiblePlayers = useMemo(() => {
     const query = athleteSearch.trim().toLowerCase();
@@ -739,13 +787,20 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
     }
     const values = Array.from(map.values())
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
-      .map((row) => ({ key: metricKey(row.name, row.unit), label: `${row.name}${row.unit ? ` (${row.unit})` : ''} • ${row.count}` }));
+      .map((row) => {
+        const key = metricKey(row.name, row.unit);
+        // Body Weight is stored in kg; the picker only ever shows the lb
+        // label since metricRows() converts its values before display.
+        const displayUnit = key === BODY_WEIGHT_KG_KEY ? 'lb' : row.unit;
+        return { key, label: `${row.name}${displayUnit ? ` (${displayUnit})` : ''} • ${row.count}` };
+      });
     return values;
   }, [player]);
   const [selectedMetricKey, setSelectedMetricKey] = useState('');
   const defaultMetricKey = useMemo(() => {
     if (!metricOptions.length) return '';
-    const preferred = metricOptions.find((option) => option.key.toLowerCase().includes('jump height (flight time) in inches'));
+    const preferredKey = metricKey('Peak Power / BM', 'Watt Per Kilo');
+    const preferred = metricOptions.find((option) => option.key === preferredKey);
     return preferred?.key ?? metricOptions[0].key;
   }, [metricOptions]);
   const visibleMetricOptions = useMemo(() => {
@@ -759,14 +814,18 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
     if (!player) return [];
     const activeMetric = selectedMetricKey || defaultMetricKey;
     const matchingRows = player.metricRows.filter((row) => metricKey(row.metricName, row.metricUnit) === activeMetric);
+    const converted = activeMetric === BODY_WEIGHT_KG_KEY
+      ? matchingRows.map((row) => ({ ...row, value: row.value * KG_TO_LB, metricUnit: 'lb' }))
+      : matchingRows;
     if (pointMode === 'max') {
-      const repRows = matchingRows.filter((row) => String(row.pointType ?? 'average') === 'rep');
-      return repRows.length ? repRows : matchingRows.filter((row) => String(row.pointType ?? 'average') === 'average');
+      const repRows = converted.filter((row) => String(row.pointType ?? 'average') === 'rep');
+      return repRows.length ? repRows : converted.filter((row) => String(row.pointType ?? 'average') === 'average');
     }
-    return matchingRows.filter((row) => String(row.pointType ?? 'average') === 'average');
+    return converted.filter((row) => String(row.pointType ?? 'average') === 'average');
   }, [player, selectedMetricKey, defaultMetricKey, pointMode]);
 
   const [selectedTestType, setSelectedTestType] = useState('All');
+  const [testTypeTouched, setTestTypeTouched] = useState(false);
   const [dateRangeByPlayer, setDateRangeByPlayer] = useState<Record<string, { start: string; end: string }>>({});
   const [leaderStartDate, setLeaderStartDate] = useState('');
   const [leaderEndDate, setLeaderEndDate] = useState('');
@@ -783,12 +842,22 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
   const [leaderTestOptions, setLeaderTestOptions] = useState<string[]>([]);
   const [leaderTestSearch, setLeaderTestSearch] = useState('');
   const [leaderTestPickerOpen, setLeaderTestPickerOpen] = useState(false);
-  const [leaderDisplayMode, setLeaderDisplayMode] = useState<'value' | 'percentile'>('value');
+  const [leaderDisplayMode, setLeaderDisplayMode] = useState<'value' | 'percentile' | 'both'>('value');
   const [showLeaderboardCorrelation, setShowLeaderboardCorrelation] = useState(false);
   const testTypeOptions = useMemo(() => {
     if (!player) return ['All'];
     return ['All', ...Array.from(new Set(player.metricRows.map((row) => row.testType))).sort((a, b) => a.localeCompare(b))];
   }, [player]);
+  // Default the chart to CMJ as soon as it's available, unless the coach has
+  // already picked a test type themselves. Prefers an exact "CMJ" match over
+  // isCmjType()'s broader match, since that also catches related-but-distinct
+  // test types like "CMRJ" and "ABCMJ" (real production test_type values).
+  useEffect(() => {
+    if (testTypeTouched || testTypeOptions.length <= 1) return;
+    const cmjOption = testTypeOptions.find((option) => normalizeTestType(option) === 'CMJ')
+      ?? testTypeOptions.find((option) => option !== 'All' && isCmjType(option));
+    if (cmjOption && cmjOption !== selectedTestType) setSelectedTestType(cmjOption);
+  }, [testTypeOptions, testTypeTouched, selectedTestType]);
   const playerDateBounds = useMemo(() => {
     if (!player) return { min: '', max: '' };
     const dates = player.metricRows
@@ -830,10 +899,19 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
     () => Array.from(new Set(pointRows.map((row) => row.date))).sort((a, b) => chartDateKey(a).localeCompare(chartDateKey(b))),
     [pointRows]
   );
+  const chartDateLabelIndexes = useMemo(() => {
+    const maximumLabels = 8;
+    if (chartDates.length <= maximumLabels) return new Set(chartDates.map((_, index) => index));
+    return new Set(
+      Array.from({ length: maximumLabels }, (_, index) =>
+        Math.round((index / (maximumLabels - 1)) * (chartDates.length - 1))
+      )
+    );
+  }, [chartDates]);
   const chartPoints = useMemo(() => {
     if (pointRows.length < 1) return [];
     const values = pointRows.map((row) => row.value);
-    const range = valueRange(values);
+    const range = valueRange(values, chartView === 'bar' ? 0.08 : 0);
     const sortedRows = [...pointRows].sort((a, b) => {
       const byDate = chartDateKey(a.date).localeCompare(chartDateKey(b.date));
       if (byDate !== 0) return byDate;
@@ -844,11 +922,11 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
     const dateIndexMap = new Map(chartDates.map((date, index) => [date, index]));
     return sortedRows.map((row) => {
       const dateIndex = dateIndexMap.get(row.date) ?? 0;
-      const x = 56 + (dateIndex / Math.max(1, chartDates.length - 1)) * 476;
+      const x = chartXPosition(dateIndex, chartDates.length, chartView);
       const y = 196 - ((row.value - range.min) / (range.max - range.min)) * 156;
       return { x, y, value: row.value, date: row.date, testType: row.testType, metricUnit: row.metricUnit };
     });
-  }, [pointRows, chartDates]);
+  }, [pointRows, chartDates, chartView]);
   const seriesByTestType = useMemo(() => {
     const types = Array.from(new Set(chartPoints.map((point) => point.testType)));
     return types.map((type) => ({
@@ -858,8 +936,8 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
   }, [chartPoints]);
   const yScale = useMemo(() => {
     const values = filteredRows.map((row) => row.value);
-    return values.length ? valueRange(values) : { min: 0, max: 1 };
-  }, [filteredRows]);
+    return values.length ? valueRange(values, chartView === 'bar' ? 0.08 : 0) : { min: 0, max: 1 };
+  }, [filteredRows, chartView]);
   const yTicks = useMemo(() => {
     const { min, max } = yScale;
     const steps = 4;
@@ -887,17 +965,6 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
   const [leaderColumnLabels, setLeaderColumnLabels] = useState<Record<string, string>>({});
   const [leaderColumnSearch, setLeaderColumnSearch] = useState('');
 
-  const orderedFilteredRows = useMemo(
-    () => [...filteredRows].sort((a, b) => String(a.dateTime ?? a.date).localeCompare(String(b.dateTime ?? b.date))),
-    [filteredRows]
-  );
-  const latest = orderedFilteredRows[orderedFilteredRows.length - 1] ?? null;
-  const avg = filteredRows.length ? filteredRows.reduce((sum, row) => sum + row.value, 0) / filteredRows.length : null;
-  const previous = latest
-    ? [...orderedFilteredRows].slice(0, -1).reverse().find((row) => row.testType === latest.testType) ?? null
-    : null;
-  const latestChange = latest && previous ? latest.value - previous.value : null;
-  const best = filteredRows.length ? Math.max(...filteredRows.map((row) => row.value)) : null;
   const testCount = new Set(filteredRows.map((row) => row.testId)).size;
   const activeMetricLabel = (
     metricOptions.find((option) => option.key === (selectedMetricKey || defaultMetricKey))?.label ?? 'Select a metric'
@@ -910,6 +977,8 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
   useEffect(() => {
     if (!selectedPlayer || !activeMetricIdentity.name || loadingPlayer) return;
     let cancelled = false;
+    // Deliberately no startDate/endDate -- see the fixed-panel percentile
+    // fetch below for why percentiles ignore the active date filter.
     const params = new URLSearchParams({
       player: selectedPlayer,
       metricName: activeMetricIdentity.name,
@@ -918,8 +987,6 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
       testType: selectedTestType,
       mode: pointMode,
     });
-    if (startDate) params.set('startDate', startDate);
-    if (endDate) params.set('endDate', endDate);
     setPercentileLoading(true);
     setPercentileError('');
     void fetch(`/api/player/force-plate-percentiles?${params.toString()}`, { cache: 'no-store' })
@@ -940,7 +1007,88 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
     return () => {
       cancelled = true;
     };
-  }, [activeMetricIdentity.name, activeMetricIdentity.unit, endDate, loadingPlayer, percentileGroupId, pointMode, selectedPlayer, selectedTestType, startDate]);
+  }, [activeMetricIdentity.name, activeMetricIdentity.unit, loadingPlayer, percentileGroupId, pointMode, selectedPlayer, selectedTestType]);
+
+  // Fixed athlete-summary panels (Jump Height, Peak Power/BM, RSI-Modified,
+  // Eccentric Braking RFD/BM, Body Weight): each panel's percentile is fetched
+  // independently of the top metric selector, reusing the same percentile
+  // route with that panel's own fixed metric identity. Only the "latest" stat
+  // is needed per panel (percentile of the athlete's most recent test).
+  useEffect(() => {
+    if (!selectedPlayer || loadingPlayer) return;
+    let cancelled = false;
+    setPanelPercentilesLoading(true);
+    Promise.all(FIXED_PANEL_METRICS.map((panelMetric) => {
+      // Deliberately no startDate/endDate: percentiles always compare against
+      // each athlete's and the cohort's full history, not the currently
+      // filtered date range -- a narrow filter shouldn't shrink the sample.
+      const params = new URLSearchParams({
+        player: selectedPlayer,
+        metricName: panelMetric.name,
+        metricUnit: panelMetric.unit,
+        groupId: percentileGroupId,
+        testType: selectedTestType,
+        mode: pointMode,
+      });
+      return fetch(`/api/player/force-plate-percentiles?${params.toString()}`, { cache: 'no-store' })
+        .then((response) => response.json())
+        .then((payload: PercentileResponse & { error?: string }) => [panelMetric.label, payload?.stats?.latest] as const)
+        .catch(() => [panelMetric.label, undefined] as const);
+    })).then((entries) => {
+      if (!cancelled) setPanelPercentiles(Object.fromEntries(entries));
+    }).finally(() => {
+      if (!cancelled) setPanelPercentilesLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedPlayer, loadingPlayer, percentileGroupId, selectedTestType, pointMode]);
+
+  // Panel headline: average value on the athlete's most recent test date for
+  // that metric (in range), converted to display units (e.g. kg -> lb for
+  // Body Weight). Trend arrow compares that latest-date average against the
+  // athlete's own average over the prior 30 days, excluding the latest test.
+  const fixedPanels = useMemo(() => {
+    if (!player) return [];
+    return FIXED_PANEL_METRICS.map((panelMetric) => {
+      const matching = player.metricRows.filter((row) =>
+        row.metricName === panelMetric.name && row.metricUnit === panelMetric.unit && String(row.pointType ?? 'average') === 'average'
+      );
+      const values = matching.flatMap((row) => {
+        if (selectedTestType !== 'All' && row.testType !== selectedTestType) return [];
+        const iso = toIsoDate(String(row.dateTime ?? row.date));
+        if (!iso) return [];
+        if (startDate && iso < startDate) return [];
+        if (endDate && iso > endDate) return [];
+        return [{ date: iso, value: panelMetric.convert(row.value) }];
+      }).sort((a, b) => a.date.localeCompare(b.date));
+
+      const latestDate = values.at(-1)?.date ?? null;
+      const latestAverage = latestDate ? mean(values.filter((entry) => entry.date === latestDate).map((entry) => entry.value)) : null;
+
+      let trendPct: number | null = null;
+      if (latestDate) {
+        const cutoff = new Date(latestDate);
+        cutoff.setDate(cutoff.getDate() - 30);
+        const cutoffStr = cutoff.toISOString().slice(0, 10);
+        const baseline = values.filter((entry) => entry.date < latestDate && entry.date >= cutoffStr).map((entry) => entry.value);
+        const baselineAvg = mean(baseline);
+        if (latestAverage !== null && baselineAvg !== null && baselineAvg !== 0) {
+          trendPct = ((latestAverage - baselineAvg) / Math.abs(baselineAvg)) * 100;
+        }
+      }
+      const favorable = trendPct !== null ? (panelMetric.lowerIsBetter ? trendPct < 0 : trendPct > 0) : null;
+      return {
+        label: panelMetric.label,
+        unit: panelMetric.displayUnit,
+        latestAverage,
+        latestDate,
+        trendPct,
+        favorable,
+        percentile: panelPercentiles[panelMetric.label],
+      };
+    });
+  }, [player, selectedTestType, startDate, endDate, panelPercentiles]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1327,37 +1475,45 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
   const leaderboardPercentiles = useMemo(() => {
     const result = new Map<string, Map<string, number>>();
     for (const column of leaderColumns) {
+      const invert = isLowerBetterColumn(column);
       const values = leaderboardRows
         .map((row) => leaderboardValue(row, column))
         .filter((value): value is number => value !== null && Number.isFinite(value));
       const byPlayer = new Map<string, number>();
       for (const row of leaderboardRows) {
         const value = leaderboardValue(row, column);
-        if (value !== null && Number.isFinite(value)) byPlayer.set(row.playerName, percentileRank(value, values));
+        if (value !== null && Number.isFinite(value)) byPlayer.set(row.playerName, percentileRank(value, values, invert));
       }
       result.set(column, byPlayer);
     }
     return result;
   }, [leaderColumns, leaderboardRows]);
 
-  const correlationColumns = useMemo(
-    () => ['Player', ...leaderColumns.map((column) => tableColumnLabel(column, leaderboardMetricOptions, leaderColumnLabels))],
-    [leaderColumns, leaderboardMetricOptions, leaderColumnLabels]
+  const correlationMetrics = useMemo(() => {
+    const seenLabels = new Set<string>();
+    return leaderboardMetricOptions.flatMap((option) => {
+      const label = tableColumnLabel(option.key, leaderboardMetricOptions, leaderColumnLabels);
+      if (!label || seenLabels.has(label)) return [];
+      seenLabels.add(label);
+      return [{ key: option.key, label }];
+    });
+  }, [leaderboardMetricOptions, leaderColumnLabels]);
+
+  const correlationAxisColumns = useMemo(
+    () => correlationMetrics.map((metric) => metric.label),
+    [correlationMetrics]
   );
+  const correlationColumns = useMemo(() => ['Player', ...correlationAxisColumns], [correlationAxisColumns]);
 
   const correlationRows = useMemo(() => {
     return leaderboardRows.map((row) => {
       const out: Record<string, string | number | null> = { Player: row.playerName };
-      for (const column of leaderColumns) {
-        const label = tableColumnLabel(column, leaderboardMetricOptions, leaderColumnLabels);
-        let value: number | null = null;
-        if (column === 'CMJ') value = row.cmj;
-        else value = leaderboardValue(row, column);
-        out[label] = value;
+      for (const metric of correlationMetrics) {
+        out[metric.label] = leaderboardValue(row, metric.key);
       }
       return out;
     });
-  }, [leaderboardRows, leaderColumns, leaderboardMetricOptions, leaderColumnLabels]);
+  }, [leaderboardRows, correlationMetrics]);
 
   const playerExportHeaders = useMemo(
     () => ['Date', ...playerColumns.map((column) => tableColumnLabel(column, playerTableMetricOptions, playerColumnLabels))],
@@ -1384,7 +1540,7 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
       'Player',
       ...leaderColumns.map((column) => {
         const label = tableColumnLabel(column, leaderboardMetricOptions, leaderColumnLabels);
-        return leaderDisplayMode === 'percentile' ? `${label} Percentile` : label;
+        return leaderDisplayMode === 'percentile' ? `${label} Percentile` : leaderDisplayMode === 'both' ? `${label} (Value + Percentile)` : label;
       }),
     ],
     [leaderColumnLabels, leaderColumns, leaderboardMetricOptions, leaderDisplayMode]
@@ -1393,7 +1549,9 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
     row.playerName,
     ...leaderColumns.map((column) => {
       const value = leaderboardValue(row, column);
-      if (leaderDisplayMode === 'percentile') return leaderboardPercentiles.get(column)?.get(row.playerName) ?? null;
+      const percentile = leaderboardPercentiles.get(column)?.get(row.playerName) ?? null;
+      if (leaderDisplayMode === 'percentile') return percentile;
+      if (leaderDisplayMode === 'both') return value === null ? null : `${value.toFixed(1)}${percentile === null ? '' : ` (${ordinal(percentile)})`}`;
       return value === null ? null : value.toFixed(1);
     }),
   ]), [leaderColumns, leaderboardPercentiles, leaderDisplayMode, sortedLeaderboardRows]);
@@ -1401,7 +1559,8 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
   const playerExportBaseName = safeFileName(`${selectedPlayer}-${playerViewName || 'force-plate-table'}-${endDate || 'all-dates'}`);
   const leaderExportBaseName = safeFileName(`${leaderViewName || 'force-plate-leaderboard'}-${leaderTestType}-${leaderEndDate || 'all-dates'}`);
   const playerExportDetail = `${selectedTestType === 'All' ? 'All tests' : selectedTestType}  ·  ${startDate || 'First test'} to ${endDate || 'Latest test'}  ·  ${playerExportRows.length} dates`;
-  const leaderExportDetail = `${leaderTestType === 'All' ? 'All tests' : leaderTestType}  ·  ${leaderStartDate || 'First test'} to ${leaderEndDate || 'Latest test'}  ·  ${leaderDisplayMode === 'percentile' ? 'Percentile ranks' : 'Metric values'}  ·  ${leaderExportRows.length} athletes`;
+  const leaderDisplayModeLabel = leaderDisplayMode === 'percentile' ? 'Percentile ranks' : leaderDisplayMode === 'both' ? 'Values + percentiles' : 'Metric values';
+  const leaderExportDetail = `${leaderTestType === 'All' ? 'All tests' : leaderTestType}  ·  ${leaderStartDate || 'First test'} to ${leaderEndDate || 'Latest test'}  ·  ${leaderDisplayModeLabel}  ·  ${leaderExportRows.length} athletes`;
 
   return (
     <div className={`${styles.workspace} portal-admin-stack`}>
@@ -1554,7 +1713,7 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
           </label>
           <label>
             <span>Test type</span>
-            <select value={selectedTestType} onChange={(event) => setSelectedTestType(event.target.value)}>
+            <select value={selectedTestType} onChange={(event) => { setTestTypeTouched(true); setSelectedTestType(event.target.value); }}>
               {testTypeOptions.map((option) => (
                 <option key={option} value={option}>
                   {option}
@@ -1619,39 +1778,39 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
         <div className={styles.panelHeading}>
           <div>
             <p className={styles.sectionIndex}>02 · PERFORMANCE SIGNAL</p>
+            <h3>Exercise summary</h3>
+            <p>Average value for the latest test date, this date range · vs. last session's 30-day trend</p>
+          </div>
+        </div>
+        <div className={styles.kpiGrid}>
+          {fixedPanels.map((panel) => (
+            <div key={panel.label} className={styles.kpiCard}>
+              <div className={styles.kpiLabelRow}>
+                <span>{panel.label}</span>
+                <PercentileBadge stat={panel.percentile} loading={panelPercentilesLoading} />
+              </div>
+              <strong>
+                {panel.latestAverage === null ? '—' : panel.latestAverage.toFixed(1)}
+              </strong>
+              <small>
+                {panel.unit ? `${panel.unit} · ` : ''}{panel.latestDate || 'No date'}
+              </small>
+              {panel.trendPct !== null ? (
+                <small className={panel.favorable ? styles.positive : styles.negative}>
+                  {panel.favorable ? '▲' : '▼'} {Math.abs(panel.trendPct).toFixed(1)}% vs. 30-day avg
+                </small>
+              ) : null}
+            </div>
+          ))}
+        </div>
+
+        <div className={styles.panelHeading}>
+          <div>
+            <p className={styles.sectionIndex}>03 · TREND</p>
             <h3>{activeMetricLabel}</h3>
             <p>{selectedTestType === 'All' ? 'All qualifying test types' : selectedTestType} · {startDate || 'First test'} to {endDate || 'Latest test'}</p>
           </div>
           <span className={styles.liveBadge}><i /> {testCount} tests</span>
-        </div>
-        <div className={styles.kpiGrid}>
-          <div className={`${styles.kpiCard} ${styles.kpiPrimary}`}>
-            <div className={styles.kpiLabelRow}><span>Latest</span><PercentileBadge stat={percentileData?.stats.latest} loading={percentileLoading} /></div>
-            <strong>{latest ? latest.value.toFixed(1) : '—'}</strong>
-            <small>{latest?.metricUnit || 'No unit'} · {latest?.date || 'No date'}</small>
-          </div>
-          <div className={styles.kpiCard}>
-            <div className={styles.kpiLabelRow}><span>Previous</span><PercentileBadge stat={percentileData?.stats.previous} loading={percentileLoading} /></div>
-            <strong>{previous ? previous.value.toFixed(1) : '—'}</strong>
-            <small>{previous?.date || 'Not available'}</small>
-          </div>
-          <div className={styles.kpiCard}>
-            <div className={styles.kpiLabelRow}><span>Change</span><PercentileBadge stat={percentileData?.stats.change} loading={percentileLoading} /></div>
-            <strong className={latestChange === null ? '' : latestChange > 0 ? styles.positive : latestChange < 0 ? styles.negative : ''}>
-              {latestChange === null ? '—' : `${latestChange > 0 ? '+' : ''}${latestChange.toFixed(1)}`}
-            </strong>
-            <small>vs. previous test</small>
-          </div>
-          <div className={styles.kpiCard}>
-            <div className={styles.kpiLabelRow}><span>Range average</span><PercentileBadge stat={percentileData?.stats.average} loading={percentileLoading} /></div>
-            <strong>{avg === null ? '—' : avg.toFixed(1)}</strong>
-            <small>{filteredRows.length} data points</small>
-          </div>
-          <div className={styles.kpiCard}>
-            <div className={styles.kpiLabelRow}><span>Range peak</span><PercentileBadge stat={percentileData?.stats.peak} loading={percentileLoading} /></div>
-            <strong>{best === null ? '—' : best.toFixed(1)}</strong>
-            <small>Highest recorded value</small>
-          </div>
         </div>
         {chartPoints.length > 0 ? (
           <div className={styles.chartLayout} style={{ gridTemplateColumns: selectedTestType === 'All' && seriesByTestType.length > 1 ? 'minmax(0, 1fr) 180px' : '1fr' }}>
@@ -1661,7 +1820,8 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
               <line x1="56" y1="196" x2="532" y2="196" stroke="rgba(148,163,184,0.5)" strokeWidth="1" />
               <line x1="56" y1="20" x2="56" y2="196" stroke="rgba(148,163,184,0.5)" strokeWidth="1" />
               {chartDates.map((date, index) => {
-                const x = 56 + (index / Math.max(1, chartDates.length - 1)) * 476;
+                if (!chartDateLabelIndexes.has(index)) return null;
+                const x = chartXPosition(index, chartDates.length, chartView);
                 return (
                   <text
                     key={`x-date-${date}-${index}`}
@@ -1701,7 +1861,9 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
                   const seriesCount = Math.max(1, seriesByTestType.length);
                   const slotWidth = Math.min(38, 420 / Math.max(1, chartDates.length));
                   const barWidth = Math.max(3, (slotWidth - 3) / seriesCount);
-                  const x = point.x - slotWidth / 2 + seriesIndex * barWidth;
+                  const groupWidth = barWidth * seriesCount;
+                  const groupStart = point.x - groupWidth / 2;
+                  const x = groupStart + seriesIndex * barWidth;
                   return <rect key={`${point.date}-${index}`} x={x} y={point.y} width={barWidth} height={196 - point.y} rx="1.5" fill={testTypeColor(seriesIndex)} opacity={hoverIndex === index ? 1 : 0.84} onMouseEnter={() => setHoverIndex(index)} onMouseLeave={() => setHoverIndex((current) => (current === index ? null : current))} />;
                 }
                 return <circle key={`${point.date}-${index}`} cx={point.x} cy={point.y} r={hoverIndex === index ? '5' : '3.5'} fill={testTypeColor(seriesIndex)} onMouseEnter={() => setHoverIndex(index)} onMouseLeave={() => setHoverIndex((current) => (current === index ? null : current))} />;
@@ -1900,7 +2062,7 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
             <p className={styles.sectionIndex}>ORGANIZATION VIEW</p>
             <h3 style={{ marginTop: 0, marginBottom: 4 }}>{leaderViewName || 'New leaderboard table'}</h3>
             <p className="portal-muted-text" style={{ margin: 0 }}>
-              {leaderTestType === 'All' ? 'All force-plate tests' : leaderTestType} · showing {leaderDisplayMode === 'percentile' ? 'percentile ranks' : 'metric values'}.
+              {leaderTestType === 'All' ? 'All force-plate tests' : leaderTestType} · showing {leaderDisplayMode === 'percentile' ? 'percentile ranks' : leaderDisplayMode === 'both' ? 'values and percentiles' : 'metric values'}.
             </p>
           </div>
           <div className={styles.panelActions}>
@@ -1965,6 +2127,7 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
             <div className={styles.displayModeToggle} role="group" aria-label="Leaderboard display">
               <button type="button" className={leaderDisplayMode === 'value' ? styles.displayModeActive : undefined} onClick={() => setLeaderDisplayMode('value')}>Values</button>
               <button type="button" className={leaderDisplayMode === 'percentile' ? styles.displayModeActive : undefined} onClick={() => setLeaderDisplayMode('percentile')}>Percentiles</button>
+              <button type="button" className={leaderDisplayMode === 'both' ? styles.displayModeActive : undefined} onClick={() => setLeaderDisplayMode('both')}>Values + percentiles</button>
             </div>
           </div>
           <label>
@@ -2103,6 +2266,8 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
                     >
                       {leaderDisplayMode === 'percentile'
                         ? (percentile === null ? '-' : ordinal(percentile))
+                        : leaderDisplayMode === 'both'
+                        ? (value === null ? '-' : `${value.toFixed(1)}${percentile === null ? '' : ` (${ordinal(percentile)})`}`)
                         : (value === null ? '-' : value.toFixed(1))}
                     </td>
                   );
@@ -2120,6 +2285,7 @@ export default function ForcePlatesDashboard({ snapshot, canManageViews }: { sna
         onClose={() => setShowLeaderboardCorrelation(false)}
         title="Force Plate Leaderboard Correlation"
         columns={correlationColumns}
+        axisColumns={correlationAxisColumns}
         rows={correlationRows}
         viewByLabel="Player"
         primaryColumnName="Player"

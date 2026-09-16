@@ -15,7 +15,7 @@ const ORG_SCHOOL_TTL_MS = 10 * 60 * 1000;
 const STAFF_QUERY_TIMEOUT_MS = 2500;
 
 const PERSONAL_SCHOOL_OPTION_EXCLUSIONS: Record<string, ReadonlySet<string>> = {
-  'jgaynor@pitchingcoachu.com': new Set(['SEMO', 'OSU', 'GCU', 'CNU', 'HARVARD']),
+  'jgaynor@pitchingcoachu.com': new Set(['OSU', 'GCU', 'CNU', 'HARVARD', 'CBU', 'CREIGHTON']),
 };
 
 function normalizeSchoolCode(value: string): string {

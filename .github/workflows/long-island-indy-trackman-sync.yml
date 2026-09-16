@@ -35,6 +35,8 @@ jobs:
       TRACKMAN_V3_FTP_USER: ${{ secrets.LONG_ISLAND_DUCKS_TRACKMAN_FTP_USER }}
       TRACKMAN_V3_FTP_PASSWORD: ${{ secrets.LONG_ISLAND_DUCKS_TRACKMAN_FTP_PASSWORD }}
       TRACKMAN_FTP_DOWNLOAD_WORKERS: "12"
+      TRACKMAN_SYNC_CALLBACK_TOKEN: ${{ secrets.TRACKMAN_SYNC_CALLBACK_TOKEN }}
+      TRACKMAN_SYNC_CALLBACK_URL: https://www.pcudashboard.com/api/automation/trackman-sync-complete
 
     steps:
       - name: Check out pcudashboard
@@ -102,6 +104,7 @@ jobs:
             --end-date "${SYNC_END_DATE}"
 
       - name: Refresh Ducks dashboard rollups
+        id: rollup_li
         run: |
           python scripts/refresh_college_rollups.py \
             --school LI \
@@ -112,6 +115,7 @@ jobs:
             --retries 30
 
       - name: Refresh INDY dashboard rollups
+        id: rollup_indy
         run: |
           python scripts/refresh_college_rollups.py \
             --school INDY \
@@ -120,3 +124,23 @@ jobs:
             --keep-pooler \
             --batch-days 1 \
             --retries 30
+
+      - name: Report Long Island sync result
+        if: always()
+        run: |
+          STATUS="failed"
+          if [[ "${{ steps.rollup_li.outcome }}" == "success" ]]; then STATUS="success"; fi
+          curl -sf -X POST "${TRACKMAN_SYNC_CALLBACK_URL}" \
+            -H "Authorization: Bearer ${TRACKMAN_SYNC_CALLBACK_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"schoolCode\":\"LI\",\"status\":\"${STATUS}\"}"
+
+      - name: Report INDY sync result
+        if: always()
+        run: |
+          STATUS="failed"
+          if [[ "${{ steps.rollup_indy.outcome }}" == "success" ]]; then STATUS="success"; fi
+          curl -sf -X POST "${TRACKMAN_SYNC_CALLBACK_URL}" \
+            -H "Authorization: Bearer ${TRACKMAN_SYNC_CALLBACK_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"schoolCode\":\"INDY\",\"status\":\"${STATUS}\"}"

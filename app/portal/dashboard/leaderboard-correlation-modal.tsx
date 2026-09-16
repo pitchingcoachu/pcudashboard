@@ -730,15 +730,6 @@ export default function LeaderboardCorrelationModal({
     }
   }, [open, selectableAxisColumns, xColumn, yColumn]);
 
-  const xColumnHasAnyNumeric = useMemo(
-    () => (open && xColumn ? hasAnyNumericPoints(xColumn, sourceRows, labelColumn) : false),
-    [open, xColumn, sourceRows, labelColumn]
-  );
-  const yColumnHasAnyNumeric = useMemo(
-    () => (open && yColumn ? hasAnyNumericPoints(yColumn, sourceRows, labelColumn) : false),
-    [open, yColumn, sourceRows, labelColumn]
-  );
-
   const points = useMemo(() => {
     if (!open) return [] as ScatterPoint[];
     if (!xColumn || !yColumn || !labelColumn) return [] as ScatterPoint[];
@@ -747,14 +738,12 @@ export default function LeaderboardCorrelationModal({
     for (const row of sourceRows) {
       const labelRaw = String(row[labelColumn] ?? '').trim();
       if (!labelRaw || isAllSummaryLabel(labelRaw)) continue;
-      rank += 1;
       const xParsed = numericByColumnAlias(row, xColumn);
       const yParsed = numericByColumnAlias(row, yColumn);
-      const xValueRaw = xParsed ?? (xColumnHasAnyNumeric ? 0 : null);
-      const yValueRaw = yParsed ?? (yColumnHasAnyNumeric ? 0 : null);
-      const xValue = xValueRaw === null ? null : normalizeAxisNumericValue(xColumn, xValueRaw);
-      const yValue = yValueRaw === null ? null : normalizeAxisNumericValue(yColumn, yValueRaw);
+      const xValue = xParsed === null ? null : normalizeAxisNumericValue(xColumn, xParsed);
+      const yValue = yParsed === null ? null : normalizeAxisNumericValue(yColumn, yParsed);
       if (xValue === null || yValue === null) continue;
+      rank += 1;
       out.push({
         rank,
         label: labelRaw,
@@ -764,7 +753,7 @@ export default function LeaderboardCorrelationModal({
       });
     }
     return out;
-  }, [open, sourceRows, xColumn, yColumn, labelColumn, viewByLabel, xColumnHasAnyNumeric, yColumnHasAnyNumeric]);
+  }, [open, sourceRows, xColumn, yColumn, labelColumn, viewByLabel]);
 
   const pointLogoSrcByLabel = useMemo(() => {
     if (!open) return {} as Record<string, string>;

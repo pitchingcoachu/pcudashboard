@@ -21,7 +21,7 @@ type Session = {
   errorMessage: string | null;
 };
 
-const TYPES = ['Bullpen', 'Game/Postgame', 'Meeting', 'Assessment', 'Rehab', 'General'];
+const FALLBACK_TYPES = ['Assessment', 'Meeting', 'Bullpen', 'Training', 'Other'];
 const MULTIPART_UPLOAD_CONCURRENCY = 3;
 
 type RecordingPresign = {
@@ -50,9 +50,11 @@ function UploadIcon() {
 export default function AiSessionsClient() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [players, setPlayers] = useState<Player[]>([]);
+  const [types, setTypes] = useState<string[]>(FALLBACK_TYPES);
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState('');
   const [sessionType, setSessionType] = useState('Bullpen');
+  const [customType, setCustomType] = useState('');
   const [playerIds, setPlayerIds] = useState<number[]>([]);
   const [playerVisible, setPlayerVisible] = useState(false);
   const [keepAudio, setKeepAudio] = useState(false);
@@ -66,14 +68,17 @@ export default function AiSessionsClient() {
   const chunks = useRef<Blob[]>([]);
 
   async function load() {
-    const [sessionsResponse, playersResponse] = await Promise.all([
+    const [sessionsResponse, playersResponse, typesResponse] = await Promise.all([
       fetch('/api/ai/sessions', { cache: 'no-store' }),
       fetch('/api/admin/clients', { cache: 'no-store' }),
+      fetch('/api/ai/session-types', { cache: 'no-store' }),
     ]);
     const sessionsPayload = await sessionsResponse.json();
     const playersPayload = await playersResponse.json();
+    const typesPayload = await typesResponse.json().catch(() => ({}));
     setSessions(sessionsPayload.sessions ?? []);
     setPlayers(playersPayload.players ?? []);
+    setTypes(Array.isArray(typesPayload.types) && typesPayload.types.length ? typesPayload.types : FALLBACK_TYPES);
   }
 
   useEffect(() => { void load(); }, []);
@@ -177,10 +182,22 @@ export default function AiSessionsClient() {
 
   async function create() {
     if (!file || !title.trim()) return setMessage('Add a title and recording first.');
+    const resolvedType = sessionType === 'Other' ? customType.trim() : sessionType;
+    if (sessionType === 'Other' && !resolvedType) return setMessage('Enter a name for the new session type.');
     setBusy(true);
     setMessage('Uploading recording…');
     let stage: 'upload' | 'create' | 'process' = 'upload';
     try {
+      if (sessionType === 'Other') {
+        const typeResponse = await fetch('/api/ai/session-types', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: resolvedType }),
+        });
+        const typePayload = await typeResponse.json().catch(() => ({}));
+        if (!typeResponse.ok) throw new Error(typePayload.error ?? 'Could not save the new session type.');
+        if (Array.isArray(typePayload.types)) setTypes(typePayload.types);
+      }
       const presignResponse = await fetch('/api/ai/sessions/presign', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -230,7 +247,7 @@ export default function AiSessionsClient() {
       const createResponse = await fetch('/api/ai/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, sessionType, playerIds, playerVisible, keepAudio, r2Key: presign.r2Key, fileName: file.name, contentType: presign.contentType, sizeBytes: file.size, sourceKind: file.type.startsWith('video/') ? 'video' : 'audio' }),
+        body: JSON.stringify({ title, sessionType: resolvedType, playerIds, playerVisible, keepAudio, r2Key: presign.r2Key, fileName: file.name, contentType: presign.contentType, sizeBytes: file.size, sourceKind: file.type.startsWith('video/') ? 'video' : 'audio' }),
       });
       const created = await createResponse.json();
       if (!createResponse.ok) throw new Error(created.error);
@@ -241,6 +258,7 @@ export default function AiSessionsClient() {
       if (!processResponse.ok) throw new Error(result.error);
       setFile(null);
       setTitle('');
+      setCustomType('');
       setPlayerIds([]);
       setPlayerSearch('');
       setMessage(playerVisible ? 'Ready and shared to the associated player notes.' : 'Transcript and summary are ready.');
@@ -322,8 +340,9 @@ export default function AiSessionsClient() {
           <div className={styles.sectionHeading}><span>01</span><div><h3>Session details</h3><p>Name it and choose the type of work.</p></div></div>
           <div className={styles.twoColumns}>
             <label>Title<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Bullpen with Logan" /></label>
-            <label>Session type<select value={sessionType} onChange={(event) => setSessionType(event.target.value)}>{TYPES.map((type) => <option key={type}>{type}</option>)}</select></label>
+            <label>Session type<select value={sessionType} onChange={(event) => setSessionType(event.target.value)}>{types.map((type) => <option key={type}>{type}</option>)}</select></label>
           </div>
+          {sessionType === 'Other' ? <label>New session type name<input value={customType} onChange={(event) => setCustomType(event.target.value)} placeholder="e.g. Recovery Session" /></label> : null}
 
           <div className={styles.rule} />
           <div className={styles.sectionHeading}><span>02</span><div><h3>Add recording</h3><p>Use your microphone or choose an audio/video file.</p></div></div>
@@ -351,7 +370,7 @@ export default function AiSessionsClient() {
             <label className={styles.setting}><input type="checkbox" checked={playerVisible} onChange={(event) => setPlayerVisible(event.target.checked)} /><span><strong>Share to player notes</strong><small>Add the finished summary and transcript to each selected player’s notes.</small></span></label>
             <label className={styles.setting}><input type="checkbox" checked={keepAudio} onChange={(event) => setKeepAudio(event.target.checked)} /><span><strong>Keep source audio</strong><small>Retain it beyond the standard 30-day window.</small></span></label>
           </div>
-          <button className={styles.createButton} onClick={() => void create()} disabled={busy || recording || !file || !title.trim()}>{busy ? 'Processing session…' : 'Create transcript & summary'}<span>→</span></button>
+          <button className={styles.createButton} onClick={() => void create()} disabled={busy || recording || !file || !title.trim() || (sessionType === 'Other' && !customType.trim())}>{busy ? 'Processing session…' : 'Create transcript & summary'}<span>→</span></button>
           {message ? <p className={styles.statusMessage}>{message}</p> : null}
         </section>
 

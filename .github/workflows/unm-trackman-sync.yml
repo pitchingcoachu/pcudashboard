@@ -42,6 +42,8 @@ jobs:
       CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
       CLOUDINARY_UPLOAD_PRESET: ${{ secrets.CLOUDINARY_UPLOAD_PRESET }}
       CLOUDINARY_FOLDER: trackman
+      TRACKMAN_SYNC_CALLBACK_TOKEN: ${{ secrets.TRACKMAN_SYNC_CALLBACK_TOKEN }}
+      TRACKMAN_SYNC_CALLBACK_URL: https://www.pcudashboard.com/api/automation/trackman-sync-complete
 
     steps:
       - name: Check out pcudashboard
@@ -110,3 +112,19 @@ jobs:
           ARGS=(--school UNM --keep-pooler --batch-days 1 --retries 30)
           ARGS+=(--window-start "${ROLLUP_START_DATE}" --window-end "${SYNC_END_DATE}")
           python scripts/refresh_college_rollups.py "${ARGS[@]}"
+
+      - name: Report sync success
+        if: success()
+        run: |
+          curl -sf -X POST "${TRACKMAN_SYNC_CALLBACK_URL}" \
+            -H "Authorization: Bearer ${TRACKMAN_SYNC_CALLBACK_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{"schoolCode":"UNM","status":"success"}'
+
+      - name: Report sync failure
+        if: failure()
+        run: |
+          curl -sf -X POST "${TRACKMAN_SYNC_CALLBACK_URL}" \
+            -H "Authorization: Bearer ${TRACKMAN_SYNC_CALLBACK_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{"schoolCode":"UNM","status":"failed"}'

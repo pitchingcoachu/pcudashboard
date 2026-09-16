@@ -83,6 +83,8 @@ type NameMapping = {
 declare global {
   var __pcuBiomechanicsDbReady: boolean | undefined;
   var __pcuBiomechanicsDbPatched: boolean | undefined;
+  var __pcuBiomechanicsMetricsReady: boolean | undefined;
+  var __pcuBiomechanicsMetricsPromise: Promise<void> | undefined;
 }
 
 function normalizeSchoolCode(value: string): string {
@@ -851,6 +853,7 @@ async function ensureBiomechanicsTables(): Promise<void> {
       await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS peak_de_weighting DOUBLE PRECISION;`);
       await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS z_force_gain DOUBLE PRECISION;`);
       await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS ffc_to_peak_y DOUBLE PRECISION;`);
+      await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS metrics_complete BOOLEAN NOT NULL DEFAULT FALSE;`);
       await client.query(`
         CREATE TABLE IF NOT EXISTS biomechanics_pitch_metrics (
           id BIGSERIAL PRIMARY KEY,
@@ -972,6 +975,7 @@ async function ensureBiomechanicsTables(): Promise<void> {
     await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS peak_de_weighting DOUBLE PRECISION;`);
     await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS z_force_gain DOUBLE PRECISION;`);
     await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS ffc_to_peak_y DOUBLE PRECISION;`);
+    await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS metrics_complete BOOLEAN NOT NULL DEFAULT FALSE;`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_metrics_scope_hash ON biomechanics_pitch_metrics (organization_id, school_code, source_file_hash);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_rows_scope_date ON biomechanics_pitch_rows (organization_id, school_code, captured_at DESC);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_rows_scope_created_date ON biomechanics_pitch_rows (organization_id, school_code, created_at DESC);`);
@@ -1074,6 +1078,16 @@ async function ensureBiomechanicsReadTables(): Promise<void> {
 }
 
 async function ensureBiomechanicsMetricsTable(): Promise<void> {
+  if (global.__pcuBiomechanicsMetricsReady || !isDatabaseConfigured()) return;
+  if (!global.__pcuBiomechanicsMetricsPromise) {
+    global.__pcuBiomechanicsMetricsPromise = ensureBiomechanicsMetricsTableImpl()
+      .then(() => { global.__pcuBiomechanicsMetricsReady = true; })
+      .finally(() => { global.__pcuBiomechanicsMetricsPromise = undefined; });
+  }
+  await global.__pcuBiomechanicsMetricsPromise;
+}
+
+async function ensureBiomechanicsMetricsTableImpl(): Promise<void> {
   if (!isDatabaseConfigured()) return;
   const pool = getDbPool();
   await pool.query(`
@@ -1105,6 +1119,8 @@ async function ensureBiomechanicsMetricsTable(): Promise<void> {
   await pool.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS peak_de_weighting DOUBLE PRECISION;`);
   await pool.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS z_force_gain DOUBLE PRECISION;`);
   await pool.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS ffc_to_peak_y DOUBLE PRECISION;`);
+  await pool.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS metrics_complete BOOLEAN NOT NULL DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS metrics_complete BOOLEAN NOT NULL DEFAULT FALSE;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_metrics_scope_hash ON biomechanics_pitch_metrics (organization_id, school_code, source_file_hash);`);
 }
 
@@ -1515,8 +1531,8 @@ export async function saveSinglePitchPoints(args: {
       INSERT INTO biomechanics_pitch_metrics (
         organization_id, school_code, source_file_hash,
         back_peak_fz, peak_de_weighting, z_force_gain, back_peak_fy, mound_connection, impulse, impulse_time, yz_transfer_back,
-        lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer, ffc_to_peak_y
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+        lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer, ffc_to_peak_y, metrics_complete
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,TRUE)
       ON CONFLICT (organization_id, school_code, source_file_hash)
       DO UPDATE SET
         back_peak_fz = EXCLUDED.back_peak_fz,
@@ -1533,7 +1549,8 @@ export async function saveSinglePitchPoints(args: {
         yz_transfer_front = EXCLUDED.yz_transfer_front,
         y_transfer = EXCLUDED.y_transfer,
         z_transfer = EXCLUDED.z_transfer,
-        ffc_to_peak_y = EXCLUDED.ffc_to_peak_y
+        ffc_to_peak_y = EXCLUDED.ffc_to_peak_y,
+        metrics_complete = TRUE
       `,
       [
         args.organizationId,
@@ -2149,6 +2166,7 @@ export async function getBiomechanicsSnapshot(args: {
   const metricKeys = pitchOptions.map((p) => p.pitchKey);
   const metricsPromise = metricKeys.length ? runSnapshotQuery<{
     source_file_hash: string;
+    metrics_complete: boolean;
     back_peak_fz: number | null; peak_de_weighting: number | null; z_force_gain: number | null;
     back_peak_fy: number | null; mound_connection: number | null;
     impulse: number | null; impulse_time: number | null; yz_transfer_back: number | null;
@@ -2157,7 +2175,7 @@ export async function getBiomechanicsSnapshot(args: {
     ffc_to_peak_y: number | null;
   }>(
     'biomechanics metrics lookup (parallel)',
-    `SELECT source_file_hash, back_peak_fz, peak_de_weighting, z_force_gain, back_peak_fy, mound_connection, impulse, impulse_time,
+    `SELECT source_file_hash, metrics_complete, back_peak_fz, peak_de_weighting, z_force_gain, back_peak_fy, mound_connection, impulse, impulse_time,
             yz_transfer_back, lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer, ffc_to_peak_y
      FROM biomechanics_pitch_metrics
      WHERE organization_id = $1 AND school_code = $2 AND source_file_hash = ANY($3::text[])`,
@@ -2180,9 +2198,11 @@ export async function getBiomechanicsSnapshot(args: {
   };
 
   const pitchMetricsMap = new Map<string, BiomechComputedMetrics>();
+  const completedMetricKeys = new Set<string>();
   if (metricKeys.length) {
     const metricsAgg = (await metricsPromise) ?? await runSnapshotQuery<{
       source_file_hash: string;
+      metrics_complete: boolean;
       back_peak_fz: number | null;
       peak_de_weighting: number | null;
       z_force_gain: number | null;
@@ -2203,6 +2223,7 @@ export async function getBiomechanicsSnapshot(args: {
       `
       SELECT
         source_file_hash,
+        metrics_complete,
         back_peak_fz,
         peak_de_weighting,
         z_force_gain,
@@ -2227,11 +2248,12 @@ export async function getBiomechanicsSnapshot(args: {
     ).catch(async (error) => {
       const code = String((error as { code?: unknown } | null)?.code ?? '');
       const message = String((error as { message?: unknown } | null)?.message ?? '').toLowerCase();
-      const missingMetricsShape = code === '42P01' || code === '42703' || message.includes('biomechanics_pitch_metrics') || message.includes('impulse_time') || message.includes('peak_de_weighting') || message.includes('z_force_gain') || message.includes('ffc_to_peak_y');
+      const missingMetricsShape = code === '42P01' || code === '42703' || message.includes('biomechanics_pitch_metrics') || message.includes('metrics_complete') || message.includes('impulse_time') || message.includes('peak_de_weighting') || message.includes('z_force_gain') || message.includes('ffc_to_peak_y');
       if (!missingMetricsShape) throw error;
       await ensureBiomechanicsMetricsTable();
       return runSnapshotQuery<{
         source_file_hash: string;
+        metrics_complete: boolean;
         back_peak_fz: number | null;
         peak_de_weighting: number | null;
         z_force_gain: number | null;
@@ -2252,6 +2274,7 @@ export async function getBiomechanicsSnapshot(args: {
         `
         SELECT
           source_file_hash,
+          metrics_complete,
           back_peak_fz,
           peak_de_weighting,
           z_force_gain,
@@ -2276,6 +2299,7 @@ export async function getBiomechanicsSnapshot(args: {
       );
     });
     for (const row of metricsAgg.rows) {
+      if (row.metrics_complete) completedMetricKeys.add(row.source_file_hash);
       pitchMetricsMap.set(row.source_file_hash, {
         backPeakFz: toFinite(row.back_peak_fz),
         peakDeWeighting: toFinite(row.peak_de_weighting),
@@ -2296,7 +2320,7 @@ export async function getBiomechanicsSnapshot(args: {
     }
     const missingMetricKeys = metricKeys.filter((key) => {
       const metrics = pitchMetricsMap.get(key);
-      return !metrics || metrics.peakDeWeighting === null || metrics.zForceGain === null || metrics.ffcToPeakY === null;
+      return !completedMetricKeys.has(key) && (!metrics || metrics.peakDeWeighting === null || metrics.zForceGain === null || metrics.ffcToPeakY === null);
     });
     if (missingMetricKeys.length) {
       const pointsAgg = await runSnapshotQuery<BiomechSinglePitchPoint & { source_file_hash: string }>(
@@ -2351,7 +2375,8 @@ export async function getBiomechanicsSnapshot(args: {
         zTransfer: [] as (number | null)[],
         ffcToPeakY: [] as (number | null)[],
       };
-      for (const [pitchKey, points] of grouped.entries()) {
+      for (const pitchKey of missingMetricKeys) {
+        const points = grouped.get(pitchKey) ?? [];
         const computed = computePitchMetrics(points);
         pitchMetricsMap.set(pitchKey, computed);
         pitchKeys.push(pitchKey);
@@ -2377,10 +2402,10 @@ export async function getBiomechanicsSnapshot(args: {
       INSERT INTO biomechanics_pitch_metrics (
         organization_id, school_code, source_file_hash,
         back_peak_fz, peak_de_weighting, z_force_gain, back_peak_fy, mound_connection, impulse, impulse_time, yz_transfer_back,
-        lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer, ffc_to_peak_y
+        lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer, ffc_to_peak_y, metrics_complete
       )
       SELECT $1, $2, key, back_peak_fz, peak_de_weighting, z_force_gain, back_peak_fy, mound_connection, impulse, impulse_time, yz_transfer_back,
-        lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer, ffc_to_peak_y
+        lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer, ffc_to_peak_y, TRUE
       FROM unnest(
         $3::text[], $4::double precision[], $5::double precision[], $6::double precision[], $7::double precision[],
         $8::double precision[], $9::double precision[], $10::double precision[], $11::double precision[],
@@ -2404,7 +2429,8 @@ export async function getBiomechanicsSnapshot(args: {
         yz_transfer_front = EXCLUDED.yz_transfer_front,
         y_transfer = EXCLUDED.y_transfer,
         z_transfer = EXCLUDED.z_transfer,
-        ffc_to_peak_y = EXCLUDED.ffc_to_peak_y
+        ffc_to_peak_y = EXCLUDED.ffc_to_peak_y,
+        metrics_complete = TRUE
           `,
           [
             args.organizationId,

@@ -8,6 +8,7 @@ import logging
 from math import atan, atan2, cos, degrees, exp, isfinite, isnan, pi, radians, sin, sqrt
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 import time
 import uuid
 import urllib.parse
@@ -18,6 +19,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 
 from .config import get_settings
 from .db import get_conn
@@ -53,6 +55,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=512 * 1024, compresslevel=1)
 
 ZONE_LEFT = -0.88
 ZONE_RIGHT = 0.88
@@ -991,6 +994,7 @@ def _compute_home_trends_payload(
     }
 
     season_pitching = pitching_overview(
+        response=Response(),
         school_code=school,
         start_date=season_start,
         end_date=season_end,
@@ -1006,6 +1010,7 @@ def _compute_home_trends_payload(
         **pitching_defaults,
     )
     recent_pitching = pitching_overview(
+        response=Response(),
         school_code=school,
         start_date=recent_start,
         end_date=recent_end,
@@ -1021,6 +1026,7 @@ def _compute_home_trends_payload(
         **pitching_defaults,
     )
     season_pitching_fbsi = pitching_overview(
+        response=Response(),
         school_code=school,
         start_date=season_start,
         end_date=season_end,
@@ -1036,6 +1042,7 @@ def _compute_home_trends_payload(
         **pitching_defaults,
     )
     recent_pitching_fbsi = pitching_overview(
+        response=Response(),
         school_code=school,
         start_date=recent_start,
         end_date=recent_end,
@@ -3648,7 +3655,9 @@ def _build_dynamic_table(
     custom_columns: Optional[List[str]] = None,
     stuff2_level: Optional[str] = None,
     ctrl_level: Optional[str] = None,
+    timings: Optional[Dict[str, float]] = None,
 ) -> tuple[List[str], List[Dict[str, Any]], List[str]]:
+    stage_started = time.perf_counter()
     mode_key = (mode or "Stuff").strip()
     split_col_map: Dict[str, str] = {
         "All": "All",
@@ -3885,6 +3894,9 @@ def _build_dynamic_table(
 
     split_clean_for_grouping = (split_by or "").strip()
     _annotate_table_pa_keys(rows)
+    if timings is not None:
+        timings["pa_keys_ms"] = round((time.perf_counter() - stage_started) * 1000.0, 1)
+    stage_started = time.perf_counter()
     if split_clean_for_grouping == "Game":
         _annotate_derived_game_keys(rows)
     if split_clean_for_grouping == "After Count":
@@ -4012,6 +4024,9 @@ def _build_dynamic_table(
         if s == 2:
             usage_count_2k_total += 1
     pro_fip_const, pro_lg_hr_fb = _derive_pro_fip_context(rows)
+    if timings is not None:
+        timings["grouping_ms"] = round((time.perf_counter() - stage_started) * 1000.0, 1)
+    stage_started = time.perf_counter()
 
     def _stuff2_rows_from_raw(raw_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
@@ -4087,6 +4102,11 @@ def _build_dynamic_table(
         )
     except Exception:
         command_global_by_type = {}
+    if timings is not None:
+        timings["models_ms"] = round((time.perf_counter() - stage_started) * 1000.0, 1)
+    stage_started = time.perf_counter()
+
+    effective_pitch_call_cache: Dict[int, str] = {}
 
     def _row_for_group(key: str, grp: List[Dict[str, Any]]) -> Dict[str, Any]:
         n = len(grp)
@@ -4096,12 +4116,18 @@ def _build_dynamic_table(
         ea_strike_calls = {"StrikeCalled", "StrikeSwinging", "FoulBall", "FoulBallFieldable", "FoulBallNotFieldable", "InPlay"}
         one_one_strike_calls = {"StrikeCalled", "StrikeSwinging", "FoulBall", "FoulBallFieldable", "FoulBallNotFieldable", "InPlay"}
         def _effective_pitch_call_for_metrics(r: Dict[str, Any]) -> str:
+            row_id = id(r)
+            cached_call = effective_pitch_call_cache.get(row_id)
+            if cached_call is not None:
+                return cached_call
             call = str(r.get("pitch_call") or "").strip()
             call_norm = _pro_norm_token(call)
             if call_norm:
                 mapped_from_call = _pro_pitch_call_from_description(call_norm)
                 if mapped_from_call:
-                    return str(mapped_from_call)
+                    resolved = str(mapped_from_call)
+                    effective_pitch_call_cache[row_id] = resolved
+                    return resolved
             desc_norm = _pro_norm_token(
                 r.get("description_raw")
                 or r.get("description")
@@ -4109,7 +4135,9 @@ def _build_dynamic_table(
                 or ""
             )
             mapped = _pro_pitch_call_from_description(desc_norm)
-            return str(mapped or "")
+            resolved = str(mapped or "")
+            effective_pitch_call_cache[row_id] = resolved
+            return resolved
         def _is_foul_tip_row(r: Dict[str, Any]) -> bool:
             # _pro_pitch_call_from_description collapses foul tips into the
             # generic "FoulBall" bucket (correct for shape/strike/swing
@@ -5262,6 +5290,9 @@ def _build_dynamic_table(
         ordered_items = sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0]))
     for key, grp in ordered_items:
         out_rows.append(_row_for_group(key, grp))
+    if timings is not None:
+        timings["split_rows_ms"] = round((time.perf_counter() - stage_started) * 1000.0, 1)
+    stage_started = time.perf_counter()
 
     # Always add an All row at the bottom for split views.
     if split_clean == "After Count":
@@ -5271,6 +5302,9 @@ def _build_dynamic_table(
         all_group = [r for group_rows in groups.values() for r in group_rows]
     if all_group and split_clean != "All":
         out_rows.append(_row_for_group("All", all_group))
+    if timings is not None:
+        timings["all_row_ms"] = round((time.perf_counter() - stage_started) * 1000.0, 1)
+    stage_started = time.perf_counter()
 
     # Keep All-row BF/K%/BB%/HR% consistent across split modes.
     row_all = next((row for row in out_rows if str(row.get(split_col_name) or "") == "All"), None)
@@ -5278,6 +5312,8 @@ def _build_dynamic_table(
         baseline = _global_outcome_baseline(rows)
         for metric in ["BF", "K%", "BB%", "HR%"]:
             row_all[metric] = baseline.get(metric)
+    if timings is not None:
+        timings["baseline_ms"] = round((time.perf_counter() - stage_started) * 1000.0, 1)
 
     # By definition, every PA reaches 0-0; After Count 0-0 outcome rates must
     # match the All row baseline for BF-based outcome metrics.
@@ -8392,6 +8428,26 @@ def _custom_label_col_expr(table_alias: str = "pe") -> str:
     return "NULL::text"
 
 
+def _replace_pitch_event_json_field_reads(query: str) -> str:
+    """Use real pitch_events columns instead of serializing every row to JSON.
+
+    The broad raw overview can touch years of pitches. Its metadata fallbacks
+    previously called to_jsonb(pe) dozens of times per row, even for columns
+    that do not exist. A missing key in to_jsonb returns NULL, so replacing
+    absent columns with NULL::text keeps the same fallback behavior.
+    """
+    columns = _table_columns_cached("public.pitch_events")
+
+    def direct_column(match: re.Match[str]) -> str:
+        key = match.group(1)
+        if key not in columns:
+            return "NULL::text"
+        quoted = key.replace('"', '""')
+        return f'pe."{quoted}"::text'
+
+    return re.sub(r"to_jsonb\(pe\)->>'([^']+)'", direct_column, query)
+
+
 def _sum_select_for_optional_column(
     table_fq: str,
     preferred_column: str,
@@ -9941,6 +9997,7 @@ def _warm_overview_endpoints_for_school(school_code: str, level_bucket: str = "A
     session_type = "Season" if school != "PRO" else None
 
     pitching_overview(
+        response=Response(),
         school_code=school,
         start_date=season_start,
         end_date=today,
@@ -9953,6 +10010,7 @@ def _warm_overview_endpoints_for_school(school_code: str, level_bucket: str = "A
         include_trend_rows=False,
     )
     pitching_overview(
+        response=Response(),
         school_code=school,
         start_date=game_start,
         end_date=today,
@@ -9985,6 +10043,7 @@ def _warm_overview_endpoints_for_school(school_code: str, level_bucket: str = "A
         include_chart_points=False,
     )
     pitching_overview(
+        response=Response(),
         school_code=school,
         start_date=season_start,
         end_date=today,
@@ -10126,7 +10185,7 @@ def _start_endpoint_cache_warmer_background() -> None:
         return
 
 
-def _stuff2_by_type_from_rollup_rows(rows: List[Dict[str, Any]], level: str) -> Dict[str, float]:
+def _stuff2_averages_from_rollup_rows(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Optional[float]]]:
     """Aggregates a set of rollup rows (pre-aggregated per (split_value,
     pitch_type) sums/counts) into one Stuff+ 2.0 value per pitch type
     present, via compute_stuff2_from_rollup_averages.
@@ -10180,12 +10239,16 @@ def _stuff2_by_type_from_rollup_rows(rows: List[Dict[str, Any]], level: str) -> 
                 "ext_value": (a["ext_sum"] / a["ext_n"]) if a["ext_n"] > 0 else None,
                 "is_lefty": a["left_n"] >= a["right_n"] and a["left_n"] > 0,
             }
-        return stuff2.compute_stuff2_from_rollup_averages(averages, level)
+        return averages
     except Exception:
         return {}
 
 
-def _command_by_type_from_rollup_rows(rows: List[Dict[str, Any]], level: str) -> Dict[str, float]:
+def _stuff2_by_type_from_rollup_rows(rows: List[Dict[str, Any]], level: str) -> Dict[str, float]:
+    return stuff2.compute_stuff2_from_rollup_averages(_stuff2_averages_from_rollup_rows(rows), level)
+
+
+def _command_buckets_from_rollup_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Command+ variant of _stuff2_by_type_from_rollup_rows: `rows` here are
     ALREADY POOLED per (split_value, pitch_type) by the calling SQL query
     (GROUP BY split_expr, pitch_type -- see _try_pro_pitching_overview_rollup
@@ -10229,9 +10292,13 @@ def _command_by_type_from_rollup_rows(rows: List[Dict[str, Any]], level: str) ->
                 "batterside": None,
                 "weight": min(plate_side_n, plate_height_n),
             })
-        return command.compute_command_from_rollup_averages(buckets, level)
+        return buckets
     except Exception:
-        return {}
+        return []
+
+
+def _command_by_type_from_rollup_rows(rows: List[Dict[str, Any]], level: str) -> Dict[str, float]:
+    return command.compute_command_from_rollup_averages(_command_buckets_from_rollup_rows(rows), level)
 
 
 def _command_by_pitcher_pro_live(
@@ -10302,10 +10369,7 @@ def _command_by_pitcher_pro_live(
             params["batter_side"] = batter_side
         where_sql = " AND ".join(where)
 
-        with get_conn() as conn, conn.cursor() as cur:
-            cur.execute("SET LOCAL statement_timeout = '15s'")
-            cur.execute(
-                f"""
+        command_sql = f"""
                 SELECT
                   regexp_replace(lower(COALESCE(NULLIF(TRIM(pitcher), ''), '')), '[^a-z0-9]', '', 'g') AS pitcher_norm,
                   {PRO_PITCH_TYPE_SQL} AS pitch_type,
@@ -10322,10 +10386,64 @@ def _command_by_pitcher_pro_live(
                 FROM pro_pitch_events
                 WHERE {where_sql}
                 GROUP BY pitcher_norm, pitch_type, is_lefty_bucket, balls, strikes, batterside_bucket, side_cell, height_cell
-                """,
-                params,
+                """
+
+        def fetch_command_window(query_params: Dict[str, Any]) -> List[Dict[str, Any]]:
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout = '15s'")
+                cur.execute(command_sql, query_params)
+                return [dict(row) for row in cur.fetchall()]
+
+        use_date_windows = (
+            start_date is not None
+            and end_date is not None
+            # This is opt-in until full-history windows are verified to beat
+            # the existing query. In local tests a two-year scope regressed.
+            and (end_date - start_date).days >= max(7, int(os.getenv("DASHBOARD_PRO_COMMAND_CHUNK_MIN_DAYS", "99999")))
+            and not selected_pitcher_keys
+        )
+        if use_date_windows:
+            window_params: List[Dict[str, Any]] = []
+            window_days = max(7, min(90, int(os.getenv("DASHBOARD_PRO_COMMAND_WINDOW_DAYS", "90"))))
+            window_start = start_date
+            while window_start <= end_date:
+                window_end = min(window_start + timedelta(days=window_days - 1), end_date)
+                scoped_params = dict(params)
+                scoped_params["start_date"] = window_start
+                scoped_params["end_date"] = window_end
+                window_params.append(scoped_params)
+                window_start = window_end + timedelta(days=1)
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                grouped_windows = list(executor.map(fetch_command_window, window_params))
+            merged: Dict[tuple[Any, ...], Dict[str, Any]] = {}
+            key_fields = (
+                "pitcher_norm", "pitch_type", "is_lefty_bucket", "balls", "strikes",
+                "batterside_bucket", "side_cell", "height_cell",
             )
-            grouped = cur.fetchall()
+            for batch in grouped_windows:
+                for row in batch:
+                    key = tuple(row.get(field) for field in key_fields)
+                    n = int(row.get("n") or 0)
+                    if n <= 0:
+                        continue
+                    target = merged.get(key)
+                    if target is None:
+                        target = dict(row)
+                        target["side_weighted_sum"] = float(row.get("avg_side") or 0.0) * n
+                        target["height_weighted_sum"] = float(row.get("avg_height") or 0.0) * n
+                        merged[key] = target
+                    else:
+                        target["n"] = int(target["n"]) + n
+                        target["side_weighted_sum"] += float(row.get("avg_side") or 0.0) * n
+                        target["height_weighted_sum"] += float(row.get("avg_height") or 0.0) * n
+            grouped = []
+            for row in merged.values():
+                n = int(row["n"])
+                row["avg_side"] = row.pop("side_weighted_sum") / n
+                row["avg_height"] = row.pop("height_weighted_sum") / n
+                grouped.append(row)
+        else:
+            grouped = fetch_command_window(params)
     except Exception:
         return {}
 
@@ -10512,6 +10630,7 @@ def _try_pitching_overview_daily_rollup(
     include_row_pitches: bool,
     include_trend_rows: bool,
     stuff2_level: Optional[str] = None,
+    timings: Optional[Dict[str, float]] = None,
 ) -> Optional[PitchingOverviewResponse]:
     if school_code == "PRO":
         return None
@@ -11066,9 +11185,7 @@ def _try_pitching_overview_daily_rollup(
     # Aggregate rows by split + pitch type.
     _rollup_perf_started = time.perf_counter()
     try:
-        with get_conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                f"""
+        grouped_sql = f"""
                 SELECT
                   {split_rollup_col} AS split_value,
                   pitch_type,
@@ -11159,25 +11276,77 @@ def _try_pitching_overview_daily_rollup(
                 FROM {rollup_source}
                 WHERE {where_sql}
                 GROUP BY {split_rollup_col}, pitch_type
-                """,
-                params,
+                """
+        def fetch_grouped_rows() -> List[Dict[str, Any]]:
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute(grouped_sql, params)
+                return [dict(r) for r in cur.fetchall()]
+
+        # The unscoped live Command+ query is capped at 15 seconds. Tested
+        # one-/two-year League and two-year INDY scopes returned no pitcher
+        # maps, so those requests already use the rollup fallback below.
+        # Keep one-year INDY and college lookups live: they do return data.
+        broad_command_days = (
+            365 if school_code == "LEAGUE" else 730 if school_code == "INDY" else 99999
+        )
+        skip_broad_command_live = (
+            school_code in {"LEAGUE", "INDY"}
+            and not selected_pitcher_keys
+            and start_date is not None
+            and end_date is not None
+            and (end_date - start_date).days >= broad_command_days
+            and (hand or "All") == "All"
+            and (batter_side or "All") == "All"
+        )
+        precomputed_command_live: Optional[Dict[str, Dict[str, float]]] = (
+            {} if skip_broad_command_live else None
+        )
+        run_command_parallel = (
+            school_code == "LEAGUE"
+            and split_clean in {"Pitcher", "Pitcher Team"}
+            and _college_level_norm(college_level_filter) == "All"
+            and not skip_broad_command_live
+        )
+        if run_command_parallel:
+            command_level = (
+                stuff2_level if stuff2_level in stuff2.LEVELS else "D1"
             )
-            grouped_rows = [dict(r) for r in cur.fetchall()]
-            _perf_log(
-                "pitching_rollup_fast_query",
-                school_code,
-                "league_rollup",
-                _rollup_perf_started,
-                split_by=split_clean,
-                source=rollup_source,
-                rows=len(grouped_rows),
-                pitchers_count=len(selected_pitcher_keys),
-                pitch_types_count=len(selected_pitch_types),
-                team_type=(team_type or "ALL"),
-                session_type=session_type_filter or "All",
-                hand=hand_norm or "All",
-                batter_side=batter_side_norm or "All",
-            )
+            parallel_started = time.perf_counter()
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                grouped_future = executor.submit(fetch_grouped_rows)
+                command_future = executor.submit(
+                    _command_by_pitcher_league_live,
+                    school_code=school_code,
+                    start_date=start_date,
+                    end_date=end_date,
+                    selected_pitcher_keys=selected_pitcher_keys,
+                    hand=hand,
+                    batter_side=batter_side,
+                    level=command_level,
+                )
+                grouped_rows = grouped_future.result()
+                precomputed_command_live = command_future.result()
+            if timings is not None:
+                timings["parallel_queries_ms"] = round((time.perf_counter() - parallel_started) * 1000.0, 1)
+        else:
+            grouped_rows = fetch_grouped_rows()
+        if timings is not None:
+            timings["grouped_query_ms"] = round((time.perf_counter() - _rollup_perf_started) * 1000.0, 1)
+        _perf_log(
+            "pitching_rollup_fast_query",
+            school_code,
+            "league_rollup",
+            _rollup_perf_started,
+            split_by=split_clean,
+            source=rollup_source,
+            rows=len(grouped_rows),
+            pitchers_count=len(selected_pitcher_keys),
+            pitch_types_count=len(selected_pitch_types),
+            team_type=(team_type or "ALL"),
+            session_type=session_type_filter or "All",
+            hand=hand_norm or "All",
+            batter_side=batter_side_norm or "All",
+        )
     except Exception as exc:
         logger.warning("league rollup fast-path aggregate failed: %s", exc)
         _perf_log(
@@ -11409,7 +11578,11 @@ def _try_pitching_overview_daily_rollup(
     # the pooled-sums approximation per-pitcher below) when a college level
     # filter is active, since _command_by_pitcher_league_live doesn't
     # replicate the rollup's level_bucket fallback-chain filter.
+    command_live_started = time.perf_counter()
     command_by_pitcher_live: Dict[str, Dict[str, float]] = (
+        precomputed_command_live
+        if precomputed_command_live is not None
+        else
         _command_by_pitcher_league_live(
             school_code=school_code,
             start_date=start_date,
@@ -11422,7 +11595,8 @@ def _try_pitching_overview_daily_rollup(
         if stuff2_split_is_per_pitcher and _college_level_norm(college_level_filter) == "All"
         else {}
     )
-
+    if timings is not None:
+        timings["command_live_ms"] = round((time.perf_counter() - command_live_started) * 1000.0, 1)
     # Per-pitcher base_shape_rows, keyed by split_value, merged into each
     # pitcher's own rows_for_split below so their Fastball/Sinker base is
     # available even when pitch_types filters both out of grouped_rows.
@@ -11443,6 +11617,44 @@ def _try_pitching_overview_daily_rollup(
             split_items.sort(key=lambda kv: _year_or_month_split_sort_key(kv[0]))
     else:
         split_items.sort(key=lambda kv: (-sum(int(r.get("pitches") or 0) for r in kv[1]), str(kv[0])))
+
+    stuff2_by_split: Dict[str, Dict[str, float]] = {}
+    if stuff2_split_is_per_pitcher:
+        stuff2_batch_started = time.perf_counter()
+        stuff2_groups = {
+            str(label): _stuff2_averages_from_rollup_rows(
+                [*rows_for_split, *base_shape_rows_by_split.get(str(label), [])]
+            )
+            for label, rows_for_split in split_items
+        }
+        if split_clean != "All":
+            stuff2_groups["All"] = _stuff2_averages_from_rollup_rows(
+                [*grouped_rows, *base_shape_rows_by_split.get("All", [])]
+            )
+        stuff2_by_split = stuff2.compute_stuff2_from_rollup_averages_batch(
+            stuff2_groups, stuff2_level_clean
+        )
+        if timings is not None:
+            timings["stuff2_batch_ms"] = round((time.perf_counter() - stuff2_batch_started) * 1000.0, 1)
+
+    command_fallback_by_split: Dict[str, Dict[str, float]] = {}
+    if stuff2_split_is_per_pitcher:
+        command_batch_started = time.perf_counter()
+        fallback_groups: Dict[str, List[Dict[str, Any]]] = {}
+        for label, rows_for_split in split_items:
+            if not command_by_pitcher_live.get(_normalize_name_key(str(label))):
+                fallback_groups[str(label)] = _command_buckets_from_rollup_rows(
+                    [*rows_for_split, *base_shape_rows_by_split.get(str(label), [])]
+                )
+        if split_clean != "All":
+            fallback_groups["All"] = _command_buckets_from_rollup_rows(
+                [*grouped_rows, *base_shape_rows_by_split.get("All", [])]
+            )
+        command_fallback_by_split = command.compute_command_from_rollup_averages_batch(
+            fallback_groups, stuff2_level_clean
+        )
+        if timings is not None:
+            timings["command_batch_ms"] = round((time.perf_counter() - command_batch_started) * 1000.0, 1)
 
     def _build_common_row(label: str, rows_for_split: List[Dict[str, Any]]) -> Dict[str, Any]:
         pitches = int(sum(int(r.get("pitches") or 0) for r in rows_for_split))
@@ -11642,13 +11854,12 @@ def _try_pitching_overview_daily_rollup(
         # only their own arsenal, not a value pooled across every pitcher
         # in the leaderboard.
         stuff2_avg_local: Optional[float] = None
+        local_model_started = time.perf_counter()
         if split_clean == "Pitch Types" and str(label) != "All":
             stuff2_avg_local = stuff2_global_by_type.get(str(label), None)
         else:
             stuff2_lookup = (
-                _stuff2_by_type_from_rollup_rows(
-                    [*rows_for_split, *base_shape_rows_by_split.get(str(label), [])], stuff2_level_clean
-                )
+                stuff2_by_split.get(str(label), {})
                 if stuff2_split_is_per_pitcher
                 else stuff2_global_by_type
             )
@@ -11662,6 +11873,8 @@ def _try_pitching_overview_daily_rollup(
                     stuff2_num += float(pt_stuff2) * pt_pitches
                     stuff2_den += pt_pitches
             stuff2_avg_local = (stuff2_num / stuff2_den) if stuff2_den > 0 else None
+        if timings is not None:
+            timings["stuff2_rows_ms"] = timings.get("stuff2_rows_ms", 0.0) + (time.perf_counter() - local_model_started) * 1000.0
 
         # Command+: identical lookup pattern to Stuff+ immediately above,
         # except per-pitcher splits prefer command_by_pitcher_live (fine-
@@ -11671,14 +11884,13 @@ def _try_pitching_overview_daily_rollup(
         # empty (a college level filter is active, or this label is a team
         # code from a "Pitcher Team" split rather than a pitcher name).
         command_avg_local: Optional[float] = None
+        local_model_started = time.perf_counter()
         if split_clean == "Pitch Types" and str(label) != "All":
             command_avg_local = command_global_by_type.get(str(label), None)
         else:
             command_lookup = (
                 (command_by_pitcher_live.get(_normalize_name_key(str(label)))
-                 or _command_by_type_from_rollup_rows(
-                     [*rows_for_split, *base_shape_rows_by_split.get(str(label), [])], stuff2_level_clean
-                 ))
+                 or command_fallback_by_split.get(str(label), {}))
                 if stuff2_split_is_per_pitcher
                 else command_global_by_type
             )
@@ -11692,6 +11904,8 @@ def _try_pitching_overview_daily_rollup(
                     command_num += float(pt_command) * pt_pitches
                     command_den += pt_pitches
             command_avg_local = (command_num / command_den) if command_den > 0 else None
+        if timings is not None:
+            timings["command_rows_ms"] = timings.get("command_rows_ms", 0.0) + (time.perf_counter() - local_model_started) * 1000.0
 
         return {
             split_col_name: label,
@@ -11811,24 +12025,17 @@ def _try_pitching_overview_daily_rollup(
             **_sep_stat_columns_for_split(rows_for_split),
         }
 
+    split_rows_started = time.perf_counter()
     for split_value, rows_for_split in split_items:
         table_rows.append(_build_common_row(split_value, rows_for_split))
 
     if split_clean != "All":
         table_rows.append(_build_common_row("All", grouped_rows))
-    # Defensive fix: ensure final All-row advanced metrics are sourced from the
-    # full grouped rollup set (not stale/transient row state).
-    row_all = next(
-        (
-            row for row in table_rows
-            if str(row.get(split_col_name) or "").strip().lower() in {"all", "all (pinned)"}
-        ),
-        None,
-    )
-    if row_all is not None:
-        all_row_metrics = _build_common_row("All", grouped_rows)
-        for metric in ("ERA", "FIP", "xFIP", "SIERA"):
-            row_all[metric] = all_row_metrics.get(metric)
+    # The All row above is already built from the full grouped_rows set.
+    # Rebuilding it here used to repeat all model and aggregate work without
+    # changing ERA/FIP/xFIP/SIERA (or any other value).
+    if timings is not None:
+        timings["split_rows_ms"] = round((time.perf_counter() - split_rows_started) * 1000.0, 1)
     table_rows = _apply_pitch_count_row_threshold(
         table_rows,
         parsed_pc_min,
@@ -13459,6 +13666,7 @@ def _try_pro_pitching_overview_rollup(
     include_chart_points: bool,
     include_row_pitches: bool,
     include_trend_rows: bool,
+    timings: Optional[Dict[str, float]] = None,
 ) -> Optional[PitchingOverviewResponse]:
     _rollup_perf_started = time.perf_counter()
     if school_code != "PRO":
@@ -13640,7 +13848,10 @@ def _try_pro_pitching_overview_rollup(
 
     # Do not block request path on a potentially long PRO rollup rebuild.
     # Serve from current rollup snapshot and refresh in background when needed.
+    pro_kick_started = time.perf_counter()
     _kick_pro_rollup_refresh_background()
+    if timings is not None:
+        timings["refresh_kick_ms"] = round((time.perf_counter() - pro_kick_started) * 1000.0, 1)
     split_expr, split_col_name = split_conf
     where = ["school_code = 'PRO'"]
     params: Dict[str, Any] = {}
@@ -13888,6 +14099,9 @@ def _try_pro_pitching_overview_rollup(
                 trend_rows=[],
             )
     try:
+        grouped_query_started = time.perf_counter()
+        if timings is not None:
+            timings["prequery_ms"] = round((grouped_query_started - _rollup_perf_started) * 1000.0, 1)
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
                 f"""
@@ -13993,6 +14207,8 @@ def _try_pro_pitching_overview_rollup(
                 params,
             )
             grouped_rows = [dict(r) for r in cur.fetchall()]
+            if timings is not None:
+                timings["grouped_query_ms"] = round((time.perf_counter() - grouped_query_started) * 1000.0, 1)
             _perf_log(
                 "pitching_rollup_fast_query",
                 school_code,
@@ -14205,6 +14421,7 @@ def _try_pro_pitching_overview_rollup(
     # averaged across every OTHER pitcher in the result set too -- instead,
     # each pitcher's own map is computed just-in-time inside
     # _build_common_row from that pitcher's own rows_for_split.
+    model_stage_started = time.perf_counter()
     stuff2_level_clean = _pro_level_norm(level_filter)
     if stuff2_level_clean == "All":
         stuff2_level_clean = "MLB"
@@ -14232,6 +14449,20 @@ def _try_pro_pitching_overview_rollup(
     # bucketed live query instead (still fast: single-digit ms per pitcher via
     # the pitcher_norm_date index, ~4s worst case for an unfiltered whole-
     # history request). See _command_by_pitcher_pro_live's docstring.
+    if timings is not None:
+        timings["stuff_model_ms"] = round((time.perf_counter() - model_stage_started) * 1000.0, 1)
+    command_live_started = time.perf_counter()
+    skip_broad_pro_command_live = (
+        stuff2_split_is_per_pitcher
+        and not selected_pitcher_keys
+        and start_date is not None
+        and end_date is not None
+        and (end_date - start_date).days >= 730
+        and _pro_level_norm(level_filter) == "All"
+        and _pro_team_code_from_value(team_type or "") in {"", "ALL"}
+        and (hand or "All") == "All"
+        and (batter_side or "All") == "All"
+    )
     command_by_pitcher_live: Dict[str, Dict[str, float]] = (
         _command_by_pitcher_pro_live(
             start_date=start_date,
@@ -14243,9 +14474,12 @@ def _try_pro_pitching_overview_rollup(
             batter_side=batter_side,
             level=stuff2_level_clean,
         )
-        if stuff2_split_is_per_pitcher
+        if stuff2_split_is_per_pitcher and not skip_broad_pro_command_live
         else {}
     )
+    if timings is not None:
+        timings["model_stage_ms"] = round((time.perf_counter() - model_stage_started) * 1000.0, 1)
+        timings["command_live_ms"] = round((time.perf_counter() - command_live_started) * 1000.0, 1)
 
     # Per-pitcher base_shape_rows, keyed by split_value, merged into each
     # pitcher's own rows_for_split below so their Fastball/Sinker base is
@@ -14383,12 +14617,11 @@ def _try_pro_pitching_overview_rollup(
                     {split_value_expr} AS split_value,
                     REGEXP_REPLACE(LOWER(COALESCE(NULLIF(TRIM(pe.pitcher), ''), 'unknown')), '[^a-z0-9]+', '', 'g') AS pitcher_norm,
                     COALESCE(
-                      NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'game_pk', '')), ''),
-                      NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'game_id', '')), ''),
+                      NULLIF(TRIM(pe.game_pk::text), ''),
                       ('d:' || pe.session_date::text)
                     ) AS game_key,
-                    NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'official_earned_runs', ''), '[-+]?[0-9]+'))[1], '')::double precision AS official_er,
-                    NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'official_outs_recorded', ''), '[-+]?[0-9]+'))[1], '')::double precision AS official_outs
+                    pe.official_earned_runs::double precision AS official_er,
+                    pe.official_outs_recorded::double precision AS official_outs
                   FROM public.pro_pitch_events pe
                   WHERE {official_where_sql}
                 ),
@@ -14782,11 +15015,17 @@ def _try_pro_pitching_overview_rollup(
             **_sep_stat_columns_for_split(rows_for_split),
         }
 
+    split_rows_started = time.perf_counter()
     for split_value, rows_for_split in split_items:
         table_rows.append(_build_common_row(split_value, rows_for_split))
+    if timings is not None:
+        timings["split_rows_ms"] = round((time.perf_counter() - split_rows_started) * 1000.0, 1)
 
     if split_clean != "All":
+        all_row_started = time.perf_counter()
         table_rows.append(_build_common_row("All", grouped_rows))
+        if timings is not None:
+            timings["all_row_ms"] = round((time.perf_counter() - all_row_started) * 1000.0, 1)
     table_rows = _apply_pitch_count_row_threshold(
         table_rows,
         parsed_pc_min,
@@ -17421,7 +17660,12 @@ END
 
 
 def _pro_norm_token(value: Any) -> str:
-    normalized = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+    return _pro_norm_token_cached(str(value or ""))
+
+
+@lru_cache(maxsize=4096)
+def _pro_norm_token_cached(raw: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "_", raw.strip().lower()).strip("_")
     if normalized == "swinging_strike_blocked":
         return "swinging_strike"
     return normalized
@@ -22512,6 +22756,7 @@ def home_trends(
 
 @app.get("/v1/pitching/overview", response_model=PitchingOverviewResponse)
 def pitching_overview(
+    response: Response,
     school_code: str = Query(..., min_length=1),
     start_date: Optional[date] = Query(default=None),
     end_date: Optional[date] = Query(default=None),
@@ -23025,10 +23270,7 @@ def pitching_overview(
         "zone_dx": ZONE_DX,
         "zone_dy": ZONE_DY,
     }
-    overview_cache_key = _overview_cache_key(
-        "pitching_overview",
-        school_code,
-        {
+    overview_cache_payload = {
             "school_code": school_code,
             "start_date": start_date,
             "end_date": end_date,
@@ -23079,8 +23321,28 @@ def pitching_overview(
             "force_raw": force_raw,
             "post_edit_refresh": post_edit_refresh,
             "metrics_version": "correlation-angle-precision-v4",
-        },
-    )
+    }
+    overview_cache_key = _overview_cache_key("pitching_overview", school_code, overview_cache_payload)
+    # A raw table computes every metric regardless of the displayed mode or
+    # saved Custom columns. Reuse those exact rows when only the layout changes.
+    raw_table_cache_payload = dict(overview_cache_payload)
+    raw_table_cache_payload.pop("table_mode", None)
+    raw_table_cache_payload.pop("custom_columns", None)
+    # Keep metric families that can trigger companion calculations distinct.
+    # A reordered Custom table may reuse rows; selecting new SEP data may not.
+    raw_table_cache_payload["sep_columns"] = sorted(_requested_sep_columns(selected_custom_columns))
+    raw_table_cache_key = _overview_cache_key("pitching_raw_table", school_code, raw_table_cache_payload)
+    generic_rollup_cache_payload = dict(overview_cache_payload)
+    generic_rollup_cache_payload.pop("table_mode", None)
+    generic_rollup_cache_payload.pop("custom_columns", None)
+    # The generic rollup fetches SEP companion metrics only when requested;
+    # keep that request set in the alias key so a new SEP table never reuses
+    # rows that did not calculate those columns.
+    generic_rollup_cache_payload["sep_columns"] = sorted(_requested_sep_columns(selected_custom_columns))
+    generic_rollup_cache_key = _overview_cache_key("pitching_generic_rollup_table", school_code, generic_rollup_cache_payload)
+    pro_reorder_cache_payload = dict(overview_cache_payload)
+    pro_reorder_cache_payload["custom_columns"] = sorted(_normalize_custom_columns(selected_custom_columns))
+    pro_reorder_cache_key = _overview_cache_key("pitching_pro_custom_reorder", school_code, pro_reorder_cache_payload)
     use_pro_chart_cache = school_code == "PRO" and chart_only and include_chart_points
     if use_pro_chart_cache:
         cached_pro_chart = _pro_chart_cache_get(overview_cache_key)
@@ -23107,7 +23369,57 @@ def pitching_overview(
             include_chart_points=include_chart_points,
         )
         return cached_overview
+    cached_raw_table = _overview_cache_get(raw_table_cache_key) if not chart_only else None
+    if isinstance(cached_raw_table, PitchingOverviewResponse):
+        cached_columns, _, _ = _build_dynamic_table([], table_mode, split_by, selected_custom_columns)
+        cached_layout = cached_raw_table.model_copy(
+            update={"table_mode": table_mode, "table_columns": cached_columns}
+        )
+        _overview_cache_set(overview_cache_key, cached_layout)
+        _perf_log(
+            "pitching_overview",
+            school_code,
+            "raw_table_layout_cache_hit",
+            _perf_started,
+            cache_hit=True,
+            split_by=split_by,
+            table_mode=table_mode,
+        )
+        return cached_layout
+    cached_generic_rollup = (
+        _overview_cache_get(generic_rollup_cache_key)
+        if school_code != "PRO" and table_mode != "Live" and not chart_only
+        else None
+    )
+    if isinstance(cached_generic_rollup, PitchingOverviewResponse) and cached_generic_rollup.table_columns:
+        cached_columns, _, _ = _build_dynamic_table([], table_mode, split_by, selected_custom_columns)
+        cached_layout = cached_generic_rollup.model_copy(
+            update={"table_mode": table_mode, "table_columns": cached_columns}
+        )
+        _overview_cache_set(overview_cache_key, cached_layout)
+        _perf_log(
+            "pitching_overview",
+            school_code,
+            "generic_rollup_layout_cache_hit",
+            _perf_started,
+            cache_hit=True,
+            split_by=split_by,
+        )
+        return cached_layout
+    cached_pro_reorder = (
+        _overview_cache_get(pro_reorder_cache_key)
+        if school_code == "PRO" and table_mode == "Custom" and not chart_only
+        else None
+    )
+    if isinstance(cached_pro_reorder, PitchingOverviewResponse) and cached_pro_reorder.table_columns:
+        reordered_columns = [cached_pro_reorder.table_columns[0], *_normalize_custom_columns(selected_custom_columns)]
+        cached_layout = cached_pro_reorder.model_copy(update={"table_columns": reordered_columns})
+        _overview_cache_set(overview_cache_key, cached_layout)
+        _perf_log("pitching_overview", school_code, "pro_custom_reorder_cache_hit", _perf_started, cache_hit=True)
+        return cached_layout
     if school_code == "PRO" and not force_raw:
+        rollup_started = time.perf_counter()
+        rollup_timings: Dict[str, float] = {}
         pro_rollup_fast = _try_pro_pitching_overview_rollup(
             school_code=school_code,
             start_date=start_date,
@@ -23149,9 +23461,15 @@ def pitching_overview(
             include_chart_points=include_chart_points,
             include_row_pitches=include_row_pitches,
             include_trend_rows=include_trend_rows,
+            timings=rollup_timings,
         )
+        response.headers["x-dashboard-rollup-ms"] = str(round((time.perf_counter() - rollup_started) * 1000.0, 1))
+        for stage, elapsed_ms in rollup_timings.items():
+            response.headers[f"x-dashboard-rollup-{stage.replace('_', '-')}"] = str(elapsed_ms)
         if pro_rollup_fast is not None:
             _overview_cache_set(overview_cache_key, pro_rollup_fast)
+            if table_mode == "Custom" and not chart_only:
+                _overview_cache_set(pro_reorder_cache_key, pro_rollup_fast)
             if use_pro_chart_cache:
                 _pro_chart_cache_set(overview_cache_key, pro_rollup_fast)
             _perf_log(
@@ -23211,6 +23529,8 @@ def pitching_overview(
             chart_only=chart_only,
         )
         _overview_cache_set(overview_cache_key, response_payload)
+        if table_mode == "Custom" and not chart_only:
+            _overview_cache_set(pro_reorder_cache_key, response_payload)
         if use_pro_chart_cache:
             _pro_chart_cache_set(overview_cache_key, response_payload)
         _perf_log(
@@ -23271,6 +23591,8 @@ def pitching_overview(
             chart_only=chart_only,
         )
         _overview_cache_set(overview_cache_key, response_payload)
+        if table_mode == "Custom" and not chart_only:
+            _overview_cache_set(pro_reorder_cache_key, response_payload)
         if use_pro_chart_cache:
             _pro_chart_cache_set(overview_cache_key, response_payload)
         _perf_log(
@@ -23308,6 +23630,8 @@ def pitching_overview(
     )
     rollup_fast_response: Optional[PitchingOverviewResponse] = None
     if should_try_league_rollup_fast:
+        rollup_started = time.perf_counter()
+        league_rollup_timings: Dict[str, float] = {}
         rollup_fast_response = _try_pitching_overview_daily_rollup(
             school_code=school_code,
             start_date=start_date,
@@ -23351,9 +23675,15 @@ def pitching_overview(
             include_row_pitches=include_row_pitches,
             include_trend_rows=include_trend_rows,
             stuff2_level=stuff2_level,
+            timings=league_rollup_timings,
         )
+        response.headers["x-dashboard-rollup-ms"] = str(round((time.perf_counter() - rollup_started) * 1000.0, 1))
+        for stage, elapsed_ms in league_rollup_timings.items():
+            response.headers[f"x-dashboard-rollup-{stage.replace('_', '-')}"] = str(elapsed_ms)
     if rollup_fast_response is not None:
         _overview_cache_set(overview_cache_key, rollup_fast_response)
+        if table_mode != "Live" and not chart_only:
+            _overview_cache_set(generic_rollup_cache_key, rollup_fast_response)
         _perf_log(
             "pitching_overview",
             school_code,
@@ -23847,10 +24177,13 @@ def pitching_overview(
     try:
         with get_conn() as conn, conn.cursor() as cur:
             video_map_table = None
+            no_video_filter = (with_video or "").strip().lower() not in {"yes", "no"}
             use_video_map_join = not (
-                chart_only
-                and include_chart_points
-                and (with_video or "").strip().lower() not in {"yes", "no"}
+                no_video_filter
+                and (
+                    (chart_only and include_chart_points)
+                    or (not include_chart_points and not include_row_pitches and not include_trend_rows)
+                )
             )
             # Prefer school-scoped table first so sites like PCU read their dedicated
             # mappings (video_map_pcu). TRIAL uses a materialized cache copied from
@@ -23955,8 +24288,9 @@ def pitching_overview(
                 .replace("__PITCH_NUMBER_SQL__", pitch_number_sql)
                 .replace("__CUSTOM_LABEL_EXPR__", _custom_label_col_expr())
             )
+            query_resolved = _replace_pitch_event_json_field_reads(query_resolved)
 
-            cur.execute(
+            raw_rows_sql = (
                 query_resolved
                 + """
                 SELECT
@@ -24021,12 +24355,47 @@ def pitching_overview(
                     "ORDER BY session_date DESC, id DESC LIMIT %(chart_source_scan_limit)s::int"
                     if chart_source_scan_limit is not None
                     else ""
-                ),
-                params,
+                )
             )
+            use_date_chunks = (
+                school_code == "PCU"
+                and start_date is not None
+                and end_date is not None
+                and (end_date - start_date).days >= 365
+                and not chart_only
+                and not include_chart_points
+                and not include_row_pitches
+                and not include_trend_rows
+                and not need_prev_counts
+                and not need_pitch_number
+                and not has_cross_school_player_link
+            )
+            raw_fetch_started = time.perf_counter()
+            if use_date_chunks:
+                date_chunks = []
+                chunk_start = start_date
+                while chunk_start <= end_date:
+                    chunk_end = min(chunk_start + timedelta(days=89), end_date)
+                    date_chunks.append((chunk_start, chunk_end))
+                    chunk_start = chunk_end + timedelta(days=1)
+
+                def fetch_date_chunk(bounds: tuple[date, date]) -> list[dict[str, Any]]:
+                    chunk_params = dict(params)
+                    chunk_params["start_date"], chunk_params["end_date"] = bounds
+                    with get_conn() as chunk_conn, chunk_conn.cursor() as chunk_cur:
+                        chunk_cur.execute(raw_rows_sql, chunk_params)
+                        return chunk_cur.fetchall()
+
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    raw_rows = [row for batch in executor.map(fetch_date_chunk, date_chunks) for row in batch]
+            else:
+                cur.execute(raw_rows_sql, params)
+                raw_rows = cur.fetchall()
+            raw_fetch_ms = round((time.perf_counter() - raw_fetch_started) * 1000.0, 1)
+            raw_assembly_started = time.perf_counter()
             table_source_rows = [
                 row
-                for row in cur.fetchall()
+                for row in raw_rows
                 if school_code in UNCLASSIFIED_PITCH_VISIBLE_SCHOOL_CODES
                 or str(row.get("pitch_type") or "") != "Undefined"
             ]
@@ -24035,23 +24404,29 @@ def pitching_overview(
                 school_code=school_code,
                 team_markers_norm=set(team_markers_norm or []),
             )
-            # When All pitchers are selected, split-by Inning should use true game inning.
-            use_game_inning_for_split = len(selected_pitcher_keys) == 0
-            for row in table_source_rows:
-                row["_inning_split_use_game_inning"] = use_game_inning_for_split
-                row["_venue_context"] = "pitching"
-            _annotate_game_inning(table_source_rows)
-            _annotate_times_through_order(table_source_rows)
+            if split_by == "Inning":
+                # Game/outing inning inference is only used for this split.
+                use_game_inning_for_split = len(selected_pitcher_keys) == 0
+                for row in table_source_rows:
+                    row["_inning_split_use_game_inning"] = use_game_inning_for_split
+                _annotate_game_inning(table_source_rows)
+                _annotate_times_through_order(table_source_rows)
+            elif split_by == "Times Through Order":
+                _annotate_times_through_order(table_source_rows)
+            if split_by == "Venue" or venue_filter:
+                for row in table_source_rows:
+                    row["_venue_context"] = "pitching"
             team_type_value = (team_type or "").strip() or "All"
-            table_source_rows = _filter_pitching_rows_by_team_type(
-                [dict(row) for row in table_source_rows],
-                team_type_value=team_type_value,
-                school_code=school_code,
-                team_pitcher_norm=set(team_norm or []),
-                campers_norm=set(campers_norm or []),
-                team_markers_norm=set(team_markers_norm or []),
-                linked_source_school_codes=set(source_school_codes) if has_cross_school_player_link else None,
-            )
+            if team_type_value not in {"", "All"}:
+                table_source_rows = _filter_pitching_rows_by_team_type(
+                    table_source_rows,
+                    team_type_value=team_type_value,
+                    school_code=school_code,
+                    team_pitcher_norm=set(team_norm or []),
+                    campers_norm=set(campers_norm or []),
+                    team_markers_norm=set(team_markers_norm or []),
+                    linked_source_school_codes=set(source_school_codes) if has_cross_school_player_link else None,
+                )
             if venue_filter:
                 table_source_rows = [row for row in table_source_rows if _venue_filter_match(row, venue_filter)]
 
@@ -24091,6 +24466,8 @@ def pitching_overview(
                 table_source_rows = list(table_source_rows) + pro_rows
 
             # Recompute aggregate/summary metrics from the post-filtered rows so team_type behavior
+            raw_prepare_ms = round((time.perf_counter() - raw_assembly_started) * 1000.0, 1)
+            overview_metrics_started = time.perf_counter()
             # is always exact, even if SQL team bucketing and route params diverge.
             total_pitches = len(table_source_rows)
             rel_speeds = [float(r["rel_speed"]) for r in table_source_rows if _is_num(r.get("rel_speed"))]
@@ -24210,6 +24587,8 @@ def pitching_overview(
                 }
                 for r in table_source_rows
             ]
+            overview_metrics_ms = round((time.perf_counter() - overview_metrics_started) * 1000.0, 1)
+            headline_stuff_started = time.perf_counter()
             # Headline avg_stuff now comes from the Stuff+ XGBoost model
             # (stuff2), collapsed from its per-pitch-type map the same way
             # the OLD formula's first return value was.
@@ -24228,6 +24607,9 @@ def pitching_overview(
                 if _avg_stuff2_by_type
                 else None
             )
+            headline_stuff_ms = round((time.perf_counter() - headline_stuff_started) * 1000.0, 1)
+            table_build_started = time.perf_counter()
+            table_timings: Dict[str, float] = {}
             table_columns, table_rows, available_table_columns = _build_dynamic_table(
                 table_source_rows,
                 table_mode,
@@ -24238,6 +24620,7 @@ def pitching_overview(
                     else (_college_level_norm(college_level_filter) if _college_level_norm(college_level_filter) != "All" else "D1")
                 ),
                 ctrl_level=(_college_level_norm(college_level_filter) if _college_level_norm(college_level_filter) != "All" else "D1"),
+                timings=table_timings,
             )
             table_rows = _apply_pitch_count_row_threshold(
                 table_rows,
@@ -24248,6 +24631,7 @@ def pitching_overview(
                 parsed_ip_min,
                 parsed_ip_max,
             )
+            table_build_ms = round((time.perf_counter() - table_build_started) * 1000.0, 1)
             pitch_type_rows = [
                 PitchTypeSummaryRow(
                     **row,
@@ -24255,36 +24639,28 @@ def pitching_overview(
                 )
                 for row in raw_pitch_type_rows
             ]
-            chart_source_rows = (
-                _latest_rows_for_chart_points(table_source_rows, parsed_chart_points_limit)
-                if parsed_chart_points_limit is not None
-                else _downsample_rows_for_chart_points(table_source_rows)
-            )
-            heatmap_limit = max(
-                100,
-                min(
-                    int(((parsed_chart_points_limit or 1000) * 3)),
-                    max(1000, len(table_source_rows)),
-                ),
-            )
-            heatmap_source_rows = _latest_rows_for_chart_points(table_source_rows, heatmap_limit)
-            chart_points = (
-                _build_chart_points(
-                    chart_source_rows,
-                    _avg_stuff2_by_type,
+            chart_points = []
+            heatmap_points = []
+            if include_chart_points:
+                chart_source_rows = (
+                    _latest_rows_for_chart_points(table_source_rows, parsed_chart_points_limit)
+                    if parsed_chart_points_limit is not None
+                    else _downsample_rows_for_chart_points(table_source_rows)
                 )
-                if include_chart_points
-                else []
-            )
-            heatmap_points = (
-                _build_chart_points(
+                heatmap_limit = max(
+                    100,
+                    min(
+                        int(((parsed_chart_points_limit or 1000) * 3)),
+                        max(1000, len(table_source_rows)),
+                    ),
+                )
+                heatmap_source_rows = _latest_rows_for_chart_points(table_source_rows, heatmap_limit)
+                chart_points = _build_chart_points(chart_source_rows, _avg_stuff2_by_type)
+                heatmap_points = _build_chart_points(
                     heatmap_source_rows,
                     _avg_stuff2_by_type,
                     max_points=max(1, len(heatmap_source_rows)),
                 )
-                if include_chart_points
-                else []
-            )
             row_pitches_by_key = (
                 _build_row_pitch_map(table_source_rows, split_by, _avg_stuff2_by_type)
                 if include_row_pitches
@@ -24343,6 +24719,16 @@ def pitching_overview(
             trend_rows=trend_rows,
         )
         _overview_cache_set(overview_cache_key, response_payload)
+        if not chart_only:
+            _overview_cache_set(raw_table_cache_key, response_payload)
+        response.headers["x-dashboard-raw-fetch-ms"] = str(raw_fetch_ms)
+        response.headers["x-dashboard-raw-assembly-ms"] = str(round((time.perf_counter() - raw_assembly_started) * 1000.0, 1))
+        response.headers["x-dashboard-raw-prepare-ms"] = str(raw_prepare_ms)
+        response.headers["x-dashboard-overview-metrics-ms"] = str(overview_metrics_ms)
+        response.headers["x-dashboard-headline-stuff-ms"] = str(headline_stuff_ms)
+        response.headers["x-dashboard-table-build-ms"] = str(table_build_ms)
+        for stage, elapsed_ms in table_timings.items():
+            response.headers[f"x-dashboard-table-{stage.replace('_', '-')}"] = str(elapsed_ms)
         _perf_log(
             "pitching_overview",
             school_code,
@@ -25881,7 +26267,12 @@ def _hit_result_label(pitch_call: Any, play_result: Any) -> str:
 
 
 def _canonical_play_result(play_result: Any) -> str:
-    raw = str(play_result or "").strip()
+    return _canonical_play_result_cached(str(play_result or ""))
+
+
+@lru_cache(maxsize=4096)
+def _canonical_play_result_cached(raw_value: str) -> str:
+    raw = raw_value.strip()
     if not raw:
         return ""
     compact = re.sub(r"[^a-z0-9]", "", raw.lower())
@@ -26063,7 +26454,12 @@ def _venue_filter_match(row: Dict[str, Any], venue_filter: Optional[str]) -> boo
 
 
 def _korbb_bucket(value: Any) -> str:
-    raw = str(value or "").strip().lower()
+    return _korbb_bucket_cached(str(value or ""))
+
+
+@lru_cache(maxsize=4096)
+def _korbb_bucket_cached(raw_value: str) -> str:
+    raw = raw_value.strip().lower()
     if not raw:
         return ""
     compact = re.sub(r"[^a-z0-9]", "", raw)

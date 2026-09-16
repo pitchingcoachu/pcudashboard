@@ -57,6 +57,11 @@ export async function POST(request: Request) {
     carbsG: body.carbsG != null ? Number(body.carbsG) : null,
     fatG: body.fatG != null ? Number(body.fatG) : null,
     notes: body.notes != null ? String(body.notes) : null,
+    foodName: body.foodName != null ? String(body.foodName) : null,
+    brandName: body.brandName != null ? String(body.brandName) : null,
+    servingDescription: body.servingDescription != null ? String(body.servingDescription) : null,
+    quantity: body.quantity != null ? Number(body.quantity) : null,
+    externalFoodId: body.externalFoodId != null ? String(body.externalFoodId) : null,
   });
 
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });

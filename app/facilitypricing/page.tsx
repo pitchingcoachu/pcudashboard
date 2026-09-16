@@ -48,6 +48,8 @@ const programmingFeatures: FeatureGroup[] = [
       'Player Notes',
       'Upload videos, photos, PDF\'s',
       'Video breakdown editor',
+      'AI Transcription',
+      'Nutrition Tracking',
     ],
   },
 ];

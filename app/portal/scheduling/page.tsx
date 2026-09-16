@@ -19,7 +19,7 @@ import PortalUserMenu from '../user-menu';
 export default async function SessionSchedulingPage() {
   const session = await requirePortalSession();
   const selectedSchool = resolveDashboardSchoolCode(session);
-  if (!['PCU', 'GUND'].includes(selectedSchool.trim().toUpperCase())) redirect('/portal/dashboard');
+  if (selectedSchool.trim().toUpperCase() !== 'PCU') redirect('/portal/dashboard');
   const brand = resolveSchoolBrand(selectedSchool);
   const schoolName = brand.schoolCode === 'PCU' ? 'PCU' : brand.logoAlt.replace(/\s+logo$/i, '').trim();
 

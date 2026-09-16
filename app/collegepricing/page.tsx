@@ -45,6 +45,8 @@ const programmingItems = [
   'Video breakdown editor',
   'PCU exercise and drill library',
   'Access to MLB and college data',
+  'AI Transcription',
+  'Nutrition Tracking',
 ];
 
 const programmingFeatures = [

@@ -42,6 +42,14 @@ const nextConfig: NextConfig = {
       'public/mediapipe/**/*',
     ],
   },
+  // Automated custom reports render the saved dashboard report in headless
+  // Chromium. The package is externalized above because it ships native
+  // binaries, so explicitly trace those binaries into both server functions
+  // that can execute an automation.
+  outputFileTracingIncludes: {
+    '/api/cron/report-automations': ['./node_modules/@sparticuz/chromium/bin/**/*'],
+    '/api/report-automations/run': ['./node_modules/@sparticuz/chromium/bin/**/*'],
+  },
 };
 
 export default nextConfig;

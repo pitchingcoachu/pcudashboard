@@ -6543,8 +6543,10 @@ export default function PitchingSuite({
     const isHeatMapsPage = dashboardPage === 'HeatMaps';
     const shouldDeferCharts = isSummaryPage || isTrendPage;
     const shouldLoadLeagueCharts = isLeague && !isLeagueAllSelection && !shouldForceLeagueFastTable;
+    // Non-PRO school overview APIs already suppress row pitches. Requesting
+    // them here only prevents the table-only route from taking its light path.
     const shouldIncludeRowPitches =
-      (!isLeague && !isPro) || (isLeague && !hideLeagueSummaryCharts && !shouldForceLeagueFastTable && leagueWindowDays <= 14);
+      isLeague && !hideLeagueSummaryCharts && !shouldForceLeagueFastTable && leagueWindowDays <= 14;
     const shouldForceProFastSummary = isPro && isSummaryPage && !selectedSinglePitcher;
     let shouldScheduleCompanionCharts = false;
     if (shouldForceProFastSummary) {

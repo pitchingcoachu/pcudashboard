@@ -69,7 +69,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
   const isStaff = session.role === 'admin' || session.role === 'coach';
   const schoolOptions = await resolveSessionDashboardSchoolOptions(session);
   const selectedSchool = resolveDashboardSchoolCode(session);
-  const canAccessSessionBooking = ['PCU', 'GUND'].includes(String(selectedSchool).trim().toUpperCase());
+  const canAccessSessionBooking = String(selectedSchool).trim().toUpperCase() === 'PCU';
   const canAccessProgramming = await canUseProgrammingData(session);
   if (session.role === 'player' && !canAccessProgramming) {
     redirect('/portal/dashboard');

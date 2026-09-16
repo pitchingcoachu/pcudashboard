@@ -42,6 +42,8 @@ jobs:
       CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
       CLOUDINARY_UPLOAD_PRESET: ${{ secrets.CLOUDINARY_UPLOAD_PRESET }}
       CLOUDINARY_FOLDER: trackman
+      TRACKMAN_SYNC_CALLBACK_TOKEN: ${{ secrets.TRACKMAN_SYNC_CALLBACK_TOKEN }}
+      TRACKMAN_SYNC_CALLBACK_URL: https://www.pcudashboard.com/api/automation/trackman-sync-complete
 
     steps:
       - name: Check out pcudashboard
@@ -112,3 +114,19 @@ jobs:
             --keep-pooler \
             --batch-days 1 \
             --retries 30
+
+      - name: Report sync success
+        if: success()
+        run: |
+          curl -sf -X POST "${TRACKMAN_SYNC_CALLBACK_URL}" \
+            -H "Authorization: Bearer ${TRACKMAN_SYNC_CALLBACK_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{"schoolCode":"PCU","status":"success"}'
+
+      - name: Report sync failure
+        if: failure()
+        run: |
+          curl -sf -X POST "${TRACKMAN_SYNC_CALLBACK_URL}" \
+            -H "Authorization: Bearer ${TRACKMAN_SYNC_CALLBACK_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{"schoolCode":"PCU","status":"failed"}'

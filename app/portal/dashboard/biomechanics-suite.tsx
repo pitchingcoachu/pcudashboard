@@ -119,6 +119,31 @@ const BIOMECH_TABLE_COLUMNS = [
   'Stride Direction (deg)',
 ] as const;
 
+type CustomTableConfig = {
+  id: number;
+  name: string;
+  columns: string[];
+  createdByEmail?: string | null;
+  visibility?: 'private' | 'organization' | 'global';
+  createdAt: string;
+  updatedAt: string;
+};
+
+function customTableOptionLabel(item: CustomTableConfig): string {
+  const name = String(item.name ?? '').trim();
+  const creator = String(item.createdByEmail ?? '').trim();
+  return creator ? `${name} (${creator})` : name;
+}
+
+function reorderColumns(columns: string[], fromIndex: number, toIndex: number): string[] {
+  if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return columns;
+  if (fromIndex >= columns.length || toIndex >= columns.length) return columns;
+  const next = [...columns];
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  return next;
+}
+
 const EXCLUDED_SINGLE_PLAYER_TAGS = new Set([
   'untagged',
   '5oz',
@@ -1279,7 +1304,20 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
   const [showLeaderboardCorrelation, setShowLeaderboardCorrelation] = useState<boolean>(false);
   const [pageTab, setPageTab] = useState<BiomechPageTab>('summary');
   const [leaderboardViewMode, setLeaderboardViewMode] = useState<LeaderboardViewMode>('individual');
-  const [showAllSessions, setShowAllSessions] = useState<boolean>(true);
+  const [tableMode, setTableMode] = useState<'Summary' | 'Custom'>('Summary');
+  const [customTables, setCustomTables] = useState<CustomTableConfig[]>([]);
+  const [loadingCustomTables, setLoadingCustomTables] = useState<boolean>(false);
+  const [selectedCustomTableId, setSelectedCustomTableId] = useState<number | null>(null);
+  const [customTableName, setCustomTableName] = useState<string>('');
+  const [customTableColumns, setCustomTableColumns] = useState<string[]>([]);
+  const [customTableVisibility, setCustomTableVisibility] = useState<'private' | 'organization' | 'global'>('organization');
+  const [customColumnToAdd, setCustomColumnToAdd] = useState<string>('');
+  const [dragColumnIndex, setDragColumnIndex] = useState<number | null>(null);
+  const [customSaveState, setCustomSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [customSaveMessage, setCustomSaveMessage] = useState<string>('');
+  // Wide date ranges should not also trigger an unbounded snapshot on first load.
+  // Coaches can still explicitly switch to All Sessions when they need it.
+  const [showAllSessions, setShowAllSessions] = useState<boolean>(false);
   const [isExportingSummaryPdf, setIsExportingSummaryPdf] = useState<boolean>(false);
   const [isExportingComparePdf, setIsExportingComparePdf] = useState<boolean>(false);
   const [isRecordingSummaryVideo, setIsRecordingSummaryVideo] = useState<boolean>(false);
@@ -1378,6 +1416,83 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
     setSelectedPitchStrideDirectionIn(typeof meta?.strideDirectionIn === 'number' ? meta.strideDirectionIn : null);
     setSelectedPitchHasVideo(Boolean(meta?.hasVideo));
     setScrubTime(null);
+  };
+
+  const loadCustomTables = async () => {
+    setLoadingCustomTables(true);
+    setCustomSaveState('idle');
+    setCustomSaveMessage('');
+    try {
+      const response = await fetch('/api/dashboard/pitching/custom-tables', { cache: 'no-store' });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string; items?: CustomTableConfig[] };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to load custom tables.');
+      setCustomTables(Array.isArray(payload.items) ? payload.items : []);
+    } catch (requestError) {
+      setCustomSaveState('error');
+      setCustomSaveMessage(requestError instanceof Error ? requestError.message : 'Failed to load custom tables.');
+    } finally {
+      setLoadingCustomTables(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadCustomTables();
+  }, []);
+
+  const saveCustomTable = async () => {
+    const name = customTableName.trim();
+    if (!name) {
+      setCustomSaveState('error');
+      setCustomSaveMessage('Enter a table name first.');
+      return;
+    }
+    setCustomSaveState('saving');
+    setCustomSaveMessage('');
+    try {
+      const response = await fetch('/api/dashboard/pitching/custom-tables', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: selectedCustomTableId ?? undefined,
+          name,
+          columns: customTableColumns,
+          visibility: customTableVisibility,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string; item?: CustomTableConfig };
+      if (!response.ok || !payload.item) throw new Error(payload.error ?? 'Failed to save custom table.');
+      const saved = payload.item;
+      setCustomSaveState('saved');
+      setCustomSaveMessage('Custom table saved.');
+      setSelectedCustomTableId(saved.id);
+      setCustomTableName(saved.name);
+      setCustomTableColumns(saved.columns ?? []);
+      setCustomTableVisibility(saved.visibility ?? 'organization');
+      setCustomTables((current) => [saved, ...current.filter((row) => row.id !== saved.id)]);
+    } catch (requestError) {
+      setCustomSaveState('error');
+      setCustomSaveMessage(requestError instanceof Error ? requestError.message : 'Failed to save custom table.');
+    }
+  };
+
+  const deleteCustomTable = async () => {
+    if (!selectedCustomTableId) return;
+    setCustomSaveState('saving');
+    setCustomSaveMessage('');
+    try {
+      const response = await fetch(`/api/dashboard/pitching/custom-tables?id=${selectedCustomTableId}`, { method: 'DELETE' });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string; ok?: boolean };
+      if (!response.ok || !payload.ok) throw new Error(payload.error ?? 'Failed to delete custom table.');
+      setCustomTables((current) => current.filter((row) => row.id !== selectedCustomTableId));
+      setSelectedCustomTableId(null);
+      setCustomTableName('');
+      setCustomTableColumns([]);
+      setCustomSaveState('saved');
+      setCustomSaveMessage('Custom table deleted.');
+    } catch (requestError) {
+      setCustomSaveState('error');
+      setCustomSaveMessage(requestError instanceof Error ? requestError.message : 'Failed to delete custom table.');
+    }
   };
 
   const loadPitchPoints = async (pitchKey: string, activeForceMode: ForceMode) => {
@@ -2370,10 +2485,20 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
     pageTab === 'summary'
       ? summaryRowsByPitchType
       : sortedRows;
+  // On the Summary tab, a saved/in-progress custom table selects a subset of
+  // the already-computed displayTableColumns (client-side only -- Biomechanics
+  // always computes every column server-side, unlike Pitching's server-filtered
+  // custom_columns pattern).
+  const effectiveSummaryColumns =
+    tableMode === 'Custom' && customTableColumns.length
+      ? customTableColumns.filter((column) => displayTableColumns.includes(column))
+      : displayTableColumns;
+  const finalTableColumns = pageTab === 'summary' ? effectiveSummaryColumns : correlationAxisColumns;
   const activeTableTitle =
     pageTab === 'summary'
-      ? 'Summary Table'
+      ? (tableMode === 'Custom' ? (customTableName.trim() || 'Custom Table') : 'Summary')
       : (leaderboardViewMode === 'individual' ? 'Leaderboard: Individual Pitches' : 'Leaderboard: Averages');
+  const remainingCustomColumns = displayTableColumns.filter((column) => !customTableColumns.includes(column));
 
   return (
     <section className="portal-panel portal-admin-panel" style={{ padding: '1rem', display: 'grid', gap: 14 }}>
@@ -2564,6 +2689,49 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
       {pageTab === 'compare' ? null : <div ref={summaryTableCardRef} style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <h3 style={{ marginTop: 0, marginBottom: 0 }}>{activeTableTitle}</h3>
+          {pageTab === 'summary' ? (
+            <label data-html2canvas-ignore="true" style={{ display: 'grid', gap: 4, minWidth: 200 }}>
+              <span style={{ fontSize: 12, color: '#94a3b8' }}>Table</span>
+              <select
+                className="portal-select"
+                style={selectStyle}
+                value={tableMode === 'Custom' && selectedCustomTableId ? `custom_saved:${selectedCustomTableId}` : tableMode}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  if (next === 'Summary') {
+                    setTableMode('Summary');
+                    return;
+                  }
+                  if (next === 'Custom') {
+                    setTableMode('Custom');
+                    setSelectedCustomTableId(null);
+                    setCustomTableName('');
+                    setCustomTableColumns([]);
+                    setCustomTableVisibility('organization');
+                    setCustomSaveState('idle');
+                    setCustomSaveMessage('');
+                    return;
+                  }
+                  const id = Number(next.replace('custom_saved:', ''));
+                  const found = customTables.find((row) => row.id === id);
+                  if (!found) return;
+                  setTableMode('Custom');
+                  setSelectedCustomTableId(found.id);
+                  setCustomTableName(found.name);
+                  setCustomTableColumns(found.columns ?? []);
+                  setCustomTableVisibility(found.visibility ?? 'organization');
+                  setCustomSaveState('idle');
+                  setCustomSaveMessage('');
+                }}
+              >
+                <option value="Summary">Summary</option>
+                {customTables.map((item) => (
+                  <option key={item.id} value={`custom_saved:${item.id}`}>{customTableOptionLabel(item)}</option>
+                ))}
+                <option value="Custom">+ New Custom Table</option>
+              </select>
+            </label>
+          ) : null}
           {pageTab === 'summary' && isSingleAppliedPlayer ? (
             <label data-html2canvas-ignore="true" style={{ display: 'grid', gap: 4, minWidth: 220 }}>
               <span style={{ fontSize: 12, color: '#94a3b8' }}>Session Rows</span>
@@ -2595,6 +2763,120 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
             </button>
           ) : null}
         </div>
+        {pageTab === 'summary' && tableMode === 'Custom' ? (
+          <div className="portal-day-card" style={{ margin: '0.75rem 0' }} data-html2canvas-ignore="true">
+            <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(2, minmax(220px, 1fr))', gap: '0.75rem 0.9rem' }}>
+              <label>
+                Table Name
+                <input
+                  value={customTableName}
+                  onChange={(event) => setCustomTableName(event.target.value)}
+                  placeholder="Example: Lead Leg Focus"
+                  style={selectStyle}
+                />
+              </label>
+              <label>
+                Visibility
+                <select
+                  className="portal-select"
+                  style={selectStyle}
+                  value={customTableVisibility}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    setCustomTableVisibility(next === 'private' || next === 'global' ? next : 'organization');
+                  }}
+                >
+                  <option value="private">Only Me</option>
+                  <option value="organization">My Organization</option>
+                </select>
+              </label>
+              <label>
+                Add Column
+                <select
+                  className="portal-select"
+                  style={selectStyle}
+                  value={customColumnToAdd}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    setCustomColumnToAdd('');
+                    if (!next || customTableColumns.includes(next)) return;
+                    setCustomTableColumns((current) => [...current, next]);
+                  }}
+                >
+                  <option value="">Choose column</option>
+                  {remainingCustomColumns.map((column) => (
+                    <option key={column} value={column}>{column}</option>
+                  ))}
+                </select>
+              </label>
+              <div style={{ display: 'grid', alignContent: 'end' }}>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button type="button" className="btn btn-primary" onClick={() => void saveCustomTable()} disabled={customSaveState === 'saving'}>
+                    {customSaveState === 'saving' ? 'Saving...' : 'Save Table'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => void deleteCustomTable()}
+                    disabled={!selectedCustomTableId || customSaveState === 'saving'}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div style={{ marginTop: '0.6rem' }}>
+              <div style={{ fontSize: '0.82rem', color: '#94a3b8', marginBottom: 6 }}>
+                Drag to reorder columns. Table starts blank; add the columns you want.
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: '0.45rem',
+                  minHeight: 40,
+                  padding: '0.45rem',
+                  borderRadius: 10,
+                  border: '1px solid rgba(255,255,255,0.16)',
+                  background: 'rgba(255,255,255,0.02)',
+                }}
+              >
+                {customTableColumns.length ? customTableColumns.map((column, index) => (
+                  <button
+                    key={`${column}-${index}`}
+                    type="button"
+                    draggable
+                    onDragStart={() => setDragColumnIndex(index)}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      if (dragColumnIndex === null) return;
+                      setCustomTableColumns((current) => reorderColumns(current, dragColumnIndex, index));
+                      setDragColumnIndex(null);
+                    }}
+                    className="btn btn-ghost"
+                    style={{ minHeight: 'unset', padding: '0.3rem 0.5rem', display: 'inline-flex', alignItems: 'center', gap: 8 }}
+                  >
+                    <span style={{ opacity: 0.7 }}>::</span>
+                    <span>{column}</span>
+                    <span
+                      style={{ opacity: 0.8 }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setCustomTableColumns((current) => current.filter((_, i) => i !== index));
+                      }}
+                    >
+                      ✕
+                    </span>
+                  </button>
+                )) : <span style={{ color: '#64748b', fontSize: 13 }}>No columns added yet.</span>}
+              </div>
+              {customSaveMessage ? (
+                <p style={{ margin: '0.5rem 0 0', fontSize: 13, color: customSaveState === 'error' ? '#fca5a5' : '#86efac' }}>{customSaveMessage}</p>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
         <div
           className="portal-table-wrap"
           style={{ maxHeight: '52vh', overflowY: 'auto', overflowX: 'hidden', position: 'relative' }}
@@ -2616,7 +2898,7 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
           <table className="portal-table" style={{ borderCollapse: 'separate', borderSpacing: 0 }}>
             <thead>
               <tr>
-                {displayTableColumns.map((column) => {
+                {finalTableColumns.map((column) => {
                   const active = sortColumn === column;
                   const glyph = active ? (sortDirection === 'desc' ? '↓' : '↑') : '';
                   return (
@@ -2666,7 +2948,7 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
             <tbody>
               {activeDisplayRows.length ? activeDisplayRows.map((row, rowIdx) => (
                 <tr key={`bio-row-${rowIdx}`}>
-                  {displayTableColumns.map((column) => (
+                  {finalTableColumns.map((column) => (
                     (() => {
                       const pitchTypeCellValue = String(row['Pitch Type'] ?? '').trim();
                       const isPitchTypeCell = isSingleAppliedPlayer && pageTab === 'summary' && column === 'Pitch Type';
@@ -2711,7 +2993,7 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
                 </tr>
               )) : (
                 <tr>
-                  <td colSpan={Math.max(1, displayTableColumns.length)} style={{ textAlign: 'center' }}>
+                  <td colSpan={Math.max(1, finalTableColumns.length)} style={{ textAlign: 'center' }}>
                     {isLoading ? 'Loading...' : 'No rows available.'}
                   </td>
                 </tr>

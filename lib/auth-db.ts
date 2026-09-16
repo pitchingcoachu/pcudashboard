@@ -837,6 +837,49 @@ export async function ensureAuthDbReady(): Promise<void> {
     END $$;
   `);
 
+  // Logged exercise weights used to be tied (via CASCADE) to the specific workout
+  // assignment row that was live when the player logged them -- deleting/replacing a
+  // workout in Training Program silently destroyed that player's logged history for
+  // the Exercise Load Trend chart. Snapshot the exercise identity directly on each row
+  // and relax the assignment FKs to SET NULL so log rows survive assignment deletion.
+  await pool.query(`ALTER TABLE public.exercise_log_history ADD COLUMN IF NOT EXISTS exercise_id INTEGER REFERENCES exercise_library(id) ON DELETE SET NULL;`);
+  await pool.query(`
+    UPDATE exercise_log_history h SET exercise_id = i.exercise_id
+    FROM program_day_items i
+    WHERE h.program_day_item_id = i.id AND h.exercise_id IS NULL AND i.exercise_id IS NOT NULL;
+  `);
+  for (const column of ['program_day_item_id', 'cycle_item_id', 'plan_item_id']) {
+    await pool.query(`
+      DO $$
+      DECLARE
+        constraint_name text;
+      BEGIN
+        SELECT con.conname
+        INTO constraint_name
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+        WHERE nsp.nspname = 'public'
+          AND rel.relname = 'exercise_log_history'
+          AND con.contype = 'f'
+          AND con.conkey = (
+            SELECT ARRAY_AGG(attnum ORDER BY attnum)
+            FROM pg_attribute
+            WHERE attrelid = rel.oid AND attname = '${column}'
+          )
+        LIMIT 1;
+
+        IF constraint_name IS NOT NULL THEN
+          EXECUTE format('ALTER TABLE public.exercise_log_history DROP CONSTRAINT %I', constraint_name);
+        END IF;
+      END $$;
+    `);
+  }
+  await pool.query(`ALTER TABLE public.exercise_log_history ADD CONSTRAINT exercise_log_history_program_day_item_id_fkey FOREIGN KEY (program_day_item_id) REFERENCES program_day_items(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE public.exercise_log_history ADD CONSTRAINT exercise_log_history_cycle_item_id_fkey FOREIGN KEY (cycle_item_id) REFERENCES program_cycle_items(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE public.exercise_log_history ADD CONSTRAINT exercise_log_history_plan_item_id_fkey FOREIGN KEY (plan_item_id) REFERENCES program_plan_items(id) ON DELETE SET NULL;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_exercise_log_history_exercise ON exercise_log_history (player_id, exercise_id, logged_at DESC);`);
+
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_auth_users_email ON auth_users (LOWER(email));`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_auth_users_org ON auth_users (organization_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_players_org ON players (organization_id);`);

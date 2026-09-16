@@ -177,6 +177,12 @@ export type NutritionLogRow = {
   carbsG: number | null;
   fatG: number | null;
   notes: string | null;
+  foodName: string | null;
+  brandName: string | null;
+  servingDescription: string | null;
+  quantity: number | null;
+  externalFoodId: string | null;
+  savedMealId: number | null;
 };
 
 export type NutritionTargetRow = {
@@ -196,6 +202,41 @@ export type NutritionAdherenceRow = {
   daysInRange: number;
   avgCalories: number | null;
   targetCalories: number | null;
+};
+
+export type SavedMealItemInput = {
+  foodName: string;
+  brandName?: string | null;
+  servingDescription?: string | null;
+  quantity?: number | null;
+  calories?: number | null;
+  proteinG?: number | null;
+  carbsG?: number | null;
+  fatG?: number | null;
+  externalFoodId?: string | null;
+};
+
+export type SavedMealItemRow = SavedMealItemInput & { id: number };
+
+export type SavedMealRow = {
+  id: number;
+  name: string;
+  items: SavedMealItemRow[];
+  totalCalories: number;
+};
+
+export type HydrationLogRow = {
+  id: number;
+  logDate: string;
+  ounces: number;
+  loggedAt: string;
+};
+
+export type HydrationTargetRow = {
+  ounces: number | null;
+  setByUserId: number | null;
+  setByRole: string | null;
+  updatedAt: string | null;
 };
 
 export type PlayerPlanGoalRow = {
@@ -887,6 +928,77 @@ export async function ensureTrainingDbReady(): Promise<void> {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
+    await pool.query(`ALTER TABLE nutrition_targets ADD COLUMN IF NOT EXISTS last_reminder_date DATE;`);
+
+    // A player's reusable meal template (e.g. "Post-Lift Meal"), built from one or
+    // more food items and re-loggable to any date without re-searching/re-entering.
+    // Created before the nutrition_logs.saved_meal_id ALTER below, which references it.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS saved_meals (
+        id BIGSERIAL PRIMARY KEY,
+        player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        created_by_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_saved_meals_player ON saved_meals (player_id);`);
+    // Macros snapshotted at save time (not re-fetched from the food database live) --
+    // same reasoning as exercise_log_history's exercise_id snapshot: a saved meal
+    // shouldn't change or break if the underlying food database result changes later.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS saved_meal_items (
+        id BIGSERIAL PRIMARY KEY,
+        saved_meal_id BIGINT NOT NULL REFERENCES saved_meals(id) ON DELETE CASCADE,
+        food_name TEXT NOT NULL,
+        brand_name TEXT,
+        serving_description TEXT,
+        quantity NUMERIC(8,2) NOT NULL DEFAULT 1,
+        calories INTEGER,
+        protein_g NUMERIC(6,1),
+        carbs_g NUMERIC(6,1),
+        fat_g NUMERIC(6,1),
+        external_food_id TEXT,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_saved_meal_items_meal ON saved_meal_items (saved_meal_id, sort_order);`);
+
+    // Food-lookup/saved-meal detail on a logged item -- all additive/nullable so
+    // pre-existing hand-typed logs (no food-search involvement) are unaffected.
+    await pool.query(`ALTER TABLE nutrition_logs ADD COLUMN IF NOT EXISTS food_name TEXT;`);
+    await pool.query(`ALTER TABLE nutrition_logs ADD COLUMN IF NOT EXISTS brand_name TEXT;`);
+    await pool.query(`ALTER TABLE nutrition_logs ADD COLUMN IF NOT EXISTS serving_description TEXT;`);
+    await pool.query(`ALTER TABLE nutrition_logs ADD COLUMN IF NOT EXISTS quantity NUMERIC(8,2);`);
+    await pool.query(`ALTER TABLE nutrition_logs ADD COLUMN IF NOT EXISTS external_food_id TEXT;`);
+    await pool.query(`ALTER TABLE nutrition_logs ADD COLUMN IF NOT EXISTS saved_meal_id BIGINT REFERENCES saved_meals(id) ON DELETE SET NULL;`);
+
+    // Hydration mirrors nutrition_logs' shape: multiple quick-add entries per day,
+    // daily total computed by summing rather than stored redundantly.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hydration_logs (
+        id BIGSERIAL PRIMARY KEY,
+        player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        log_date DATE NOT NULL,
+        ounces NUMERIC(6,1) NOT NULL,
+        logged_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        created_by_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL
+      );
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_hydration_logs_player_date ON hydration_logs (player_id, log_date);`);
+    // One row per player -- current hydration goal, same shape as nutrition_targets.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hydration_targets (
+        player_id INTEGER PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+        ounces NUMERIC(6,1),
+        set_by_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL,
+        set_by_role TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS master_calendar_notes (
         id BIGSERIAL PRIMARY KEY,
@@ -10460,12 +10572,12 @@ export async function listExerciseLoadHistoryForPlayer(input: {
       WITH history_rows AS (
         SELECT
           COALESCE(d.day_date, h.logged_at::date)::text AS day_date,
-          COALESCE(w.name, cw.name, pw.name, e.name, 'Assignment') AS source_name,
-          i.exercise_id,
+          COALESCE(w.name, cw.name, pw.name, e.name, eh.name, 'Assignment') AS source_name,
+          COALESCE(h.exercise_id, i.exercise_id) AS exercise_id,
           i.prescribed_reps,
-          COALESCE(e.rep_measure, 'reps') AS rep_measure,
-          COALESCE(e.tracking_type, 'lbs') AS tracking_type,
-          COALESCE(e.reps_per_side, FALSE) AS reps_per_side,
+          COALESCE(e.rep_measure, eh.rep_measure, 'reps') AS rep_measure,
+          COALESCE(e.tracking_type, eh.tracking_type, 'lbs') AS tracking_type,
+          COALESCE(e.reps_per_side, eh.reps_per_side, FALSE) AS reps_per_side,
           h.performed_load,
           CASE
             WHEN h.schedule_type = 'cycle' THEN cws.exercise_json
@@ -10476,6 +10588,7 @@ export async function listExerciseLoadHistoryForPlayer(input: {
         LEFT JOIN program_day_items i ON i.id = h.program_day_item_id
         LEFT JOIN program_days d ON d.id = i.program_day_id
         LEFT JOIN exercise_library e ON e.id = i.exercise_id
+        LEFT JOIN exercise_library eh ON eh.id = h.exercise_id
         LEFT JOIN workout_library w ON w.id = i.workout_id
         LEFT JOIN program_cycle_items ci ON ci.id = h.cycle_item_id
         LEFT JOIN workout_library cw ON cw.id = ci.workout_id
@@ -10552,7 +10665,8 @@ export async function listExerciseLoadHistoryForPlayer(input: {
           AND LENGTH(TRIM(h.performed_load)) > 0
           AND COALESCE(LOWER(w.category), LOWER(cw.category), LOWER(pw.category), '') <> 'assessment'
           AND (
-            i.exercise_id = ANY($2::int[])
+            h.exercise_id = ANY($2::int[])
+            OR i.exercise_id = ANY($2::int[])
             OR EXISTS (
               SELECT 1
               FROM workout_exercises wx
@@ -10931,6 +11045,42 @@ export async function clearProgramItemsForDate(input: {
   return { ok: true };
 }
 
+/**
+ * Splits one whole-workout log action (a flat comma-delimited load string plus a
+ * shared "completed"/"notes") into one entry per exercise in the workout, using each
+ * exercise's own prescribed set count to slice the flat load list -- same ordering
+ * and slicing logic listExerciseLoadHistoryForPlayer's legacy fallback already assumes
+ * when reconstructing per-exercise history from an un-split workout-level log row.
+ */
+async function splitWorkoutLoadByExercise(
+  pool: ReturnType<typeof getDbPool>,
+  workoutId: number,
+  performedLoad: string | null
+): Promise<Array<{ exerciseId: number; performedSets: string | null; performedLoad: string | null }>> {
+  const exercises = await pool.query<{ exercise_id: number; prescribed_sets: string | null }>(
+    `
+      SELECT exercise_id, prescribed_sets
+      FROM workout_exercises
+      WHERE workout_id = $1
+      ORDER BY sort_order, id
+    `,
+    [workoutId]
+  );
+  if (exercises.rowCount === 0) return [];
+  const loads = parseLoadValues(performedLoad);
+  let loadIndex = 0;
+  return exercises.rows.map((row) => {
+    const setCount = parseSetCount(row.prescribed_sets);
+    const slice = loads.slice(loadIndex, loadIndex + setCount);
+    loadIndex += setCount;
+    return {
+      exerciseId: Number(row.exercise_id),
+      performedSets: slice.length ? String(slice.length) : null,
+      performedLoad: slice.length ? slice.join(', ') : null,
+    };
+  });
+}
+
 export async function upsertExerciseLog(input: {
   playerId: number;
   itemId: number;
@@ -10952,9 +11102,9 @@ export async function upsertExerciseLog(input: {
   const notes = (input.notes ?? '').trim() || null;
 
   if (scheduleType === 'cycle') {
-    const allowedItem = await pool.query<{ id: number }>(
+    const allowedItem = await pool.query<{ id: number; workout_id: number }>(
       `
-        SELECT id
+        SELECT id, workout_id
         FROM program_cycle_items
         WHERE id = $1 AND player_id = $2
         LIMIT 1
@@ -10962,33 +11112,43 @@ export async function upsertExerciseLog(input: {
       [input.itemId, input.playerId]
     );
     if ((allowedItem.rowCount ?? 0) !== 1) throw new Error('Cycle item not assigned to player.');
+    const perExercise = await splitWorkoutLoadByExercise(pool, allowedItem.rows[0].workout_id, performedLoad);
 
-    await pool.query(
-      `
-        INSERT INTO exercise_log_history (
-          player_id,
-          schedule_type,
-          cycle_item_id,
-          performed_sets,
-          performed_reps,
-          performed_load,
-          completed,
-          notes,
-          logged_by_user_id,
-          logged_at
-        )
-        VALUES ($1, 'cycle', $2, $3, $4, $5, $6, $7, $8, NOW())
-      `,
-      [input.playerId, input.itemId, performedSets, performedReps, performedLoad, input.completed, notes, input.loggedByUserId]
-    );
+    if (perExercise.length === 0) {
+      // No exercises resolved for this workout (unexpected) -- fall back to one
+      // whole-workout row so the log action isn't silently dropped.
+      await pool.query(
+        `
+          INSERT INTO exercise_log_history (
+            player_id, schedule_type, cycle_item_id,
+            performed_sets, performed_reps, performed_load, completed, notes, logged_by_user_id, logged_at
+          )
+          VALUES ($1, 'cycle', $2, $3, $4, $5, $6, $7, $8, NOW())
+        `,
+        [input.playerId, input.itemId, performedSets, performedReps, performedLoad, input.completed, notes, input.loggedByUserId]
+      );
+    } else {
+      for (const exercise of perExercise) {
+        await pool.query(
+          `
+            INSERT INTO exercise_log_history (
+              player_id, schedule_type, cycle_item_id, exercise_id,
+              performed_sets, performed_reps, performed_load, completed, notes, logged_by_user_id, logged_at
+            )
+            VALUES ($1, 'cycle', $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+          `,
+          [input.playerId, input.itemId, exercise.exerciseId, exercise.performedSets, performedReps, exercise.performedLoad, input.completed, notes, input.loggedByUserId]
+        );
+      }
+    }
     _invalidateTrainingReadCacheForPlayer(input.playerId);
     return;
   }
 
   if (scheduleType === 'plan') {
-    const allowedItem = await pool.query<{ id: number; organization_id: number; target_count: number | null }>(
+    const allowedItem = await pool.query<{ id: number; organization_id: number; target_count: number | null; workout_id: number }>(
       `
-        SELECT id, organization_id, target_count
+        SELECT id, organization_id, target_count, workout_id
         FROM program_plan_items
         WHERE id = $1 AND player_id = $2
         LIMIT 1
@@ -10997,25 +11157,33 @@ export async function upsertExerciseLog(input: {
     );
     if ((allowedItem.rowCount ?? 0) !== 1) throw new Error('Plan item not assigned to player.');
     const planItem = allowedItem.rows[0];
+    const perExercise = await splitWorkoutLoadByExercise(pool, planItem.workout_id, performedLoad);
 
-    await pool.query(
-      `
-        INSERT INTO exercise_log_history (
-          player_id,
-          schedule_type,
-          plan_item_id,
-          performed_sets,
-          performed_reps,
-          performed_load,
-          completed,
-          notes,
-          logged_by_user_id,
-          logged_at
-        )
-        VALUES ($1, 'plan', $2, $3, $4, $5, $6, $7, $8, NOW())
-      `,
-      [input.playerId, input.itemId, performedSets, performedReps, performedLoad, input.completed, notes, input.loggedByUserId]
-    );
+    if (perExercise.length === 0) {
+      await pool.query(
+        `
+          INSERT INTO exercise_log_history (
+            player_id, schedule_type, plan_item_id,
+            performed_sets, performed_reps, performed_load, completed, notes, logged_by_user_id, logged_at
+          )
+          VALUES ($1, 'plan', $2, $3, $4, $5, $6, $7, $8, NOW())
+        `,
+        [input.playerId, input.itemId, performedSets, performedReps, performedLoad, input.completed, notes, input.loggedByUserId]
+      );
+    } else {
+      for (const exercise of perExercise) {
+        await pool.query(
+          `
+            INSERT INTO exercise_log_history (
+              player_id, schedule_type, plan_item_id, exercise_id,
+              performed_sets, performed_reps, performed_load, completed, notes, logged_by_user_id, logged_at
+            )
+            VALUES ($1, 'plan', $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+          `,
+          [input.playerId, input.itemId, exercise.exerciseId, exercise.performedSets, performedReps, exercise.performedLoad, input.completed, notes, input.loggedByUserId]
+        );
+      }
+    }
     _invalidateTrainingReadCacheForPlayer(input.playerId);
 
     if (input.completed && planItem.target_count) {
@@ -11029,9 +11197,9 @@ export async function upsertExerciseLog(input: {
     return;
   }
 
-  const allowedItem = await pool.query<{ id: number }>(
+  const allowedItem = await pool.query<{ id: number; exercise_id: number | null }>(
     `
-      SELECT i.id
+      SELECT i.id, i.exercise_id
       FROM program_day_items i
       JOIN program_days d ON d.id = i.program_day_id
       JOIN programs p ON p.id = d.program_id
@@ -11041,6 +11209,7 @@ export async function upsertExerciseLog(input: {
     [input.itemId, input.playerId]
   );
   if ((allowedItem.rowCount ?? 0) !== 1) throw new Error('Program item not assigned to player.');
+  const calendarExerciseId = allowedItem.rows[0].exercise_id;
 
   await pool.query(
     `
@@ -11077,6 +11246,7 @@ export async function upsertExerciseLog(input: {
         player_id,
         schedule_type,
         program_day_item_id,
+        exercise_id,
         performed_sets,
         performed_reps,
         performed_load,
@@ -11085,9 +11255,9 @@ export async function upsertExerciseLog(input: {
         logged_by_user_id,
         logged_at
       )
-      VALUES ($1, 'calendar', $2, $3, $4, $5, $6, $7, $8, NOW())
+      VALUES ($1, 'calendar', $2, $3, $4, $5, $6, $7, $8, $9, NOW())
     `,
-    [input.playerId, input.itemId, performedSets, performedReps, performedLoad, input.completed, notes, input.loggedByUserId]
+    [input.playerId, input.itemId, calendarExerciseId, performedSets, performedReps, performedLoad, input.completed, notes, input.loggedByUserId]
   );
   _invalidateTrainingReadCacheForPlayer(input.playerId);
 }
@@ -13250,9 +13420,16 @@ export async function listNutritionLogsForPlayer(input: {
     carbs_g: string | null;
     fat_g: string | null;
     notes: string | null;
+    food_name: string | null;
+    brand_name: string | null;
+    serving_description: string | null;
+    quantity: string | null;
+    external_food_id: string | null;
+    saved_meal_id: number | null;
   }>(
     `
-      SELECT id, log_date::text, meal_label, calories, protein_g::text, carbs_g::text, fat_g::text, notes
+      SELECT id, log_date::text, meal_label, calories, protein_g::text, carbs_g::text, fat_g::text, notes,
+        food_name, brand_name, serving_description, quantity::text, external_food_id, saved_meal_id
       FROM nutrition_logs
       WHERE ${conditions.join(' AND ')}
       ORDER BY log_date ASC, id ASC
@@ -13269,13 +13446,22 @@ export async function listNutritionLogsForPlayer(input: {
     carbsG: row.carbs_g !== null ? Number(row.carbs_g) : null,
     fatG: row.fat_g !== null ? Number(row.fat_g) : null,
     notes: row.notes,
+    foodName: row.food_name,
+    brandName: row.brand_name,
+    servingDescription: row.serving_description,
+    quantity: row.quantity !== null ? Number(row.quantity) : null,
+    externalFoodId: row.external_food_id,
+    savedMealId: row.saved_meal_id,
   }));
 }
 
 /** Creates a new meal entry, or updates an existing one when `logId` is
  * passed (editing a specific meal rather than always inserting a new row --
  * nutrition_logs allows multiple rows per day, so there's no natural
- * (player_id, log_date) upsert key like body_weight_logs has). */
+ * (player_id, log_date) upsert key like body_weight_logs has). foodName/
+ * brandName/servingDescription/quantity/externalFoodId/savedMealId are all
+ * optional -- unset for a plain hand-typed entry, populated when the item
+ * came from food search or a saved meal. */
 export async function upsertNutritionLog(input: {
   playerId: number;
   loggedByUserId: number;
@@ -13287,6 +13473,12 @@ export async function upsertNutritionLog(input: {
   carbsG?: number | null;
   fatG?: number | null;
   notes?: string | null;
+  foodName?: string | null;
+  brandName?: string | null;
+  servingDescription?: string | null;
+  quantity?: number | null;
+  externalFoodId?: string | null;
+  savedMealId?: number | null;
 }): Promise<{ ok: true; logId: number } | { ok: false; error: string }> {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureTrainingDbReady();
@@ -13299,16 +13491,24 @@ export async function upsertNutritionLog(input: {
   const fatG = Number.isFinite(input.fatG) ? Number(input.fatG) : null;
   const mealLabel = (input.mealLabel ?? '').trim() || null;
   const notes = (input.notes ?? '').trim() || null;
+  const foodName = (input.foodName ?? '').trim() || null;
+  const brandName = (input.brandName ?? '').trim() || null;
+  const servingDescription = (input.servingDescription ?? '').trim() || null;
+  const quantity = Number.isFinite(input.quantity) ? Number(input.quantity) : null;
+  const externalFoodId = (input.externalFoodId ?? '').trim() || null;
+  const savedMealId = input.savedMealId ?? null;
 
   if (input.logId) {
     const updated = await pool.query<{ id: number }>(
       `
         UPDATE nutrition_logs
-        SET meal_label = $1, calories = $2, protein_g = $3, carbs_g = $4, fat_g = $5, notes = $6, updated_at = NOW()
+        SET meal_label = $1, calories = $2, protein_g = $3, carbs_g = $4, fat_g = $5, notes = $6, updated_at = NOW(),
+          food_name = $9, brand_name = $10, serving_description = $11, quantity = $12, external_food_id = $13, saved_meal_id = $14
         WHERE id = $7 AND player_id = $8
         RETURNING id
       `,
-      [mealLabel, calories, proteinG, carbsG, fatG, notes, input.logId, input.playerId]
+      [mealLabel, calories, proteinG, carbsG, fatG, notes, input.logId, input.playerId,
+        foodName, brandName, servingDescription, quantity, externalFoodId, savedMealId]
     );
     if ((updated.rowCount ?? 0) !== 1) return { ok: false, error: 'Log entry not found.' };
     return { ok: true, logId: updated.rows[0].id };
@@ -13316,11 +13516,15 @@ export async function upsertNutritionLog(input: {
 
   const inserted = await pool.query<{ id: number }>(
     `
-      INSERT INTO nutrition_logs (player_id, log_date, meal_label, calories, protein_g, carbs_g, fat_g, notes, created_by_user_id)
-      VALUES ($1, $2::date, $3, $4, $5, $6, $7, $8, $9)
+      INSERT INTO nutrition_logs (
+        player_id, log_date, meal_label, calories, protein_g, carbs_g, fat_g, notes, created_by_user_id,
+        food_name, brand_name, serving_description, quantity, external_food_id, saved_meal_id
+      )
+      VALUES ($1, $2::date, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
       RETURNING id
     `,
-    [input.playerId, input.logDate.trim(), mealLabel, calories, proteinG, carbsG, fatG, notes, input.loggedByUserId]
+    [input.playerId, input.logDate.trim(), mealLabel, calories, proteinG, carbsG, fatG, notes, input.loggedByUserId,
+      foodName, brandName, servingDescription, quantity, externalFoodId, savedMealId]
   );
   return { ok: true, logId: inserted.rows[0].id };
 }
@@ -13463,6 +13667,359 @@ export async function listNutritionAdherenceForOrg(input: {
     avgCalories: row.avg_calories !== null ? Number(row.avg_calories) : null,
     targetCalories: row.target_calories,
   }));
+}
+
+/** Consecutive days (walking back from today) where the player's summed logged
+ * calories met or exceeded their target that day. A day before a target was ever
+ * set, or a day with no target, breaks the streak (nothing to have "hit"). Capped
+ * at 365 days back so a player who has never missed a day in over a year doesn't
+ * cause an unbounded query. */
+export async function getNutritionStreakForPlayer(input: { playerId: number }): Promise<number> {
+  if (!isDatabaseConfigured()) return 0;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const target = await pool.query<{ calories: number | null }>(
+    `SELECT calories FROM nutrition_targets WHERE player_id = $1`,
+    [input.playerId]
+  );
+  const targetCalories = target.rows[0]?.calories;
+  if (!targetCalories || targetCalories <= 0) return 0;
+
+  const result = await pool.query<{ log_date: string; total_calories: string | null }>(
+    `
+      SELECT log_date::text, SUM(calories) AS total_calories
+      FROM nutrition_logs
+      WHERE player_id = $1 AND log_date >= (CURRENT_DATE - INTERVAL '365 days')::date AND log_date <= CURRENT_DATE
+      GROUP BY log_date
+      ORDER BY log_date DESC
+    `,
+    [input.playerId]
+  );
+  const totalsByDate = new Map(result.rows.map((row) => [row.log_date, Number(row.total_calories ?? 0)]));
+
+  let streak = 0;
+  const cursor = new Date();
+  for (;;) {
+    const iso = cursor.toISOString().slice(0, 10);
+    const total = totalsByDate.get(iso);
+    if (total === undefined || total < targetCalories) break;
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+    if (streak >= 365) break;
+  }
+  return streak;
+}
+
+export async function listSavedMealsForPlayer(input: { playerId: number }): Promise<SavedMealRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{
+    id: number;
+    name: string;
+    item_id: number | null;
+    food_name: string | null;
+    brand_name: string | null;
+    serving_description: string | null;
+    quantity: string | null;
+    calories: number | null;
+    protein_g: string | null;
+    carbs_g: string | null;
+    fat_g: string | null;
+    external_food_id: string | null;
+  }>(
+    `
+      SELECT m.id, m.name, i.id AS item_id, i.food_name, i.brand_name, i.serving_description,
+        i.quantity::text, i.calories, i.protein_g::text, i.carbs_g::text, i.fat_g::text, i.external_food_id
+      FROM saved_meals m
+      LEFT JOIN saved_meal_items i ON i.saved_meal_id = m.id
+      WHERE m.player_id = $1
+      ORDER BY m.name ASC, i.sort_order ASC, i.id ASC
+    `,
+    [input.playerId]
+  );
+
+  const meals = new Map<number, SavedMealRow>();
+  for (const row of result.rows) {
+    if (!meals.has(row.id)) meals.set(row.id, { id: row.id, name: row.name, items: [], totalCalories: 0 });
+    const meal = meals.get(row.id)!;
+    if (row.item_id === null) continue;
+    const item: SavedMealItemRow = {
+      id: row.item_id,
+      foodName: row.food_name ?? '',
+      brandName: row.brand_name,
+      servingDescription: row.serving_description,
+      quantity: row.quantity !== null ? Number(row.quantity) : null,
+      calories: row.calories,
+      proteinG: row.protein_g !== null ? Number(row.protein_g) : null,
+      carbsG: row.carbs_g !== null ? Number(row.carbs_g) : null,
+      fatG: row.fat_g !== null ? Number(row.fat_g) : null,
+      externalFoodId: row.external_food_id,
+    };
+    meal.items.push(item);
+    meal.totalCalories += item.calories ?? 0;
+  }
+  return Array.from(meals.values());
+}
+
+export async function createSavedMeal(input: {
+  playerId: number;
+  createdByUserId: number;
+  name: string;
+  items: SavedMealItemInput[];
+}): Promise<{ ok: true; savedMealId: number } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  const name = input.name.trim();
+  if (!name) return { ok: false, error: 'Give this meal a name.' };
+  if (!input.items.length) return { ok: false, error: 'Add at least one food item.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const meal = await client.query<{ id: number }>(
+      `INSERT INTO saved_meals (player_id, name, created_by_user_id) VALUES ($1, $2, $3) RETURNING id`,
+      [input.playerId, name, input.createdByUserId]
+    );
+    const savedMealId = meal.rows[0].id;
+    let sortOrder = 0;
+    for (const item of input.items) {
+      const foodName = item.foodName.trim();
+      if (!foodName) continue;
+      await client.query(
+        `
+          INSERT INTO saved_meal_items (
+            saved_meal_id, food_name, brand_name, serving_description, quantity, calories, protein_g, carbs_g, fat_g, external_food_id, sort_order
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        `,
+        [
+          savedMealId, foodName, item.brandName?.trim() || null, item.servingDescription?.trim() || null,
+          Number.isFinite(item.quantity) ? Number(item.quantity) : 1,
+          Number.isFinite(item.calories) ? Number(item.calories) : null,
+          Number.isFinite(item.proteinG) ? Number(item.proteinG) : null,
+          Number.isFinite(item.carbsG) ? Number(item.carbsG) : null,
+          Number.isFinite(item.fatG) ? Number(item.fatG) : null,
+          item.externalFoodId?.trim() || null, sortOrder,
+        ]
+      );
+      sortOrder += 1;
+    }
+    await client.query('COMMIT');
+    return { ok: true, savedMealId };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    return { ok: false, error: error instanceof Error ? error.message : 'Unable to save meal.' };
+  } finally {
+    client.release();
+  }
+}
+
+export async function deleteSavedMeal(input: { playerId: number; savedMealId: number }): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query(`DELETE FROM saved_meals WHERE id = $1 AND player_id = $2`, [input.savedMealId, input.playerId]);
+  if ((result.rowCount ?? 0) !== 1) return { ok: false, error: 'Meal not found.' };
+  return { ok: true };
+}
+
+/** Expands a saved meal's items into individual nutrition_logs rows for the
+ * given date, sharing the saved meal's name as the meal_label so they show
+ * as one group in the day's log -- same pattern as manually logging several
+ * items under one meal label, just pre-filled from the template. */
+export async function logSavedMeal(input: {
+  playerId: number;
+  loggedByUserId: number;
+  savedMealId: number;
+  logDate: string;
+}): Promise<{ ok: true; logIds: number[] } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.logDate.trim())) return { ok: false, error: 'Date must be YYYY-MM-DD.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const meal = await pool.query<{ id: number; name: string }>(
+    `SELECT id, name FROM saved_meals WHERE id = $1 AND player_id = $2`,
+    [input.savedMealId, input.playerId]
+  );
+  if (!meal.rows[0]) return { ok: false, error: 'Meal not found.' };
+
+  const items = await pool.query<{
+    food_name: string; brand_name: string | null; serving_description: string | null; quantity: string | null;
+    calories: number | null; protein_g: string | null; carbs_g: string | null; fat_g: string | null; external_food_id: string | null;
+  }>(
+    `SELECT food_name, brand_name, serving_description, quantity::text, calories, protein_g::text, carbs_g::text, fat_g::text, external_food_id
+     FROM saved_meal_items WHERE saved_meal_id = $1 ORDER BY sort_order ASC, id ASC`,
+    [input.savedMealId]
+  );
+
+  const logIds: number[] = [];
+  for (const item of items.rows) {
+    const result = await upsertNutritionLog({
+      playerId: input.playerId,
+      loggedByUserId: input.loggedByUserId,
+      logDate: input.logDate,
+      mealLabel: meal.rows[0].name,
+      calories: item.calories,
+      proteinG: item.protein_g !== null ? Number(item.protein_g) : null,
+      carbsG: item.carbs_g !== null ? Number(item.carbs_g) : null,
+      fatG: item.fat_g !== null ? Number(item.fat_g) : null,
+      foodName: item.food_name,
+      brandName: item.brand_name,
+      servingDescription: item.serving_description,
+      quantity: item.quantity !== null ? Number(item.quantity) : null,
+      externalFoodId: item.external_food_id,
+      savedMealId: input.savedMealId,
+    });
+    if (result.ok) logIds.push(result.logId);
+  }
+  return { ok: true, logIds };
+}
+
+export async function listHydrationLogsForPlayer(input: {
+  playerId: number;
+  startDate?: string | null;
+  endDate?: string | null;
+}): Promise<HydrationLogRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const conditions = ['player_id = $1'];
+  const params: (string | number)[] = [input.playerId];
+  if (input.startDate) {
+    params.push(input.startDate);
+    conditions.push(`log_date >= $${params.length}::date`);
+  }
+  if (input.endDate) {
+    params.push(input.endDate);
+    conditions.push(`log_date <= $${params.length}::date`);
+  }
+  const result = await pool.query<{ id: number; log_date: string; ounces: string; logged_at: string }>(
+    `SELECT id, log_date::text, ounces::text, logged_at::text FROM hydration_logs WHERE ${conditions.join(' AND ')} ORDER BY logged_at ASC`,
+    params
+  );
+  return result.rows.map((row) => ({ id: row.id, logDate: row.log_date, ounces: Number(row.ounces), loggedAt: row.logged_at }));
+}
+
+export async function addHydrationLog(input: {
+  playerId: number;
+  loggedByUserId: number;
+  logDate: string;
+  ounces: number;
+}): Promise<{ ok: true; logId: number } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.logDate.trim())) return { ok: false, error: 'Date must be YYYY-MM-DD.' };
+  if (!Number.isFinite(input.ounces) || input.ounces <= 0) return { ok: false, error: 'Enter a positive amount.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const inserted = await pool.query<{ id: number }>(
+    `INSERT INTO hydration_logs (player_id, log_date, ounces, created_by_user_id) VALUES ($1, $2::date, $3, $4) RETURNING id`,
+    [input.playerId, input.logDate.trim(), input.ounces, input.loggedByUserId]
+  );
+  return { ok: true, logId: inserted.rows[0].id };
+}
+
+export async function deleteHydrationLog(input: { playerId: number; logId: number }): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query(`DELETE FROM hydration_logs WHERE id = $1 AND player_id = $2`, [input.logId, input.playerId]);
+  if ((result.rowCount ?? 0) !== 1) return { ok: false, error: 'Log entry not found.' };
+  return { ok: true };
+}
+
+export async function getHydrationTarget(input: { playerId: number }): Promise<HydrationTargetRow | null> {
+  if (!isDatabaseConfigured()) return null;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{ ounces: string | null; set_by_user_id: number | null; set_by_role: string | null; updated_at: string }>(
+    `SELECT ounces::text, set_by_user_id, set_by_role, updated_at::text FROM hydration_targets WHERE player_id = $1`,
+    [input.playerId]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    ounces: row.ounces !== null ? Number(row.ounces) : null,
+    setByUserId: row.set_by_user_id,
+    setByRole: row.set_by_role,
+    updatedAt: row.updated_at,
+  };
+}
+
+export async function setHydrationTarget(input: {
+  playerId: number;
+  ounces: number | null;
+  setByUserId: number;
+  setByRole: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const ounces = Number.isFinite(input.ounces) ? Number(input.ounces) : null;
+  await pool.query(
+    `
+      INSERT INTO hydration_targets (player_id, ounces, set_by_user_id, set_by_role, updated_at)
+      VALUES ($1, $2, $3, $4, NOW())
+      ON CONFLICT (player_id) DO UPDATE SET
+        ounces = EXCLUDED.ounces, set_by_user_id = EXCLUDED.set_by_user_id, set_by_role = EXCLUDED.set_by_role, updated_at = NOW()
+    `,
+    [input.playerId, ounces, input.setByUserId, input.setByRole]
+  );
+  return { ok: true };
+}
+
+/** For every active player across all orgs with a nutrition target set whose
+ * calories haven't been met yet today AND who hasn't already been reminded
+ * today, sends one reminder notification/push and marks last_reminder_date so
+ * a retried or re-triggered job run doesn't double-send. Returns how many were
+ * notified. Org-agnostic (matches listDailyPlayerNoteDigests' shape) so a
+ * single cron invocation covers every school in one call. */
+export async function sendNutritionReminderDigest(): Promise<{ notified: number }> {
+  if (!isDatabaseConfigured()) return { notified: 0 };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const candidates = await pool.query<{ player_id: number; player_name: string; user_id: number | null; target_calories: number }>(
+    `
+      SELECT p.id AS player_id, p.full_name AS player_name, p.user_id, nt.calories AS target_calories
+      FROM players p
+      JOIN nutrition_targets nt ON nt.player_id = p.id
+      WHERE LOWER(COALESCE(NULLIF(TRIM(p.status), ''), 'active')) = 'active'
+        AND nt.calories IS NOT NULL AND nt.calories > 0
+        AND p.user_id IS NOT NULL
+        AND (nt.last_reminder_date IS NULL OR nt.last_reminder_date < CURRENT_DATE)
+        AND COALESCE((
+          SELECT SUM(calories) FROM nutrition_logs
+          WHERE player_id = p.id AND log_date = CURRENT_DATE
+        ), 0) < nt.calories
+    `
+  );
+
+  let notified = 0;
+  for (const row of candidates.rows) {
+    if (!row.user_id) continue;
+    await createNotificationsForUsers({
+      recipientUserIds: [row.user_id],
+      eventType: 'nutrition_reminder',
+      title: 'Log your nutrition',
+      detail: `You haven't hit your ${row.target_calories} calorie target yet today.`,
+      path: '/portal/player?section=nutrition',
+      playerId: row.player_id,
+      playerName: row.player_name,
+    }).catch(() => {});
+    const { sendPushNotificationToUsers } = await import('./push-notifications');
+    await sendPushNotificationToUsers({
+      userIds: [row.user_id],
+      title: 'Log your nutrition',
+      body: `You haven't hit your ${row.target_calories} calorie target yet today.`,
+      data: { type: 'nutrition_reminder' },
+    }).catch(() => {});
+    await pool.query(`UPDATE nutrition_targets SET last_reminder_date = CURRENT_DATE WHERE player_id = $1`, [row.player_id]);
+    notified += 1;
+  }
+  return { notified };
 }
 
 export async function listExerciseTrendForPlayer(input: { playerId: number; exerciseId: number }): Promise<Array<{ dayDate: string; averageLoad: number }>> {

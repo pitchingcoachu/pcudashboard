@@ -2,10 +2,22 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { MouseEvent } from 'react';
-import type { NutritionLogRow, NutritionTargetRow } from '../../../lib/training-db';
+import type { HydrationLogRow, HydrationTargetRow, NutritionLogRow, NutritionTargetRow, SavedMealRow } from '../../../lib/training-db';
 
 type NutritionSectionProps = {
   playerId: number;
+};
+
+type FoodSearchResult = {
+  source: 'usda' | 'openfoodfacts';
+  externalId: string;
+  foodName: string;
+  brandName: string | null;
+  servingDescription: string;
+  calories: number | null;
+  proteinG: number | null;
+  carbsG: number | null;
+  fatG: number | null;
 };
 
 function todayIso(): string {
@@ -163,11 +175,25 @@ function CalorieTrendChart({ points, targetCalories }: { points: DailyTotal[]; t
   );
 }
 
+const QUICK_ADD_OUNCES = [8, 16, 32];
+
 export default function NutritionSection({ playerId }: NutritionSectionProps) {
   const [logs, setLogs] = useState<NutritionLogRow[]>([]);
   const [target, setTarget] = useState<NutritionTargetRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
+  const [streak, setStreak] = useState(0);
+
+  const [hydrationLogs, setHydrationLogs] = useState<HydrationLogRow[]>([]);
+  const [hydrationTarget, setHydrationTarget] = useState<HydrationTargetRow | null>(null);
+  const [hydrationTargetInput, setHydrationTargetInput] = useState('');
+  const [customOunces, setCustomOunces] = useState('');
+  const [hydrationSaving, setHydrationSaving] = useState(false);
+
+  const [savedMeals, setSavedMeals] = useState<SavedMealRow[]>([]);
+  const [logSavedMealSaving, setLogSavedMealSaving] = useState<number | null>(null);
+  const [savingMealName, setSavingMealName] = useState(false);
+  const [newMealName, setNewMealName] = useState('');
 
   const [logDate, setLogDate] = useState(todayIso());
   const [mealLabel, setMealLabel] = useState('');
@@ -177,6 +203,12 @@ export default function NutritionSection({ playerId }: NutritionSectionProps) {
   const [fatG, setFatG] = useState('');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
+  const [selectedFood, setSelectedFood] = useState<{ foodName: string; brandName: string | null; servingDescription: string; externalId: string } | null>(null);
+
+  const [foodQuery, setFoodQuery] = useState('');
+  const [foodResults, setFoodResults] = useState<FoodSearchResult[]>([]);
+  const [foodSearchLoading, setFoodSearchLoading] = useState(false);
+  const [foodSearchConfigured, setFoodSearchConfigured] = useState(true);
 
   const [targetCalories, setTargetCalories] = useState('');
   const [targetProteinG, setTargetProteinG] = useState('');
@@ -189,18 +221,31 @@ export default function NutritionSection({ playerId }: NutritionSectionProps) {
     setLoading(true);
     try {
       const startDate = new Date(Date.now() - 29 * 86_400_000).toISOString().slice(0, 10);
-      const [logsResponse, targetResponse] = await Promise.all([
+      const [logsResponse, targetResponse, streakResponse, hydrationLogsResponse, hydrationTargetResponse, savedMealsResponse] = await Promise.all([
         fetch(`/api/player/nutrition/logs?playerId=${playerId}&startDate=${startDate}`),
         fetch(`/api/player/nutrition/target?playerId=${playerId}`),
+        fetch(`/api/player/nutrition/streak?playerId=${playerId}`),
+        fetch(`/api/player/nutrition/hydration?playerId=${playerId}&startDate=${todayIso()}`),
+        fetch(`/api/player/nutrition/hydration-target?playerId=${playerId}`),
+        fetch(`/api/player/nutrition/saved-meals?playerId=${playerId}`),
       ]);
       const logsPayload = (await logsResponse.json().catch(() => ({}))) as { logs?: NutritionLogRow[] };
       const targetPayload = (await targetResponse.json().catch(() => ({}))) as { target?: NutritionTargetRow | null };
+      const streakPayload = (await streakResponse.json().catch(() => ({}))) as { streak?: number };
+      const hydrationLogsPayload = (await hydrationLogsResponse.json().catch(() => ({}))) as { logs?: HydrationLogRow[] };
+      const hydrationTargetPayload = (await hydrationTargetResponse.json().catch(() => ({}))) as { target?: HydrationTargetRow | null };
+      const savedMealsPayload = (await savedMealsResponse.json().catch(() => ({}))) as { meals?: SavedMealRow[] };
       setLogs(Array.isArray(logsPayload.logs) ? logsPayload.logs : []);
       setTarget(targetPayload.target ?? null);
       setTargetCalories(targetPayload.target?.calories != null ? String(targetPayload.target.calories) : '');
       setTargetProteinG(targetPayload.target?.proteinG != null ? String(targetPayload.target.proteinG) : '');
       setTargetCarbsG(targetPayload.target?.carbsG != null ? String(targetPayload.target.carbsG) : '');
       setTargetFatG(targetPayload.target?.fatG != null ? String(targetPayload.target.fatG) : '');
+      setStreak(typeof streakPayload.streak === 'number' ? streakPayload.streak : 0);
+      setHydrationLogs(Array.isArray(hydrationLogsPayload.logs) ? hydrationLogsPayload.logs : []);
+      setHydrationTarget(hydrationTargetPayload.target ?? null);
+      setHydrationTargetInput(hydrationTargetPayload.target?.ounces != null ? String(hydrationTargetPayload.target.ounces) : '');
+      setSavedMeals(Array.isArray(savedMealsPayload.meals) ? savedMealsPayload.meals : []);
     } finally {
       setLoading(false);
     }
@@ -209,6 +254,43 @@ export default function NutritionSection({ playerId }: NutritionSectionProps) {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    const query = foodQuery.trim();
+    if (!query) {
+      setFoodResults([]);
+      return;
+    }
+    const timer = window.setTimeout(async () => {
+      setFoodSearchLoading(true);
+      try {
+        const response = await fetch(`/api/player/nutrition/food-search?q=${encodeURIComponent(query)}`);
+        const payload = (await response.json().catch(() => ({}))) as { configured?: boolean; results?: FoodSearchResult[] };
+        setFoodSearchConfigured(payload.configured !== false);
+        setFoodResults(Array.isArray(payload.results) ? payload.results : []);
+      } catch {
+        setFoodResults([]);
+      } finally {
+        setFoodSearchLoading(false);
+      }
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [foodQuery]);
+
+  function handlePickFood(food: FoodSearchResult) {
+    setSelectedFood({ foodName: food.foodName, brandName: food.brandName, servingDescription: food.servingDescription, externalId: food.externalId });
+    setCalories(food.calories != null ? String(Math.round(food.calories)) : '');
+    setProteinG(food.proteinG != null ? String(food.proteinG) : '');
+    setCarbsG(food.carbsG != null ? String(food.carbsG) : '');
+    setFatG(food.fatG != null ? String(food.fatG) : '');
+    if (!mealLabel) setMealLabel(food.foodName);
+    setFoodQuery('');
+    setFoodResults([]);
+  }
+
+  function clearSelectedFood() {
+    setSelectedFood(null);
+  }
 
   const todayLogs = useMemo(() => logs.filter((log) => log.logDate === logDate).sort((a, b) => a.id - b.id), [logs, logDate]);
   const todayTotals = useMemo(
@@ -222,18 +304,10 @@ export default function NutritionSection({ playerId }: NutritionSectionProps) {
   );
   const trendPoints = useMemo(() => dailyTotals(logs), [logs]);
 
-  const streak = useMemo(() => {
-    const loggedDates = new Set(logs.map((log) => log.logDate));
-    let count = 0;
-    const cursor = new Date();
-    for (;;) {
-      const iso = cursor.toISOString().slice(0, 10);
-      if (!loggedDates.has(iso)) break;
-      count += 1;
-      cursor.setDate(cursor.getDate() - 1);
-    }
-    return count;
-  }, [logs]);
+  const todayHydrationOunces = useMemo(
+    () => hydrationLogs.filter((log) => log.logDate === todayIso()).reduce((total, log) => total + log.ounces, 0),
+    [hydrationLogs]
+  );
 
   async function handleAddMeal(event: React.FormEvent) {
     event.preventDefault();
@@ -252,6 +326,10 @@ export default function NutritionSection({ playerId }: NutritionSectionProps) {
           carbsG: carbsG ? Number(carbsG) : null,
           fatG: fatG ? Number(fatG) : null,
           notes: notes || null,
+          foodName: selectedFood?.foodName ?? null,
+          brandName: selectedFood?.brandName ?? null,
+          servingDescription: selectedFood?.servingDescription ?? null,
+          externalFoodId: selectedFood?.externalId ?? null,
         }),
       });
       const payload = (await response.json().catch(() => ({}))) as { logs?: NutritionLogRow[]; error?: string };
@@ -263,6 +341,7 @@ export default function NutritionSection({ playerId }: NutritionSectionProps) {
       setCarbsG('');
       setFatG('');
       setNotes('');
+      setSelectedFood(null);
       setMessage('Meal logged.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Failed to save entry.');
@@ -309,6 +388,123 @@ export default function NutritionSection({ playerId }: NutritionSectionProps) {
     }
   }
 
+  async function handleAddHydration(ounces: number) {
+    if (!Number.isFinite(ounces) || ounces <= 0) return;
+    setHydrationSaving(true);
+    try {
+      const response = await fetch('/api/player/nutrition/hydration', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ playerId, logDate: todayIso(), ounces }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { logs?: HydrationLogRow[]; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to log water.');
+      setHydrationLogs(Array.isArray(payload.logs) ? payload.logs : []);
+      setCustomOunces('');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to log water.');
+    } finally {
+      setHydrationSaving(false);
+    }
+  }
+
+  async function handleDeleteLastHydration() {
+    const todays = hydrationLogs.filter((log) => log.logDate === todayIso());
+    const last = todays[todays.length - 1];
+    if (!last) return;
+    try {
+      const response = await fetch(`/api/player/nutrition/hydration?playerId=${playerId}&logId=${last.id}`, { method: 'DELETE' });
+      const payload = (await response.json().catch(() => ({}))) as { logs?: HydrationLogRow[]; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to remove entry.');
+      setHydrationLogs(Array.isArray(payload.logs) ? payload.logs : []);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to remove entry.');
+    }
+  }
+
+  async function handleSaveHydrationTarget(event: React.FormEvent) {
+    event.preventDefault();
+    try {
+      const response = await fetch('/api/player/nutrition/hydration-target', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ playerId, ounces: hydrationTargetInput ? Number(hydrationTargetInput) : null }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { target?: HydrationTargetRow | null; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to save hydration goal.');
+      setHydrationTarget(payload.target ?? null);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to save hydration goal.');
+    }
+  }
+
+  async function handleSaveTodayAsMeal() {
+    if (todayLogs.length === 0) return;
+    const name = newMealName.trim();
+    if (!name) return;
+    setSavingMealName(true);
+    try {
+      const response = await fetch('/api/player/nutrition/saved-meals', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          playerId,
+          name,
+          items: todayLogs.map((log) => ({
+            foodName: log.foodName || log.mealLabel || 'Item',
+            brandName: log.brandName,
+            servingDescription: log.servingDescription,
+            quantity: log.quantity,
+            calories: log.calories,
+            proteinG: log.proteinG,
+            carbsG: log.carbsG,
+            fatG: log.fatG,
+            externalFoodId: log.externalFoodId,
+          })),
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { meals?: SavedMealRow[]; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to save meal.');
+      setSavedMeals(Array.isArray(payload.meals) ? payload.meals : []);
+      setNewMealName('');
+      setMessage(`Saved "${name}" to My Meals.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to save meal.');
+    } finally {
+      setSavingMealName(false);
+    }
+  }
+
+  async function handleLogSavedMeal(savedMealId: number) {
+    setLogSavedMealSaving(savedMealId);
+    try {
+      const response = await fetch('/api/player/nutrition/saved-meals/log', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ playerId, savedMealId, logDate }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { logs?: NutritionLogRow[]; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to log meal.');
+      setLogs(Array.isArray(payload.logs) ? payload.logs : []);
+      setMessage('Meal logged.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to log meal.');
+    } finally {
+      setLogSavedMealSaving(null);
+    }
+  }
+
+  async function handleDeleteSavedMeal(savedMealId: number) {
+    try {
+      const response = await fetch(`/api/player/nutrition/saved-meals?playerId=${playerId}&savedMealId=${savedMealId}`, { method: 'DELETE' });
+      const payload = (await response.json().catch(() => ({}))) as { meals?: SavedMealRow[]; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to delete meal.');
+      setSavedMeals(Array.isArray(payload.meals) ? payload.meals : []);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to delete meal.');
+    }
+  }
+
   if (loading) return <p className="portal-muted-text">Loading nutrition...</p>;
 
   return (
@@ -326,8 +522,85 @@ export default function NutritionSection({ playerId }: NutritionSectionProps) {
         <div className="portal-nutrition-summary-tile">
           <span className="portal-muted-text">Logging streak</span>
           <strong>{streak} {streak === 1 ? 'day' : 'days'}</strong>
+          <span className="portal-muted-text">Days hitting your calorie goal</span>
+        </div>
+        <div className="portal-nutrition-summary-tile">
+          <span className="portal-muted-text">Hydration today</span>
+          <strong>
+            {todayHydrationOunces} {hydrationTarget?.ounces ? `/ ${hydrationTarget.ounces}` : ''} oz
+          </strong>
+          <div className="portal-hydration-quick-add">
+            {QUICK_ADD_OUNCES.map((amount) => (
+              <button key={amount} type="button" className="btn btn-ghost" disabled={hydrationSaving} onClick={() => handleAddHydration(amount)}>
+                +{amount} oz
+              </button>
+            ))}
+            <input
+              type="number"
+              min="1"
+              step="1"
+              placeholder="Custom"
+              value={customOunces}
+              onChange={(event) => setCustomOunces(event.target.value)}
+              className="portal-hydration-custom-input"
+            />
+            <button type="button" className="btn btn-ghost" disabled={hydrationSaving || !customOunces} onClick={() => handleAddHydration(Number(customOunces))}>
+              Add
+            </button>
+            {hydrationLogs.some((log) => log.logDate === todayIso()) ? (
+              <button type="button" className="btn btn-ghost" onClick={handleDeleteLastHydration}>
+                Undo last
+              </button>
+            ) : null}
+          </div>
         </div>
       </div>
+
+      <div className="portal-food-search">
+        <label>
+          Search foods
+          <input
+            value={foodQuery}
+            onChange={(event) => setFoodQuery(event.target.value)}
+            placeholder="e.g. chicken breast, Chobani yogurt..."
+          />
+        </label>
+        {foodSearchLoading ? <p className="portal-muted-text">Searching...</p> : null}
+        {!foodSearchConfigured ? <p className="portal-muted-text">Food search is unavailable right now — enter macros manually below.</p> : null}
+        {foodResults.length > 0 ? (
+          <ul className="portal-food-search-results">
+            {foodResults.map((food) => (
+              <li key={food.externalId}>
+                <button type="button" onClick={() => handlePickFood(food)}>
+                  <span className="portal-food-search-name">
+                    {food.foodName}
+                    {food.brandName ? <span className="portal-muted-text"> · {food.brandName}</span> : null}
+                  </span>
+                  <span className="portal-muted-text">
+                    {food.servingDescription} — {food.calories != null ? Math.round(food.calories) : '?'} cal
+                    {food.proteinG != null ? ` · P ${food.proteinG.toFixed(0)}g` : ''}
+                    {food.carbsG != null ? ` · C ${food.carbsG.toFixed(0)}g` : ''}
+                    {food.fatG != null ? ` · F ${food.fatG.toFixed(0)}g` : ''}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        <p className="portal-food-search-attribution portal-muted-text">Food data from USDA FoodData Central and Open Food Facts.</p>
+      </div>
+
+      {selectedFood ? (
+        <div className="portal-food-selected">
+          <span>
+            Using <strong>{selectedFood.foodName}</strong>
+            {selectedFood.brandName ? ` (${selectedFood.brandName})` : ''} — {selectedFood.servingDescription}
+          </span>
+          <button type="button" className="btn btn-ghost" onClick={clearSelectedFood}>
+            Clear
+          </button>
+        </div>
+      ) : null}
 
       <form className="portal-form-grid" onSubmit={handleAddMeal}>
         <label>
@@ -383,6 +656,50 @@ export default function NutritionSection({ playerId }: NutritionSectionProps) {
       ) : (
         <p className="portal-muted-text">No meals logged for {formatDate(logDate)} yet.</p>
       )}
+
+      <h4>My Meals</h4>
+      <div className="portal-nutrition-save-meal-row">
+        <input
+          value={newMealName}
+          onChange={(event) => setNewMealName(event.target.value)}
+          placeholder="Name today's meals to save (e.g. Post-Lift Meal)"
+          disabled={todayLogs.length === 0}
+        />
+        <button type="button" className="btn btn-ghost" disabled={savingMealName || todayLogs.length === 0 || !newMealName.trim()} onClick={handleSaveTodayAsMeal}>
+          {savingMealName ? 'Saving...' : `Save ${formatDate(logDate)}'s items as a meal`}
+        </button>
+      </div>
+      {savedMeals.length > 0 ? (
+        <ul className="portal-nutrition-meal-list">
+          {savedMeals.map((meal) => (
+            <li key={meal.id} className="portal-nutrition-meal-row">
+              <span className="portal-nutrition-meal-label">{meal.name}</span>
+              <span className="portal-muted-text">
+                {meal.items.length} item{meal.items.length === 1 ? '' : 's'} · {Math.round(meal.totalCalories)} cal
+              </span>
+              <button type="button" className="btn btn-ghost" disabled={logSavedMealSaving === meal.id} onClick={() => handleLogSavedMeal(meal.id)}>
+                {logSavedMealSaving === meal.id ? 'Logging...' : `Log to ${formatDate(logDate)}`}
+              </button>
+              <button type="button" className="btn btn-ghost" onClick={() => handleDeleteSavedMeal(meal.id)}>
+                Delete
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="portal-muted-text">No saved meals yet — log some items for a day, then save them above.</p>
+      )}
+
+      <h4>Hydration Goal</h4>
+      <form className="portal-form-grid" onSubmit={handleSaveHydrationTarget}>
+        <label>
+          Ounces per day
+          <input type="number" min="0" step="1" value={hydrationTargetInput} onChange={(event) => setHydrationTargetInput(event.target.value)} />
+        </label>
+        <div className="portal-form-span-2">
+          <button type="submit" className="btn btn-ghost">Save Hydration Goal</button>
+        </div>
+      </form>
 
       <h4>30-Day Trend</h4>
       <CalorieTrendChart points={trendPoints} targetCalories={target?.calories ?? null} />

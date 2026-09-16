@@ -97,6 +97,7 @@ export async function buildAutomationRenderContext(args:{
   payload.globalStartDate = reportStart;
   payload.globalEndDate = reportEnd;
   payload.showAiSummary = args.automation.includeAiSummary;
+  const isBullpenReport = `${args.automation.reportKey} ${args.automation.reportTitle}`.toLowerCase().includes('bullpen');
   const cells = payload.cells && typeof payload.cells === 'object' ? payload.cells : {};
   for (const [cellId,rawCell] of Object.entries(cells)) {
     if (!rawCell || typeof rawCell !== 'object' || Array.isArray(rawCell)) continue;
@@ -105,7 +106,9 @@ export async function buildAutomationRenderContext(args:{
     rawCell.player = args.playerName;
     rawCell.dateStart = range.startDate;
     rawCell.dateEnd = range.endDate;
-    rawCell.filterSelect = filterSelect.includes('Dates') ? filterSelect : ['Dates',...filterSelect];
+    const requiredFilters = isBullpenReport ? ['Dates','Session Type'] : ['Dates'];
+    rawCell.filterSelect = Array.from(new Set([...requiredFilters,...filterSelect]));
+    if (isBullpenReport) rawCell.sessionType = 'Bullpen';
   }
   payload.cells = cells;
   return {templateId:resolved.id,payload};

@@ -494,3 +494,79 @@ def compute_stuff2_from_rollup_averages(
         out[pitch_type] = _apply_calibration(pred, level_cal)
 
     return out
+
+
+def compute_stuff2_from_rollup_averages_batch(
+    groups: Dict[str, Dict[str, Dict[str, Optional[float]]]],
+    level: str,
+) -> Dict[str, Dict[str, float]]:
+    """Score independent arsenals with one model inference per pitch type."""
+    if not groups:
+        return {}
+    try:
+        _load()
+    except Exception:
+        return {}
+    if not _models or _calibration is None:
+        return {}
+
+    by_type: Dict[str, List[tuple[str, List[float]]]] = {}
+    level_one_hot = [1 if level == lvl else 0 for lvl in LEVELS]
+    for group_key, averages in groups.items():
+        if not averages:
+            continue
+        fake_rows = []
+        for base_type in BASE_TYPES:
+            avg = averages.get(base_type)
+            if avg:
+                fake_rows.append({
+                    "pitch_type": base_type,
+                    "rel_speed": avg.get("rel_speed"),
+                    "ivb": avg.get("ivb"),
+                    "hb_adj": avg.get("hb_adj"),
+                    "is_lefty": bool(avg.get("is_lefty")),
+                })
+        base_shapes = _pitcher_base_shapes(fake_rows)
+
+        for pitch_type, avg in averages.items():
+            if pitch_type not in _models:
+                continue
+            feature_cols = _feature_columns(pitch_type)
+            is_lefty = bool(avg.get("is_lefty"))
+            hb_adj = avg.get("hb_adj")
+            if not (_is_num(avg.get("rel_speed")) and _is_num(avg.get("ivb")) and _is_num(hb_adj)):
+                continue
+            hb_mirrored = -float(hb_adj) if not is_lefty else float(hb_adj)
+            feats: Dict[str, Optional[float]] = {
+                "relspeed": float(avg["rel_speed"]),
+                "ivb": float(avg["ivb"]),
+                "hb_mirrored": hb_mirrored,
+                "spinrate": float(avg["spin_rate"]) if _is_num(avg.get("spin_rate")) else None,
+                "extension": float(avg["ext_value"]) if _is_num(avg.get("ext_value")) else None,
+                "relheight": float(avg["rel_height"]) if _is_num(avg.get("rel_height")) else None,
+                "relside": float(avg["rel_side"]) if _is_num(avg.get("rel_side")) else None,
+            }
+            if pitch_type in OFFSPEED_TYPES:
+                for base_type in BASE_TYPES:
+                    prefix = base_type.lower()
+                    base = base_shapes.get(base_type, {})
+                    base_velo, base_ivb, base_hb = base.get("velo"), base.get("ivb"), base.get("hb_mirrored")
+                    has_base = _is_num(base_velo) and _is_num(base_ivb) and _is_num(base_hb)
+                    feats[f"has_{prefix}_base"] = 1.0 if has_base else 0.0
+                    feats[f"velo_gap_{prefix}"] = (float(avg["rel_speed"]) - base_velo) if has_base else 0.0
+                    feats[f"ivb_sep_{prefix}"] = (float(avg["ivb"]) - base_ivb) if has_base else 0.0
+                    feats[f"hb_sep_{prefix}"] = (hb_mirrored - base_hb) if has_base else 0.0
+            if any(feats.get(col) is None for col in feature_cols):
+                continue
+            feature_row = [feats[col] for col in feature_cols] + [0] + level_one_hot
+            by_type.setdefault(pitch_type, []).append((group_key, feature_row))
+
+    out: Dict[str, Dict[str, float]] = {}
+    for pitch_type, entries in by_type.items():
+        preds = _models[pitch_type].predict([entry[1] for entry in entries])
+        level_cal = _level_calibration(pitch_type, level)
+        if level_cal is None:
+            continue
+        for (group_key, _), pred in zip(entries, preds):
+            out.setdefault(group_key, {})[pitch_type] = _apply_calibration(float(pred), level_cal)
+    return out

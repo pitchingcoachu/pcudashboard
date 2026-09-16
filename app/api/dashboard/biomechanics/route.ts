@@ -273,6 +273,7 @@ function parseSelectedValues(raw: string | null): string[] {
 }
 
 export async function GET(request: Request) {
+  const requestStartedAt = Date.now();
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const scopedSession = toScopedSession(session);
@@ -346,6 +347,8 @@ export async function GET(request: Request) {
     return NextResponse.json(cached.payload, {
       headers: {
         'cache-control': 'private, max-age=5, stale-while-revalidate=25',
+        'x-dashboard-source': 'memory',
+        'x-dashboard-route-ms': String(Date.now() - requestStartedAt),
       },
     });
   }
@@ -356,6 +359,8 @@ export async function GET(request: Request) {
       return NextResponse.json(rollupCached, {
         headers: {
           'cache-control': 'private, max-age=5, stale-while-revalidate=25',
+          'x-dashboard-source': 'rollup',
+          'x-dashboard-route-ms': String(Date.now() - requestStartedAt),
         },
       });
     }
@@ -368,10 +373,9 @@ export async function GET(request: Request) {
       const message = error instanceof Error ? error.message : String(error);
       return new Error(`${stage}: ${message}`);
     };
-    const pitcherOptionsAll = await fetchPcuPitchers().catch(() => []);
-    const pitcherOptions = session.role === 'player'
-      ? (playerScopedName ? [playerScopedName] : [])
-      : pitcherOptionsAll;
+    const pitcherOptionsPromise = session.role === 'player'
+      ? Promise.resolve(playerScopedName ? [playerScopedName] : [])
+      : fetchPcuPitchers().catch(() => []);
     const candidateOrgIds = Array.from(
       new Set(
         [
@@ -387,6 +391,7 @@ export async function GET(request: Request) {
     let appliedStartDate = startDateParam;
     let appliedEndDate = endDateParam;
     let selectedOrgId = organizationId;
+    const datedSnapshotStartedAt = Date.now();
 
     for (const orgId of candidateOrgIds) {
       let orgStartDate = startDateParam;
@@ -482,6 +487,8 @@ export async function GET(request: Request) {
     }
 
     const selectedPitchers = parseSelectedValues(selectedPitcher).filter((v) => v.toUpperCase() !== 'ALL');
+    const datedSnapshotMs = Date.now() - datedSnapshotStartedAt;
+    const allSessionsStartedAt = Date.now();
     if (includeAllSessions && selectedPitchers.length === 1) {
       const allSessionsCacheKey = [
         'biomech:allsessions:v11',
@@ -529,6 +536,7 @@ export async function GET(request: Request) {
         }
       }
     }
+    const allSessionsMs = Date.now() - allSessionsStartedAt;
 
     const responsePayload = {
       table_columns: snapshot.tableColumns,
@@ -548,7 +556,7 @@ export async function GET(request: Request) {
       applied_velocity_min: selectedVelocityMin,
       applied_velocity_max: selectedVelocityMax,
       match_summary: snapshot.matchSummary,
-      pitcher_options: pitcherOptions,
+      pitcher_options: await pitcherOptionsPromise,
       all_sessions_leaderboard_individual_rows: allSessionsSnapshot?.leaderboardIndividualRows ?? [],
     };
     biomechanicsResponseCache.set(cacheKey, { at: Date.now(), payload: responsePayload });
@@ -556,6 +564,10 @@ export async function GET(request: Request) {
     return NextResponse.json(responsePayload, {
       headers: {
         'cache-control': 'private, max-age=5, stale-while-revalidate=25',
+        'x-dashboard-source': 'live',
+        'x-dashboard-route-ms': String(Date.now() - requestStartedAt),
+        'x-dashboard-dated-snapshot-ms': String(datedSnapshotMs),
+        'x-dashboard-all-sessions-ms': String(allSessionsMs),
       },
     });
   } catch (error) {

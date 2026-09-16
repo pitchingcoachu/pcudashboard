@@ -54,15 +54,26 @@ function summarize(rows: ForcePlatePercentileRow[], mode: 'average' | 'max'): Su
   };
 }
 
-function percentile(value: number | null, population: Array<number | null>): { percentile: number | null; sampleSize: number } {
-  const values = population.filter((entry): entry is number => typeof entry === 'number' && Number.isFinite(entry));
-  if (value === null || !Number.isFinite(value) || !values.length) return { percentile: null, sampleSize: values.length };
+// Pure-duration metrics (braking phase duration, contraction time, time to peak
+// force/takeoff, etc.) are lower-is-better; everything else this route serves
+// (force, power, velocity, jump height, RSI, percent ratios) is higher-is-better.
+const DURATION_UNITS = new Set(['millisecond', 'second', 's', 'ms']);
+
+function isLowerBetterMetric(metricUnit: string): boolean {
+  return DURATION_UNITS.has(metricUnit.trim().toLowerCase());
+}
+
+function percentile(value: number | null, population: Array<number | null>, invert = false): { percentile: number | null; sampleSize: number } {
+  const sign = invert ? -1 : 1;
+  const values = population.filter((entry): entry is number => typeof entry === 'number' && Number.isFinite(entry)).map((entry) => entry * sign);
+  const target = value !== null && Number.isFinite(value) ? value * sign : null;
+  if (target === null || !values.length) return { percentile: null, sampleSize: values.length };
   if (values.length === 1) return { percentile: 100, sampleSize: 1 };
   let lower = 0;
   let equal = 0;
   for (const entry of values) {
-    if (entry < value) lower += 1;
-    else if (Math.abs(entry - value) < 1e-9) equal += 1;
+    if (entry < target) lower += 1;
+    else if (Math.abs(entry - target) < 1e-9) equal += 1;
   }
   return { percentile: Math.round(((lower + Math.max(0, equal - 1) / 2) / (values.length - 1)) * 100), sampleSize: values.length };
 }
@@ -135,12 +146,13 @@ export async function GET(request: Request) {
   }
   const selected = summarize(rowsByPlayer.get(normalizeName(canonicalPlayer)) ?? [], mode);
   const population = cohortNames.map((name) => summarize(rowsByPlayer.get(normalizeName(name)) ?? [], mode));
+  const invert = isLowerBetterMetric(metricUnit);
   const stats = {
-    latest: percentile(selected.latest, population.map((entry) => entry.latest)),
-    previous: percentile(selected.previous, population.map((entry) => entry.previous)),
-    change: percentile(selected.change, population.map((entry) => entry.change)),
-    average: percentile(selected.average, population.map((entry) => entry.average)),
-    peak: percentile(selected.peak, population.map((entry) => entry.peak)),
+    latest: percentile(selected.latest, population.map((entry) => entry.latest), invert),
+    previous: percentile(selected.previous, population.map((entry) => entry.previous), invert),
+    change: percentile(selected.change, population.map((entry) => entry.change), invert),
+    average: percentile(selected.average, population.map((entry) => entry.average), invert),
+    peak: percentile(selected.peak, population.map((entry) => entry.peak), invert),
   };
 
   return NextResponse.json({

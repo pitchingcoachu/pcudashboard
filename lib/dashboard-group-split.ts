@@ -5,6 +5,9 @@ type GroupSplitPayload = Record<string, unknown> & {
   table_rows?: unknown[];
 };
 
+const GROUP_REQUEST_CACHE_MS = 30_000;
+const groupRequestCache = new Map<string, { expiresAt: number; request: Promise<DashboardGroupSplitResult> }>();
+
 export type DashboardGroupSplitResult = {
   status: number;
   payload: GroupSplitPayload;
@@ -26,6 +29,27 @@ async function fetchJson(url: URL, timeoutMs: number): Promise<DashboardGroupSpl
   });
   const payload = (await response.json().catch(() => ({}))) as GroupSplitPayload;
   return { status: response.status, payload };
+}
+
+function fetchGroupAggregate(url: URL, timeoutMs: number): Promise<DashboardGroupSplitResult> {
+  const key = url.toString();
+  const cached = groupRequestCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.request;
+  if (groupRequestCache.size >= 100) {
+    for (const [entryKey, entry] of groupRequestCache) {
+      if (entry.expiresAt <= Date.now()) groupRequestCache.delete(entryKey);
+    }
+    if (groupRequestCache.size >= 100) groupRequestCache.delete(groupRequestCache.keys().next().value!);
+  }
+  const request = fetchJson(url, timeoutMs).then((result) => {
+    if (result.status < 200 || result.status >= 300) groupRequestCache.delete(key);
+    return result;
+  }).catch((error) => {
+    groupRequestCache.delete(key);
+    throw error;
+  });
+  groupRequestCache.set(key, { expiresAt: Date.now() + GROUP_REQUEST_CACHE_MS, request });
+  return request;
 }
 
 /** Produces one accurately aggregated table row per player group by reusing
@@ -59,11 +83,11 @@ export async function fetchDashboardGroupSplit(input: {
   baseUrl.searchParams.set(input.playerParam, unionMemberNames.join(';'));
 
   const [baseResult, ...groupResults] = await Promise.all([
-    fetchJson(baseUrl, input.timeoutMs),
+    fetchGroupAggregate(baseUrl, input.timeoutMs),
     ...activeGroups.map((group) => {
       const groupUrl = new URL(baseUrl);
       groupUrl.searchParams.set(input.playerParam, group.memberNames.join(';'));
-      return fetchJson(groupUrl, input.timeoutMs);
+      return fetchGroupAggregate(groupUrl, input.timeoutMs);
     }),
   ]);
 

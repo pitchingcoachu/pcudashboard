@@ -268,3 +268,61 @@ def compute_command_from_rollup_averages(
         out[pitch_type] = _apply_calibration(avg_pred, level_cal)
 
     return out
+
+
+def compute_command_from_rollup_averages_batch(
+    groups: Dict[str, List[Dict[str, Any]]],
+    level: str,
+) -> Dict[str, Dict[str, float]]:
+    """Score independent rollup groups in one predict call per pitch type.
+
+    Each bucket retains its original group, weight and model inputs. Only
+    inference is batched; aggregation and calibration remain per group.
+    """
+    if not groups:
+        return {}
+    try:
+        _load()
+    except Exception:
+        return {}
+    if not _models or _calibration is None:
+        return {}
+
+    by_type: Dict[str, List[tuple[str, List[float], float]]] = {}
+    level_one_hot = [1 if level == lvl else 0 for lvl in LEVELS]
+    for group_key, buckets in groups.items():
+        for bucket in buckets:
+            pitch_type = bucket.get("pitch_type")
+            if pitch_type not in _models or not all(
+                _is_num(bucket.get(field))
+                for field in ("plate_side", "plate_height", "balls", "strikes")
+            ):
+                continue
+            plate_side = float(bucket["plate_side"])
+            plate_side_mirrored = -plate_side if not bool(bucket.get("is_lefty")) else plate_side
+            feature_row = [
+                _edge_distance(plate_side_mirrored, ZONE_LEFT, ZONE_RIGHT),
+                _edge_distance(float(bucket["plate_height"]), ZONE_BOTTOM, ZONE_TOP),
+                float(bucket["balls"]),
+                float(bucket["strikes"]),
+                {"Left": -1, "Right": 1}.get(_norm_hand(bucket.get("batterside")), 0),
+                *level_one_hot,
+            ]
+            weight = bucket.get("weight")
+            effective_weight = float(weight) if _is_num(weight) and float(weight) > 0 else 1.0
+            by_type.setdefault(pitch_type, []).append((group_key, feature_row, effective_weight))
+
+    out: Dict[str, Dict[str, float]] = {}
+    for pitch_type, entries in by_type.items():
+        preds = _models[pitch_type].predict([entry[1] for entry in entries])
+        accum: Dict[str, tuple[float, float]] = {}
+        for (group_key, _, weight), pred in zip(entries, preds):
+            weighted_sum, total_weight = accum.get(group_key, (0.0, 0.0))
+            accum[group_key] = (weighted_sum + float(pred) * weight, total_weight + weight)
+        level_cal = _level_calibration(pitch_type, level)
+        if level_cal is None:
+            continue
+        for group_key, (weighted_sum, total_weight) in accum.items():
+            if total_weight > 0:
+                out.setdefault(group_key, {})[pitch_type] = _apply_calibration(weighted_sum / total_weight, level_cal)
+    return out

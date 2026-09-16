@@ -82,3 +82,39 @@ export async function releaseTrackmanSyncReservation(schoolCodeValue: string): P
     UPDATE trackman_sync_status SET last_requested_at=NULL, last_status='failed', updated_at=NOW() WHERE school_code=$1
   `, [school]);
 }
+
+/**
+ * Called by a TrackMan workflow's final step when it finishes (success or
+ * failure), so status reporting is truthful instead of stuck at "queued"
+ * forever. The recency guard on last_requested_at is what tells a manual
+ * click apart from a routine cron run: a manual sync's last_requested_at is
+ * always fresh (set the moment the button was clicked, minutes before this
+ * fires), while a cron-triggered run's last_requested_at is either null or a
+ * stale timestamp from an unrelated earlier manual click. Only a fresh
+ * request returns a requestedByUserId to notify -- cron completions still
+ * update last_status/last_completed_at via the second unconditional UPDATE,
+ * they just don't notify anyone.
+ */
+export async function completeTrackmanSync(
+  schoolCodeValue: string,
+  status: 'success' | 'failed'
+): Promise<{ requestedByUserId: number | null }> {
+  const school = schoolCode(schoolCodeValue);
+  await ensureSchema();
+  const pool = getDbPool();
+  const recent = await pool.query(`
+    UPDATE trackman_sync_status SET last_completed_at=NOW(), last_status=$2, updated_at=NOW()
+    WHERE school_code=$1 AND last_requested_at > NOW() - INTERVAL '2 hours'
+    RETURNING last_requested_by_user_id
+  `, [school, status]);
+  if (recent.rows[0]) {
+    const userId = recent.rows[0].last_requested_by_user_id;
+    return { requestedByUserId: userId ? Number(userId) : null };
+  }
+  await pool.query(`
+    INSERT INTO trackman_sync_status (school_code, last_completed_at, last_status, updated_at)
+    VALUES ($1, NOW(), $2, NOW())
+    ON CONFLICT (school_code) DO UPDATE SET last_completed_at=NOW(), last_status=EXCLUDED.last_status, updated_at=NOW()
+  `, [school, status]);
+  return { requestedByUserId: null };
+}

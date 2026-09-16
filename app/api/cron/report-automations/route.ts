@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { listDueReportAutomations } from '../../../../lib/report-automations-db';
-import { executeReportAutomation } from '../../../../lib/report-automation-runner';
+import { executeReportAutomation, resolveReportAutomationOrigin } from '../../../../lib/report-automation-runner';
 
 export const maxDuration = 800;
 
@@ -15,7 +15,7 @@ function authorized(request: Request): boolean {
 export async function GET(request: Request) {
   if (!authorized(request)) return NextResponse.json({error:'Unauthorized'}, {status:401});
   const automations = await listDueReportAutomations(new Date());
-  const origin = new URL(request.url).origin;
+  const origin = resolveReportAutomationOrigin(request.url);
   const results = [];
   for (const automation of automations) results.push({ automationId:automation.id, ...(await executeReportAutomation(automation, origin)) });
   return NextResponse.json({ok:true, due:automations.length, results});

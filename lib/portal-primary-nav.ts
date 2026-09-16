@@ -41,13 +41,13 @@ export function buildStaffMoreNavItems(input: {
           { href: '/portal/admin/exercises', label: 'Exercise Library' },
           { href: '/portal/admin/workouts', label: 'Workout Library' },
           { href: '/portal/admin/master-calendar', label: 'Master Calendar' },
-          { href: '/portal/admin/testing', label: 'Testing' },
           { href: '/portal/admin/questionnaires', label: 'Questionnaires' },
         ]
       : []),
     ...(input.canAccessActivityTracker ? [{ href: '/portal/admin/activity', label: 'Activity Tracker' }] : []),
     ...(input.canAccessEmailAutomations ? [{ href: '/portal/admin/email-templates', label: 'Email Automations' }] : []),
     ...(!isTrial ? [{ href: '/portal/force-plates', label: 'Force Plate Data' }] : []),
+    ...(school === 'PCU' ? [{ href: '/portal/ovr-sprint', label: 'OVR Sprint' }] : []),
     ...(!isTrial && isStaff ? [{ href: '/portal/admin/csv-uploads', label: 'CSV Uploads' }] : []),
   ];
 }
