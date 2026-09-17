@@ -113,6 +113,20 @@ export const METRICS_GLOSSARY: MetricGlossaryEntry[] = [
     typicalTableMode: 'Process',
   },
   {
+    name: 'Z-Swing%',
+    aliases: ['z-swing', 'z-swing%', 'zone swing', 'zone swing%', 'izswing', 'izswing%'],
+    definition: 'In-zone swing rate: swings on pitches in the strike zone divided by all pitches in the strike zone.',
+    domain: 'both',
+    typicalTableMode: 'Swing Decisions',
+  },
+  {
+    name: 'Z-Whiff%',
+    aliases: ['z-whiff', 'z-whiff%', 'zone whiff', 'zone whiff%'],
+    definition: 'In-zone whiff rate: whiffs on pitches in the strike zone divided by swings on pitches in the strike zone.',
+    domain: 'both',
+    typicalTableMode: 'Swing Decisions',
+  },
+  {
     name: 'CSW%',
     aliases: ['csw', 'csw%', 'called strikes plus whiffs'],
     definition: 'Called Strike plus Whiff percentage: percentage of total pitches that are either called strikes or swinging strikes.',

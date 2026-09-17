@@ -8,6 +8,7 @@ import NativeDateInput from '../components/native-date-input';
 import { deliverReportPdf } from '../../../lib/report-pdf-delivery';
 import { SaveReportToProfileButton } from '../components/save-report-to-profile';
 import { dashboardMetricLabel, parseForcePlateFlagMetric } from '../../../lib/dashboard-metric-catalog';
+import { chartableAssessmentFields } from '../../../lib/assessment-questionnaire-metrics';
 
 type Domain = 'Pitching' | 'Hitting' | 'Catching' | 'Force Plates';
 type GoalSlot = 1 | 2 | 3;
@@ -23,7 +24,9 @@ type GoalCategory =
   | 'Swing Decisions'
   | 'Batted Ball'
   | 'Pre-Pitch Routine'
-  | 'Force Plate Metrics';
+  | 'Force Plate Metrics'
+  | 'Assessment'
+  | 'Questionnaire';
 type Comparator = 'Greater Than' | 'Less Than';
 type ChartType = 'Release' | 'Movement Plot' | 'Pitch Chart' | 'HeatMaps' | 'Trend' | 'Bar';
 type HeatmapView = 'Pitch' | 'Frequency' | 'Whiff Rate' | 'GB Rate' | 'Contact Rate' | 'Swing Rate' | 'Exit Velocity' | 'Run Values' | 'QP+' | 'Called Strike Rate';
@@ -62,6 +65,9 @@ type GoalDraft = {
   batterSide: string;
   sessionType: string;
   testType: string;
+  assessmentFieldId: string;
+  questionnaireId: string;
+  questionnaireQuestionId: string;
   createdAt: string | null;
 };
 
@@ -77,6 +83,9 @@ type GoalPayload = {
   targetValue?: number | null;
   chartType?: ChartType;
   heatmapView?: HeatmapView;
+  assessmentFieldId?: string;
+  questionnaireId?: string;
+  questionnaireQuestionId?: string;
   filters?: {
     startDate?: string;
     endDate?: string;
@@ -166,6 +175,8 @@ const GOAL_CATEGORIES: GoalCategory[] = [
   'Batted Ball',
   'Pre-Pitch Routine',
   'Force Plate Metrics',
+  'Assessment',
+  'Questionnaire',
 ];
 const DOMAIN_GOAL_CATEGORIES: Record<Domain, GoalCategory[]> = {
   Pitching: [
@@ -179,6 +190,8 @@ const DOMAIN_GOAL_CATEGORIES: Record<Domain, GoalCategory[]> = {
     'Swing Decisions',
     'Batted Ball',
     'Pre-Pitch Routine',
+    'Assessment',
+    'Questionnaire',
   ],
   Hitting: [
     'Mechanical',
@@ -190,6 +203,8 @@ const DOMAIN_GOAL_CATEGORIES: Record<Domain, GoalCategory[]> = {
     'Swing Decisions',
     'Batted Ball',
     'Pre-Pitch Routine',
+    'Assessment',
+    'Questionnaire',
   ],
   Catching: [
     'Mechanical',
@@ -201,8 +216,10 @@ const DOMAIN_GOAL_CATEGORIES: Record<Domain, GoalCategory[]> = {
     'Swing Decisions',
     'Batted Ball',
     'Pre-Pitch Routine',
+    'Assessment',
+    'Questionnaire',
   ],
-  'Force Plates': ['Force Plate Metrics', 'Strength', 'Mobility', 'Weight', 'Mental Side'],
+  'Force Plates': ['Force Plate Metrics', 'Strength', 'Mobility', 'Weight', 'Mental Side', 'Assessment', 'Questionnaire'],
 };
 const DOMAIN_EXECUTION_FALLBACKS: Record<Domain, string[]> = {
   Pitching: [
@@ -225,6 +242,8 @@ const DOMAIN_EXECUTION_FALLBACKS: Record<Domain, string[]> = {
     'Comp%',
     'QP%',
     'Whiff%',
+    'IZswing%',
+    'Z-Whiff%',
     'K%',
     'BB%',
     'GB%',
@@ -267,6 +286,7 @@ const DOMAIN_EXECUTION_FALLBACKS: Record<Domain, string[]> = {
     'Chase%',
     'GoZoneSw%',
     'IZswing%',
+    'Z-Whiff%',
     'EdgeSwing%',
     'PosSD%',
     'PA',
@@ -912,6 +932,15 @@ function formatMdyy(isoDate: string): string {
   return `${m}/${d}/${String(y).padStart(2, '0')}`;
 }
 
+function starPoints(cx: number, cy: number, outerR: number, innerR: number): string {
+  const points: string[] = [];
+  for (let i = 0; i < 10; i += 1) {
+    const r = i % 2 === 0 ? outerR : innerR;
+    const angle = -Math.PI / 2 + (i * Math.PI) / 5;
+    points.push(`${cx + r * Math.cos(angle)},${cy + r * Math.sin(angle)}`);
+  }
+  return points.join(' ');
+}
 function resultShape(pitchCall: string, playResult: string): string {
   if (pitchCall === 'HitByPitch' || playResult === 'HitByPitch') return 'Ball';
   if (pitchCall === 'StrikeCalled') return 'Called Strike';
@@ -1079,6 +1108,9 @@ function parseStoredGoalDescription(category: string | null, value: string | nul
     batterSide: 'All',
     sessionType: 'Season',
     testType: 'All',
+    assessmentFieldId: '',
+    questionnaireId: '',
+    questionnaireQuestionId: '',
     createdAt,
   };
   if (!value) return defaultGoal;
@@ -1115,6 +1147,9 @@ function parseStoredGoalDescription(category: string | null, value: string | nul
       batterSide: String(parsed.filters?.batterSide ?? 'All') || 'All',
       sessionType: String(parsed.filters?.sessionType ?? 'Season') || 'Season',
       testType: String(parsed.filters?.testType ?? 'All') || 'All',
+      assessmentFieldId: String(parsed.assessmentFieldId ?? ''),
+      questionnaireId: String(parsed.questionnaireId ?? ''),
+      questionnaireQuestionId: String(parsed.questionnaireQuestionId ?? ''),
     };
   } catch {
     return defaultGoal;
@@ -1134,6 +1169,9 @@ function serializeGoalDescription(goal: GoalDraft): string {
     targetValue: goal.targetValue.trim() ? Number(goal.targetValue) : null,
     chartType: goal.chartType,
     heatmapView: goal.heatmapView,
+    assessmentFieldId: goal.assessmentFieldId,
+    questionnaireId: goal.questionnaireId,
+    questionnaireQuestionId: goal.questionnaireQuestionId,
     filters: {
       startDate: goal.startDate,
       endDate: goal.endDate,
@@ -1167,6 +1205,13 @@ function goalSummary(goal: GoalDraft): string {
     const comparator = goal.comparator === 'Less Than' ? '<' : '>';
     return `${goal.statDisplayName.trim() || (goal.category === 'Force Plate Metrics' ? dashboardMetricLabel(goal.executionStat) : goal.executionStat) || 'Stat'} ${comparator} ${goal.targetValue || '?'} ${goal.objectiveText ? `| ${goal.objectiveText}` : ''}`.trim();
   }
+  if (goal.category === 'Assessment') {
+    const label = chartableAssessmentFields().find((field) => field.id === goal.assessmentFieldId)?.label || 'Assessment field';
+    return `${label}${goal.objectiveText ? ` | ${goal.objectiveText}` : ''}`.trim();
+  }
+  if (goal.category === 'Questionnaire') {
+    return goal.objectiveText.trim() || 'Questionnaire trend';
+  }
   return goal.objectiveText.trim();
 }
 
@@ -1177,6 +1222,8 @@ function goalTypeLabel(goal: GoalDraft): string {
     return 'Stuff';
   }
   if (goal.category === 'Execution' || goal.category === 'Hitting Stats' || goal.category === 'Force Plate Metrics') return goal.statDisplayName.trim() || (goal.category === 'Force Plate Metrics' ? dashboardMetricLabel(goal.executionStat) : goal.executionStat) || 'Stat';
+  if (goal.category === 'Assessment') return chartableAssessmentFields().find((field) => field.id === goal.assessmentFieldId)?.label || 'Assessment';
+  if (goal.category === 'Questionnaire') return 'Questionnaire';
   return goal.objectiveText.trim() ? `Note: ${goal.objectiveText.trim()}` : 'Note';
 }
 
@@ -1185,6 +1232,7 @@ function isChartCapableGoal(goal: GoalDraft, domain: Domain): boolean {
   if (goal.category === 'Execution') return domain === 'Pitching' || domain === 'Catching';
   if (goal.category === 'Hitting Stats') return domain === 'Hitting';
   if (goal.category === 'Force Plate Metrics') return domain === 'Force Plates';
+  if (goal.category === 'Assessment' || goal.category === 'Questionnaire') return true;
   return false;
 }
 
@@ -1197,6 +1245,7 @@ function goalMetricValue(goal: GoalDraft, point: Record<string, unknown>): numbe
     return null;
   };
   if (goal.category === 'Force Plate Metrics') return num('force_plate_value', 'value');
+  if (goal.category === 'Assessment' || goal.category === 'Questionnaire') return num('value');
   if (goal.category === 'Stuff') {
     if (goal.stuffType === 'Velocity') return num('velo', 'rel_speed');
     if (goal.stuffType === 'Movement') {
@@ -1845,6 +1894,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
   const [domainExecutionStats, setDomainExecutionStats] = useState<string[]>(DOMAIN_EXECUTION_FALLBACKS.Pitching);
   const [forcePlateMetricLabels, setForcePlateMetricLabels] = useState<Record<string, string>>({});
   const [forcePlateTestsByMetric, setForcePlateTestsByMetric] = useState<Record<string, string[]>>({});
+  const [questionnaireCatalog, setQuestionnaireCatalog] = useState<Array<{ questionnaireId: number; questionnaireName: string; questions: Array<{ id: string; prompt: string }> }>>([]);
   const [goalControlsVisible, setGoalControlsVisible] = useState<Record<GoalSlot, boolean>>({ 1: true, 2: true, 3: true });
   const [goalCount, setGoalCount] = useState<1 | 2 | 3>(3);
   const [goalChartHover, setGoalChartHover] = useState<{ x: number; y: number; text: string; bg?: string } | null>(null);
@@ -3179,6 +3229,9 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
           batterSide: goal.batterSide,
           sessionType: goal.sessionType,
           testType: goal.testType,
+          assessmentFieldId: goal.assessmentFieldId,
+          questionnaireId: goal.questionnaireId,
+          questionnaireQuestionId: goal.questionnaireQuestionId,
         }));
     },
     [domain, planGoals, planMode]
@@ -3353,6 +3406,32 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
 
     Promise.allSettled(
       chartFetchGoals.map(async (goal) => {
+        if (goal.category === 'Assessment') {
+          if (!activePlanPlayerId || !goal.assessmentFieldId) return { slotIndex: goal.slotIndex, points: [] };
+          const params = new URLSearchParams({ playerId: String(activePlanPlayerId), fieldId: goal.assessmentFieldId });
+          const response = await fetch(`/api/player/assessment-trend?${params.toString()}`, { cache: 'no-store', signal: controller.signal });
+          const payload = (await response.json().catch(() => ({}))) as { series?: Array<{ date: string; value: number }>; error?: string };
+          if (!response.ok) throw new Error(payload.error ?? 'Failed to load assessment goal data.');
+          return {
+            slotIndex: goal.slotIndex,
+            points: (payload.series ?? []).map((point) => ({ session_date: point.date, value: point.value })),
+          };
+        }
+        if (goal.category === 'Questionnaire') {
+          if (!activePlanPlayerId || !goal.questionnaireId || !goal.questionnaireQuestionId) return { slotIndex: goal.slotIndex, points: [] };
+          const params = new URLSearchParams({
+            playerId: String(activePlanPlayerId),
+            questionnaireId: goal.questionnaireId,
+            questionId: goal.questionnaireQuestionId,
+          });
+          const response = await fetch(`/api/player/questionnaire-trend?${params.toString()}`, { cache: 'no-store', signal: controller.signal });
+          const payload = (await response.json().catch(() => ({}))) as { series?: Array<{ date: string; value: number }>; error?: string };
+          if (!response.ok) throw new Error(payload.error ?? 'Failed to load questionnaire goal data.');
+          return {
+            slotIndex: goal.slotIndex,
+            points: (payload.series ?? []).map((point) => ({ session_date: point.date, value: point.value })),
+          };
+        }
         if (domain === 'Force Plates') {
           const params = new URLSearchParams({ player: selectedDashboardPlayerName, metrics: goal.executionStat });
           if (goal.startDate) params.set('start_date', goal.startDate);
@@ -3472,7 +3551,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
       active = false;
       controller.abort();
     };
-  }, [domain, playerQueryCandidates, selectedDashboardPlayerName, chartFetchGoals]);
+  }, [domain, playerQueryCandidates, selectedDashboardPlayerName, chartFetchGoals, activePlanPlayerId]);
 
   useEffect(() => {
     let active = true;
@@ -3508,6 +3587,26 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
       active = false;
     };
   }, [domain, selectedSchoolCode]);
+
+  useEffect(() => {
+    if (!activePlanPlayerId) {
+      setQuestionnaireCatalog([]);
+      return;
+    }
+    let active = true;
+    fetch(`/api/player/questionnaire-catalog?playerId=${activePlanPlayerId}`, { cache: 'no-store' })
+      .then(async (response) => {
+        const payload = (await response.json().catch(() => ({}))) as { questionnaires?: typeof questionnaireCatalog };
+        if (!active || !response.ok) return;
+        setQuestionnaireCatalog(payload.questionnaires ?? []);
+      })
+      .catch(() => {
+        if (active) setQuestionnaireCatalog([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [activePlanPlayerId]);
 
   useEffect(() => {
     if (!activePlanPlayerId) {
@@ -4205,14 +4304,14 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
           onMouseMove: (event: { clientX: number; clientY: number }) => setGoalChartHover({ x: event.clientX, y: event.clientY, text: title, bg: fill }),
           onMouseLeave: () => setGoalChartHover(null),
         };
-        if (result === 'Ball') return <circle key={key} cx={x} cy={y} r={8.4} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.1} {...hoverProps} />;
-        if (result === 'Foul') return <polygon key={key} points={`${x},${y - 8.1} ${x - 7.3},${y + 6.2} ${x + 7.3},${y + 6.2}`} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.1} {...hoverProps} />;
-        if (result === 'Whiff') return <text key={key} x={x} y={y + 6.3} fontSize={19} textAnchor="middle" fill={fill} {...hoverProps}>★</text>;
-        if (result === 'In Play (Out)') return <polygon key={key} points={`${x},${y - 8.1} ${x - 7.3},${y + 6.2} ${x + 7.3},${y + 6.2}`} fill={fill} {...hoverProps} />;
+        if (result === 'Ball') return <circle key={key} cx={x} cy={y} r={9.5} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.3} {...hoverProps} />;
+        if (result === 'Foul') return <polygon key={key} points={`${x},${y - 12.2} ${x - 11.8},${y + 9} ${x + 11.8},${y + 9}`} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.3} {...hoverProps} />;
+        if (result === 'Whiff') return <polygon key={key} points={starPoints(x, y, 13.5, 5.4)} fill={fill} {...hoverProps} />;
+        if (result === 'In Play (Out)') return <polygon key={key} points={`${x},${y - 12.2} ${x - 11.8},${y + 9} ${x + 11.8},${y + 9}`} fill={fill} {...hoverProps} />;
         if (result === 'In Play (Hit)' || result === 'Single' || result === 'Double' || result === 'Triple' || result === 'HomeRun')
-          return <rect key={key} x={x - 6.9} y={y - 6.9} width={13.8} height={13.8} fill={fill} {...hoverProps} />;
-        if (result === 'Error') return <rect key={key} x={x - 6.9} y={y - 6.9} width={13.8} height={13.8} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={1.9} {...hoverProps} />;
-        return <circle key={key} cx={x} cy={y} r={8.4} fill={fill} {...hoverProps} />;
+          return <rect key={key} x={x - 9} y={y - 9} width={18} height={18} fill={fill} {...hoverProps} />;
+        if (result === 'Error') return <rect key={key} x={x - 9} y={y - 9} width={18} height={18} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.1} {...hoverProps} />;
+        return <circle key={key} cx={x} cy={y} r={9.5} fill={fill} {...hoverProps} />;
       };
 
       const cells = goal.chartType === 'HeatMaps' ? buildGoalHeatCells(points, selectedHeatmapView) : [];
@@ -5121,6 +5220,73 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                   </>
                 ) : null}
 
+                {goal.category === 'Assessment' ? (
+                  <label className="portal-inline-filter">
+                    Assessment Field
+                    <select
+                      value={goal.assessmentFieldId}
+                      onChange={(event) =>
+                        setPlanGoals((prev) =>
+                          prev.map((entry) => (entry.slotIndex === goal.slotIndex ? { ...entry, assessmentFieldId: event.target.value } : entry))
+                        )
+                      }
+                    >
+                      <option value="">Select field</option>
+                      {chartableAssessmentFields().map((field) => (
+                        <option key={`${goal.slotIndex}-assessment-${field.id}`} value={field.id}>
+                          {field.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+
+                {goal.category === 'Questionnaire' ? (
+                  <div className="portal-form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                    <label className="portal-inline-filter">
+                      Questionnaire
+                      <select
+                        value={goal.questionnaireId}
+                        onChange={(event) =>
+                          setPlanGoals((prev) =>
+                            prev.map((entry) =>
+                              entry.slotIndex === goal.slotIndex
+                                ? { ...entry, questionnaireId: event.target.value, questionnaireQuestionId: '' }
+                                : entry
+                            )
+                          )
+                        }
+                      >
+                        <option value="">Select questionnaire</option>
+                        {questionnaireCatalog.map((entry) => (
+                          <option key={`${goal.slotIndex}-questionnaire-${entry.questionnaireId}`} value={String(entry.questionnaireId)}>
+                            {entry.questionnaireName}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="portal-inline-filter">
+                      Question
+                      <select
+                        value={goal.questionnaireQuestionId}
+                        disabled={!goal.questionnaireId}
+                        onChange={(event) =>
+                          setPlanGoals((prev) =>
+                            prev.map((entry) => (entry.slotIndex === goal.slotIndex ? { ...entry, questionnaireQuestionId: event.target.value } : entry))
+                          )
+                        }
+                      >
+                        <option value="">Select question</option>
+                        {(questionnaireCatalog.find((entry) => String(entry.questionnaireId) === goal.questionnaireId)?.questions ?? []).map((question) => (
+                          <option key={`${goal.slotIndex}-question-${question.id}`} value={question.id}>
+                            {question.prompt}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                ) : null}
+
                 <label className="portal-inline-filter">
                   Goal Notes / Objective
                   <textarea
@@ -5144,7 +5310,13 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                     <label className="portal-inline-filter">
                       Chart
                       <SearchableSingleSelect
-                        options={toOptions(domain === 'Force Plates' ? ['Trend', 'Bar'] : intendedTargetGoal ? ['Trend'] : CHART_OPTIONS)}
+                        options={toOptions(
+                          domain === 'Force Plates' || goal.category === 'Assessment' || goal.category === 'Questionnaire'
+                            ? ['Trend', 'Bar']
+                            : intendedTargetGoal
+                              ? ['Trend']
+                              : CHART_OPTIONS
+                        )}
                         value={goal.chartType}
                         onChange={(next) =>
                           setPlanGoals((prev) =>

@@ -23,7 +23,7 @@ async function authContext() {
     appUrl: session.appUrl,
     apps: session.apps,
   }).trim().toUpperCase();
-  if (schoolCode !== 'PCU') return { error: NextResponse.json({ error: 'OVR Sprint is currently available only for PCU.' }, { status: 403 }) } as const;
+  if (schoolCode !== 'PCU') return { error: NextResponse.json({ error: 'OVR Data is currently available only for PCU.' }, { status: 403 }) } as const;
   const organizationId = await resolveProgrammingOrganizationId(session);
   return { session, schoolCode, organizationId } as const;
 }

@@ -114,6 +114,7 @@ export function SaveReportToProfileButton({
 
 export function ReportActionsDropdown({
   generate,
+  downloadPrintPdf,
   downloadPng,
   title,
   preferredPlayerId,
@@ -126,6 +127,7 @@ export function ReportActionsDropdown({
   className = 'btn btn-primary',
 }: {
   generate: () => void | Promise<void>;
+  downloadPrintPdf?: () => void | Promise<void>;
   downloadPng?: () => void | Promise<void>;
   title?: string;
   preferredPlayerId?: number | null;
@@ -186,7 +188,8 @@ export function ReportActionsDropdown({
       </button>
       {open ? (
         <div className="report-actions-menu" role="menu" style={{ display: 'flex', flexDirection: 'column' }}>
-          <button type="button" role="menuitem" data-report-download-pdf="true" onClick={() => { setOpen(false); void generate(); }}>Download PDF</button>
+          <button type="button" role="menuitem" data-report-download-pdf="true" onClick={() => { setOpen(false); void generate(); }}>{downloadPrintPdf ? 'Download PDF · Single Page' : 'Download PDF'}</button>
+          {downloadPrintPdf ? <button type="button" role="menuitem" onClick={() => { setOpen(false); void downloadPrintPdf(); }}>Download PDF · Multiple Pages</button> : null}
           {downloadPng ? <button type="button" role="menuitem" onClick={() => { setOpen(false); void downloadPng(); }}>Download PNG</button> : null}
           <button type="button" role="menuitem" onClick={() => void saveToProfile()}>Save to Player Profile</button>
           {canAutomate ? <button type="button" role="menuitem" onClick={automate}>Automate Report</button> : null}

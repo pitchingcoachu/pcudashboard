@@ -15,6 +15,7 @@ import { dashboardActivityPath, dispatchPortalActivity } from './activity-events
 import DashboardGroupFilter from './dashboard-group-filter';
 import { deliverReportPdf } from '../../../lib/report-pdf-delivery';
 import { SaveReportToProfileButton } from '../components/save-report-to-profile';
+import { dashboardMetricLabel } from '../../../lib/dashboard-metric-catalog';
 
 type OptionItem = { value: string; label: string };
 type HeatCell = { x: number; y: number; w: number; h: number; value: number; density: number };
@@ -325,6 +326,7 @@ const FALLBACK_AVAILABLE_CUSTOM_COLUMNS = [
   'Chase%',
   'GoZoneSw%',
   'IZswing%',
+  'Z-Whiff%',
   'EdgeSwing%',
   'PosSD%',
   'Early%',
@@ -5805,7 +5807,7 @@ export default function HittingSuite({
                 <label>
                   Add Column
                   <SearchableSingleSelect
-                    options={remainingCustomColumns.map((column) => ({ value: column, label: column }))}
+                    options={remainingCustomColumns.map((column) => ({ value: column, label: dashboardMetricLabel(column) }))}
                     value={customColumnToAdd}
                     onChange={(next) => {
                       setCustomColumnToAdd(next);
@@ -5868,7 +5870,7 @@ export default function HittingSuite({
                         style={{ minHeight: 'unset', padding: '0.3rem 0.5rem', display: 'inline-flex', alignItems: 'center', gap: 8 }}
                       >
                         <span style={{ opacity: 0.7 }}>::</span>
-                        <span>{column}</span>
+                        <span>{dashboardMetricLabel(column)}</span>
                         <span
                           style={{ opacity: 0.8 }}
                           onClick={(event) => {
@@ -5929,7 +5931,7 @@ export default function HittingSuite({
                   {displayedTableColumns.map((col, colIndex) => {
                     const isSortable = true;
                     const activeSort = leaderboardSortColumn === col;
-                    const label = isLeaderboardPage && colIndex === 0 ? (leaderboardViewBy === 'Team' ? 'Team' : 'Player') : col;
+                    const label = isLeaderboardPage && colIndex === 0 ? (leaderboardViewBy === 'Team' ? 'Team' : 'Player') : dashboardMetricLabel(col);
                     return (
                       <th
                         key={col}

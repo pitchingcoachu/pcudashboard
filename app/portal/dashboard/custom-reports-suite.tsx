@@ -16,12 +16,13 @@ import { DirectionHeatmap, type DirectionBreakdown } from './intended-zone-stats
 import { IntendedTargetMapMini } from './intended-target-map-mini';
 import { deliverReportPdf } from '../../../lib/report-pdf-delivery';
 import { ReportActionsDropdown, type AutomationPanelSeed } from '../components/save-report-to-profile';
-import { dashboardMetricLabel, dashboardMetricOptions, formatForcePlateMetricValue } from '../../../lib/dashboard-metric-catalog';
+import { dashboardMetricLabel, dashboardMetricOptions, forcePlateDisplayUnit, forcePlateFlagMetric, formatForcePlateMetricValue, parseForcePlateFlagMetric } from '../../../lib/dashboard-metric-catalog';
 
 type OptionItem = { value: string; label: string };
 type ReportType = 'Pitching' | 'Hitting' | 'Catching' | 'Force Plates';
 type ReportScope = 'Single Player' | 'Multi-Player' | 'Team';
 type PercentileScope = 'NCAA' | 'TEAM' | 'MLB';
+type ForcePlateLegDisplay = 'selected' | 'left' | 'right' | 'both';
 type SprayViewMode = 'Batted Balls' | 'Bins';
 type PanelType =
   | ''
@@ -53,7 +54,11 @@ type PanelType =
   | 'OVR Sprint Bar Chart'
   | 'Percentile Summary'
   | 'Biomechanics Table'
-  | 'Biomechanics Force Chart';
+  | 'Biomechanics Force Chart'
+  | 'Assessment Line Chart'
+  | 'Assessment Bar Chart'
+  | 'Questionnaire Line Chart'
+  | 'Questionnaire Bar Chart';
 type FilterToken =
   | 'Dates'
   | 'Level'
@@ -339,6 +344,7 @@ type CellConfig = {
   forcePlateMetrics: string[];
   forcePlateMetricLabels: Record<string, string>;
   forcePlateTestType: string;
+  forcePlateLegDisplay: ForcePlateLegDisplay;
   metricChartMetric: string;
   metricChartLabel: string;
   chartBenchmarkValue: string;
@@ -346,12 +352,18 @@ type CellConfig = {
   ovrSprintExercises: string[];
   ovrSprintMetric: 'totalTime' | 'speedMph';
   percentileSummaryForceMetrics: string[];
+  percentileSummaryForceTestType: string;
+  percentileSummaryForceLegDisplay: ForcePlateLegDisplay;
   percentileSummaryOvrExercises: string[];
   percentileSummaryGroupId: string;
   biomechanicsTableMode: string;
   biomechanicsPitchKey: string;
   biomechanicsChartMode: 'Force' | 'Moments';
   biomechanicsForceMode: 'force' | 'bw';
+  assessmentFieldId: string;
+  questionnaireId: string;
+  questionnaireQuestionId: string;
+  questionnaireQuestionLabel: string;
 };
 
 type ReportPayload = {
@@ -426,6 +438,10 @@ const PITCHING_PANEL_TYPES: PanelType[] = [
   'Percentile Summary',
   'Biomechanics Table',
   'Biomechanics Force Chart',
+  'Assessment Line Chart',
+  'Assessment Bar Chart',
+  'Questionnaire Line Chart',
+  'Questionnaire Bar Chart',
   'Note Section',
 ];
 const HITTING_PANEL_TYPES: PanelType[] = [
@@ -449,6 +465,10 @@ const HITTING_PANEL_TYPES: PanelType[] = [
   'OVR Sprint Line Chart',
   'OVR Sprint Bar Chart',
   'Percentile Summary',
+  'Assessment Line Chart',
+  'Assessment Bar Chart',
+  'Questionnaire Line Chart',
+  'Questionnaire Bar Chart',
   'Note Section',
 ];
 const CATCHING_PANEL_TYPES: PanelType[] = [
@@ -457,9 +477,26 @@ const CATCHING_PANEL_TYPES: PanelType[] = [
   'Metric Line Chart',
   'Metric Bar Chart',
   'Summary Table',
+  'Assessment Line Chart',
+  'Assessment Bar Chart',
+  'Questionnaire Line Chart',
+  'Questionnaire Bar Chart',
   'Note Section',
 ];
-const FORCE_PLATE_PANEL_TYPES: PanelType[] = ['', 'Metric Line Chart', 'Metric Bar Chart', 'Force Plate Line Chart', 'Force Plate Bar Chart', 'Percentile Summary', 'Summary Table', 'Note Section'];
+const FORCE_PLATE_PANEL_TYPES: PanelType[] = [
+  '',
+  'Metric Line Chart',
+  'Metric Bar Chart',
+  'Force Plate Line Chart',
+  'Force Plate Bar Chart',
+  'Percentile Summary',
+  'Summary Table',
+  'Assessment Line Chart',
+  'Assessment Bar Chart',
+  'Questionnaire Line Chart',
+  'Questionnaire Bar Chart',
+  'Note Section',
+];
 const FILTER_TOKENS: FilterToken[] = [
   'Dates',
   'Level',
@@ -469,7 +506,6 @@ const FILTER_TOKENS: FilterToken[] = [
   'Batter Hand',
   'Pitcher Hand',
   'Pitch Results',
-  'QP Locations',
   'In Zone',
   'Count',
   'After Count',
@@ -796,6 +832,80 @@ function formatBiomechanicsTableValue(column: string, value: unknown, forceMode:
   return String(value);
 }
 
+function summarizeBiomechanicsRowsByPitchType(
+  rows: Array<Record<string, string | number | null>>,
+  columns: string[]
+): Array<Record<string, string | number | null>> {
+  type Aggregate = {
+    name: string;
+    pitchType: string;
+    count: number;
+    dates: Set<string>;
+    sums: Record<string, number>;
+  };
+  const grouped = new Map<string, Aggregate>();
+  const allByPlayer = new Map<string, Aggregate>();
+  const addRow = (aggregate: Aggregate, row: Record<string, string | number | null>) => {
+    aggregate.count += 1;
+    const date = String(row.Date ?? '').trim();
+    if (date) aggregate.dates.add(date);
+    for (const column of columns) {
+      if (column === 'Name' || column === 'Date' || column === '#' || column === 'Pitch Type' || column === 'Tags') continue;
+      const value = Number(row[column]);
+      if (Number.isFinite(value)) aggregate.sums[column] = (aggregate.sums[column] ?? 0) + value;
+    }
+  };
+  for (const row of rows) {
+    const name = String(row.Name ?? '').trim();
+    const pitchType = String(row['Pitch Type'] ?? '').trim() || 'Unspecified';
+    const playerKey = normalizeNameKey(name);
+    const key = `${playerKey}\u001f${pitchType.toLowerCase()}`;
+    const aggregate = grouped.get(key) ?? { name, pitchType, count: 0, dates: new Set<string>(), sums: {} };
+    addRow(aggregate, row);
+    grouped.set(key, aggregate);
+    const allAggregate = allByPlayer.get(playerKey) ?? { name, pitchType: 'All', count: 0, dates: new Set<string>(), sums: {} };
+    addRow(allAggregate, row);
+    allByPlayer.set(playerKey, allAggregate);
+  }
+  const toOutput = (aggregate: Aggregate): Record<string, string | number | null> => {
+    const output: Record<string, string | number | null> = {
+      Name: aggregate.name,
+      Date: aggregate.dates.size === 1 ? Array.from(aggregate.dates)[0] : aggregate.dates.size > 1 ? 'Multi' : '',
+      '#': aggregate.count,
+      'Pitch Type': aggregate.pitchType,
+    };
+    for (const column of columns) {
+      if (column in output || column === 'Tags') continue;
+      const sum = aggregate.sums[column];
+      output[column] = sum === undefined || aggregate.count <= 0 ? null : sum / aggregate.count;
+    }
+    return output;
+  };
+  const byPitchType = Array.from(grouped.values()).sort((a, b) => {
+      const byName = a.name.localeCompare(b.name);
+      if (byName) return byName;
+      const aRank = PITCH_ORDER.indexOf(a.pitchType);
+      const bRank = PITCH_ORDER.indexOf(b.pitchType);
+      if (aRank === -1 && bRank === -1) return a.pitchType.localeCompare(b.pitchType);
+      if (aRank === -1) return 1;
+      if (bRank === -1) return -1;
+      return aRank - bRank;
+    });
+  const output: Array<Record<string, string | number | null>> = [];
+  for (const aggregate of byPitchType) {
+    const previous = output.at(-1);
+    if (previous && normalizeNameKey(String(previous.Name ?? '')) !== normalizeNameKey(aggregate.name)) {
+      const previousAll = allByPlayer.get(normalizeNameKey(String(previous.Name ?? '')));
+      if (previousAll) output.push(toOutput(previousAll));
+    }
+    output.push(toOutput(aggregate));
+  }
+  const finalName = byPitchType.at(-1)?.name ?? '';
+  const finalAll = allByPlayer.get(normalizeNameKey(finalName));
+  if (finalAll) output.push(toOutput(finalAll));
+  return output;
+}
+
 function groupPointsByDate(points: Array<{ date: string; value: number }>): Array<{ date: string; value: number }> {
   const grouped = new Map<string, number[]>();
   for (const point of points) {
@@ -894,6 +1004,150 @@ function ForcePlateReportChart({
   );
 }
 
+function ForcePlateLegComparisonPanel({
+  points,
+  metrics,
+  metricOptions,
+  player,
+  testType,
+  groupId,
+  kind,
+  benchmarkValue,
+  benchmarkLabel,
+  onGroupsLoaded,
+  onHover,
+}: {
+  points: Array<Record<string, unknown>>;
+  metrics: string[];
+  metricOptions: Array<{ value: string; label: string; testTypes?: string[] }>;
+  player: string;
+  testType: string;
+  groupId: string;
+  kind: 'line' | 'bar';
+  benchmarkValue?: string;
+  benchmarkLabel?: string;
+  onGroupsLoaded: (groups: PercentileGroupOption[]) => void;
+  onHover: (value: { x: number; y: number; text: string; bg?: string } | null) => void;
+}) {
+  const [percentiles, setPercentiles] = useState<Record<string, PercentileStatValue | null>>({});
+  const [percentilesLoading, setPercentilesLoading] = useState(false);
+  const normalizedPlayer = normalizeNameForApi(player);
+  const metricSignature = metrics.join('\u001f');
+  const series = metrics.map((metric) => {
+    const option = metricOptions.find((entry) => entry.value === metric);
+    const parsed = parseForcePlateFlagMetric(metric);
+    const leg = forcePlateMetricLeg(metric);
+    const rows = groupPointsByDate(points
+      .filter((point) => String(point.metric ?? '') === metric)
+      .map((point) => ({ date: String(point.session_date ?? '').trim(), value: Number(point.value) })));
+    const lowerIsBetter = /^(millisecond|second|ms|s)$/i.test(parsed?.metricUnit ?? '');
+    return {
+      metric,
+      leg,
+      label: leg === 'left' ? 'Left' : leg === 'right' ? 'Right' : (option?.label ?? dashboardMetricLabel(metric)),
+      fullLabel: option?.label ?? dashboardMetricLabel(metric),
+      unit: forcePlateDisplayUnit(parsed?.metricUnit ?? ''),
+      rows,
+      trend: trendFromRows(rows, lowerIsBetter),
+      color: leg === 'left' ? '#38bdf8' : leg === 'right' ? '#fb7185' : '#e11d48',
+    };
+  }).filter((entry) => entry.rows.length > 0);
+
+  useEffect(() => {
+    const metricValues = metricSignature ? metricSignature.split('\u001f') : [];
+    if (!normalizedPlayer || !metricValues.length) {
+      setPercentiles({});
+      return;
+    }
+    let active = true;
+    setPercentilesLoading(true);
+    void Promise.all(metricValues.map(async (metric) => {
+      const parsed = parseForcePlateFlagMetric(metric);
+      if (!parsed) return [metric, null, []] as const;
+      const params = new URLSearchParams({
+        player: normalizedPlayer,
+        metricName: parsed.metricName,
+        metricUnit: parsed.metricUnit,
+        groupId: groupId || 'all',
+        testType: testType || 'All',
+        mode: 'average',
+      });
+      const response = await fetch(`/api/player/force-plate-percentiles?${params.toString()}`, { cache: 'no-store' });
+      const payload = await response.json().catch(() => ({})) as {
+        groups?: Array<{ id: string; categoryName?: string; name: string }>;
+        stats?: { latest?: PercentileStatValue };
+      };
+      const groups = (payload.groups ?? []).map((group) => ({ id: group.id, label: group.categoryName ? `${group.categoryName} · ${group.name}` : group.name }));
+      return [metric, response.ok ? payload.stats?.latest ?? null : null, groups] as const;
+    })).then((entries) => {
+      if (!active) return;
+      setPercentiles(Object.fromEntries(entries.map(([metric, stat]) => [metric, stat])));
+      const foundGroups = entries.find(([, , availableGroups]) => availableGroups.length)?.[2];
+      const groups: PercentileGroupOption[] = foundGroups ? [...foundGroups] : [];
+      onGroupsLoaded(groups);
+    }).finally(() => {
+      if (active) setPercentilesLoading(false);
+    });
+    return () => { active = false; };
+  }, [groupId, metricSignature, normalizedPlayer, onGroupsLoaded, testType]);
+
+  if (!series.length) return <p className="portal-muted-text">No left/right force-plate data for the current filters.</p>;
+  const dates = Array.from(new Set(series.flatMap((entry) => entry.rows.map((row) => row.date)))).sort((a, b) => a.localeCompare(b));
+  const values = series.flatMap((entry) => entry.rows.map((row) => row.value));
+  const benchmark = Number(String(benchmarkValue ?? '').trim());
+  const hasBenchmark = String(benchmarkValue ?? '').trim() !== '' && Number.isFinite(benchmark);
+  if (hasBenchmark) values.push(benchmark);
+  const rawMin = Math.min(...values);
+  const rawMax = Math.max(...values);
+  const padding = rawMin === rawMax ? Math.max(1, Math.abs(rawMax) * 0.08) : (rawMax - rawMin) * 0.1;
+  const min = rawMin - padding;
+  const max = rawMax + padding;
+  const width = 720, height = 390, left = 64, right = 24, top = 28, bottom = dates.length > 5 ? 92 : 66;
+  const plotWidth = width - left - right;
+  const x = (date: string) => dates.length === 1 ? left + plotWidth / 2 : left + (dates.indexOf(date) / (dates.length - 1)) * plotWidth;
+  const y = (value: number) => top + (max - value) / Math.max(0.000001, max - min) * (height - top - bottom);
+  const ticks = Array.from({ length: 5 }, (_, index) => min + index / 4 * (max - min));
+  const labelStep = Math.max(1, Math.ceil(dates.length / 8));
+  const slotWidth = plotWidth / Math.max(1, dates.length);
+  const barWidth = Math.min(32, slotWidth * 0.7 / Math.max(1, series.length));
+
+  return (
+    <div className="portal-custom-reports-leg-comparison">
+      <div className="portal-custom-reports-kpi-grid portal-custom-reports-leg-kpis">
+        {series.map((entry) => (
+          <div key={entry.metric} className="portal-custom-reports-kpi-card">
+            <div className="portal-custom-reports-kpi-label-row">
+              <span>{entry.label} leg</span>
+              {percentilesLoading ? <span className="portal-custom-reports-percentile-badge">Ranking…</span>
+                : percentiles[entry.metric]?.percentile != null ? <span className={`portal-custom-reports-percentile-badge ${percentileTierClassName(percentiles[entry.metric]!.percentile!)}`}>{ordinalLabel(percentiles[entry.metric]!.percentile!)} percentile</span>
+                : <span className="portal-custom-reports-percentile-badge portal-custom-reports-percentile-unavailable">No rank</span>}
+            </div>
+            <strong className="portal-custom-reports-kpi-value-row">
+              <span className="portal-custom-reports-kpi-value">{entry.trend.latestValue === null ? '—' : entry.trend.latestValue.toFixed(1)}</span>
+              {entry.unit ? <small>{entry.unit}</small> : null}
+            </strong>
+            {entry.trend.trendPct !== null ? <small className={entry.trend.favorable ? 'portal-custom-reports-positive' : 'portal-custom-reports-negative'}>{entry.trend.favorable ? '▲' : '▼'} {Math.abs(entry.trend.trendPct).toFixed(1)}% vs. 30-day avg</small> : null}
+          </div>
+        ))}
+      </div>
+      <div className="portal-custom-reports-velocity">
+        <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Left and right leg comparison chart">
+          {ticks.map((tick) => <g key={tick}><line x1={left} y1={y(tick)} x2={width - right} y2={y(tick)} stroke="rgba(148,163,184,.18)"/><text x={left - 8} y={y(tick) + 4} textAnchor="end" fontSize="11" fill="currentColor">{tick.toFixed(1)}</text></g>)}
+          <line x1={left} y1={height - bottom} x2={width - right} y2={height - bottom} stroke="rgba(148,163,184,.55)"/>
+          {hasBenchmark ? <g><line x1={left} y1={y(benchmark)} x2={width - right} y2={y(benchmark)} stroke="#f8fafc" strokeWidth="2" strokeDasharray="8 6"/><text x={width - right - 4} y={y(benchmark) - 7} textAnchor="end" fontSize="11" fontWeight="800" fill="#f8fafc">{benchmarkLabel?.trim() || 'Goal'} · {benchmark.toFixed(1)}</text></g> : null}
+          {kind === 'line' ? series.map((entry) => <path key={entry.metric} d={entry.rows.map((row, index) => `${index ? 'L' : 'M'} ${x(row.date)} ${y(row.value)}`).join(' ')} fill="none" stroke={entry.color} strokeWidth="3"/>) : null}
+          {series.flatMap((entry, seriesIndex) => entry.rows.map((row) => kind === 'bar'
+            ? <rect key={`${entry.metric}-${row.date}`} x={x(row.date) + (seriesIndex - (series.length - 1) / 2) * barWidth - barWidth / 2} y={y(row.value)} width={barWidth} height={height - bottom - y(row.value)} rx="3" fill={entry.color} onMouseMove={(event) => onHover({ x: event.clientX, y: event.clientY, text: `${fmtShortDate(row.date)}\n${entry.label}: ${row.value.toFixed(2)} ${entry.unit}`, bg: entry.color })} onMouseLeave={() => onHover(null)}/>
+            : <circle key={`${entry.metric}-${row.date}`} cx={x(row.date)} cy={y(row.value)} r="5" fill={entry.color} onMouseMove={(event) => onHover({ x: event.clientX, y: event.clientY, text: `${fmtShortDate(row.date)}\n${entry.label}: ${row.value.toFixed(2)} ${entry.unit}`, bg: entry.color })} onMouseLeave={() => onHover(null)}/>))}
+          {dates.map((date, index) => index % labelStep === 0 || index === dates.length - 1 ? <text key={date} x={x(date)} y={height - bottom + 18} textAnchor={dates.length > 5 ? 'end' : 'middle'} transform={dates.length > 5 ? `rotate(-35 ${x(date)} ${height - bottom + 18})` : undefined} fontSize="10" fill="currentColor">{fmtShortDate(date)}</text> : null)}
+          <text x={width / 2} y={height - 8} textAnchor="middle" fontSize="12" fill="currentColor">Date</text>
+        </svg>
+      </div>
+      <div className="portal-custom-reports-leg-legend">{series.map((entry) => <span key={entry.metric}><i style={{ background: entry.color }}/>{entry.label}</span>)}</div>
+    </div>
+  );
+}
+
 function OvrSprintReportChart({
   points,
   exercise,
@@ -929,6 +1183,66 @@ function OvrSprintReportChart({
   );
 }
 
+function AssessmentReportChart({
+  points,
+  label,
+  kind,
+  benchmarkValue,
+  benchmarkLabel,
+  onHover,
+}: {
+  points: Array<Record<string, unknown>>;
+  label: string;
+  kind: 'line' | 'bar';
+  benchmarkValue?: string;
+  benchmarkLabel?: string;
+  onHover: (value: { x: number; y: number; text: string; bg?: string } | null) => void;
+}) {
+  const rows = groupPointsByDate(points.map((point) => ({ date: String(point.session_date ?? '').trim(), value: Number(point.value) })));
+  return (
+    <ReportTrendChart
+      rows={rows}
+      label={label}
+      kind={kind}
+      benchmarkValue={benchmarkValue}
+      benchmarkLabel={benchmarkLabel}
+      formatBenchmark={(value) => value.toFixed(2)}
+      noDataMessage="No assessment data for this player."
+      onHover={onHover}
+    />
+  );
+}
+
+function QuestionnaireReportChart({
+  points,
+  label,
+  kind,
+  benchmarkValue,
+  benchmarkLabel,
+  onHover,
+}: {
+  points: Array<Record<string, unknown>>;
+  label: string;
+  kind: 'line' | 'bar';
+  benchmarkValue?: string;
+  benchmarkLabel?: string;
+  onHover: (value: { x: number; y: number; text: string; bg?: string } | null) => void;
+}) {
+  const rows = groupPointsByDate(points.map((point) => ({ date: String(point.session_date ?? '').trim(), value: Number(point.value) })));
+  return (
+    <ReportTrendChart
+      rows={rows}
+      label={label}
+      kind={kind}
+      benchmarkValue={benchmarkValue}
+      benchmarkLabel={benchmarkLabel}
+      formatBenchmark={(value) => value.toFixed(2)}
+      noDataMessage="No questionnaire responses for this player."
+      onHover={onHover}
+    />
+  );
+}
+
 // Ported from the Force Plate / OVR Sprint dashboard pages (same red/yellow/
 // green thirds and ordinal formatting used there).
 function ordinalLabel(value: number): string {
@@ -944,6 +1258,51 @@ function percentileTierClassName(percentile: number): string {
   return 'portal-custom-reports-percentile-high';
 }
 
+function forcePlateTestTypeLabel(value: string): string {
+  return String(value ?? '').trim().toUpperCase() === 'SLJ'
+    ? 'SLJ · Single Leg Jump'
+    : value;
+}
+
+function forcePlateMetricLeg(metricValue: string): 'left' | 'right' | null {
+  const parsed = parseForcePlateFlagMetric(metricValue);
+  const match = parsed?.metricName.match(/\s+-\s+(Left|Right)$/i);
+  return match?.[1]?.toLowerCase() === 'left' ? 'left' : match?.[1]?.toLowerCase() === 'right' ? 'right' : null;
+}
+
+function forcePlateMetricBaseName(metricValue: string): string {
+  const parsed = parseForcePlateFlagMetric(metricValue);
+  return parsed?.metricName.replace(/\s+-\s+(Left|Right)$/i, '').trim() ?? '';
+}
+
+function resolveForcePlateLegMetrics(
+  metrics: string[],
+  legDisplay: ForcePlateLegDisplay,
+  options: Array<{ value: string; label: string; testTypes?: string[] }>
+): string[] {
+  if (legDisplay === 'selected') return metrics;
+  const optionValues = new Set(options.map((option) => option.value));
+  const resolved: string[] = [];
+  for (const metricValue of metrics) {
+    const parsed = parseForcePlateFlagMetric(metricValue);
+    const baseName = forcePlateMetricBaseName(metricValue);
+    if (!parsed || !baseName || !forcePlateMetricLeg(metricValue)) {
+      resolved.push(metricValue);
+      continue;
+    }
+    const left = forcePlateFlagMetric(`${baseName} - Left`, parsed.metricUnit);
+    const right = forcePlateFlagMetric(`${baseName} - Right`, parsed.metricUnit);
+    if ((legDisplay === 'left' || legDisplay === 'both') && optionValues.has(left)) resolved.push(left);
+    if ((legDisplay === 'right' || legDisplay === 'both') && optionValues.has(right)) resolved.push(right);
+    if (!optionValues.has(left) && !optionValues.has(right)) resolved.push(metricValue);
+  }
+  return Array.from(new Set(resolved));
+}
+
+function hasForcePlateLegMetric(metrics: string[]): boolean {
+  return metrics.some((metric) => forcePlateMetricLeg(metric) !== null);
+}
+
 type PercentileGroupOption = { id: string; label: string };
 type PercentileStatValue = { percentile: number | null; sampleSize: number };
 
@@ -951,17 +1310,30 @@ function PercentileSummaryConfigFields({
   config,
   cellId,
   forcePlateMetricOptions,
+  availableForcePlateTestTypes,
   ovrSprintExerciseOptions,
   percentileGroups,
   setCellConfigs,
 }: {
   config: CellConfig;
   cellId: string;
-  forcePlateMetricOptions: Array<{ value: string; label: string }>;
+  forcePlateMetricOptions: Array<{ value: string; label: string; testTypes?: string[] }>;
+  availableForcePlateTestTypes: string[];
   ovrSprintExerciseOptions: Array<{ value: string; label: string }>;
   percentileGroups: PercentileGroupOption[];
   setCellConfigs: (updater: (current: Record<string, CellConfig>) => Record<string, CellConfig>) => void;
 }) {
+  const forcePlateTestTypes = Array.from(new Set([
+    'All',
+    ...availableForcePlateTestTypes.filter((value) => value !== 'All'),
+    ...forcePlateMetricOptions
+      .filter((option) => config.percentileSummaryForceMetrics.includes(option.value))
+      .flatMap((option) => option.testTypes ?? []),
+    ...(config.percentileSummaryForceTestType && config.percentileSummaryForceTestType !== 'All'
+      ? [config.percentileSummaryForceTestType]
+      : []),
+  ]));
+
   return (
     <>
       <label>Force Plate Metrics</label>
@@ -970,6 +1342,33 @@ function PercentileSummaryConfigFields({
         values={config.percentileSummaryForceMetrics}
         onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), percentileSummaryForceMetrics: next } }))}
       />
+      <label>Force Plate Test</label>
+      <SearchableSingleSelect
+        options={forcePlateTestTypes.map((value) => ({ value, label: forcePlateTestTypeLabel(value) }))}
+        value={config.percentileSummaryForceTestType || 'All'}
+        onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), percentileSummaryForceTestType: next || 'All' } }))}
+      />
+      {(config.percentileSummaryForceTestType === 'SLJ' || hasForcePlateLegMetric(config.percentileSummaryForceMetrics)) ? (
+        <>
+          <label>Leg Display</label>
+          <SearchableSingleSelect
+            options={[
+              { value: 'selected', label: 'Selected metric' },
+              { value: 'left', label: 'Left leg' },
+              { value: 'right', label: 'Right leg' },
+              { value: 'both', label: 'Left + Right' },
+            ]}
+            value={config.percentileSummaryForceLegDisplay || 'selected'}
+            onChange={(next) => setCellConfigs((current) => ({
+              ...current,
+              [cellId]: {
+                ...(current[cellId] ?? emptyCell()),
+                percentileSummaryForceLegDisplay: next === 'left' || next === 'right' || next === 'both' ? next : 'selected',
+              },
+            }))}
+          />
+        </>
+      ) : null}
       <label>OVR Sprint Exercises</label>
       <SearchableMultiSelect
         options={ovrSprintExerciseOptions}
@@ -1115,12 +1514,20 @@ function BiomechanicsChartConfigFields({
 type PercentileTile = {
   key: string;
   label: string;
+  leg?: 'left' | 'right' | null;
   unit: string;
   value: number | null;
   percentile: PercentileStatValue | null;
   trendPct: number | null;
   favorable: boolean | null;
 };
+
+function compactForcePlatePanelLabel(label: string): string {
+  const normalized = label.trim().replace(/\s+/g, ' ');
+  if (/^Jump Height \(Flight Time\) in Inches(?: \(Inch\))?$/i.test(normalized)) return 'Jump Height';
+  if (/^Eccentric Braking RFD\s*\/\s*BM$/i.test(normalized)) return 'Ecc. Braking RFD/BM';
+  return label;
+}
 
 function average(values: number[]): number | null {
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
@@ -1150,15 +1557,19 @@ function trendFromRows(rows: Array<{ date: string; value: number }>, lowerIsBett
 function PercentileSummaryPanel({
   player,
   forceMetrics,
+  forceTestType,
   ovrExercises,
   groupId,
+  compactMetricLabels,
   forcePlateMetricOptions,
   onGroupsLoaded,
 }: {
   player: string;
   forceMetrics: string[];
+  forceTestType: string;
   ovrExercises: string[];
   groupId: string;
+  compactMetricLabels: boolean;
   forcePlateMetricOptions: Array<{ value: string; label: string; testTypes?: string[] }>;
   onGroupsLoaded: (groups: PercentileGroupOption[]) => void;
 }) {
@@ -1166,9 +1577,13 @@ function PercentileSummaryPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const normalizedPlayer = normalizeNameForApi(player);
+  const forceMetricSignature = forceMetrics.join('\u001f');
+  const ovrExerciseSignature = ovrExercises.join('\u001f');
 
   useEffect(() => {
-    if (!normalizedPlayer || (!forceMetrics.length && !ovrExercises.length)) {
+    const forceMetricValues = forceMetricSignature ? forceMetricSignature.split('\u001f') : [];
+    const ovrExerciseValues = ovrExerciseSignature ? ovrExerciseSignature.split('\u001f') : [];
+    if (!normalizedPlayer || (!forceMetricValues.length && !ovrExerciseValues.length)) {
       setTiles([]);
       setError(!normalizedPlayer ? 'Select a single player to show percentile summaries.' : '');
       return;
@@ -1181,15 +1596,16 @@ function PercentileSummaryPanel({
       const nextTiles: PercentileTile[] = [];
       let groups: PercentileGroupOption[] = [];
 
-      await Promise.all(forceMetrics.map(async (metricValue) => {
+      await Promise.all(forceMetricValues.map(async (metricValue) => {
         const option = forcePlateMetricOptions.find((entry) => entry.value === metricValue);
-        const metricName = option?.label.replace(/\s*\([^)]*\)\s*$/, '') || metricValue;
-        const unitMatch = option?.label.match(/\(([^)]*)\)\s*$/);
-        const metricUnit = unitMatch?.[1] ?? '';
-        const params = new URLSearchParams({ player: normalizedPlayer, metricName, metricUnit, groupId, testType: 'All', mode: 'average' });
+        const parsed = parseForcePlateFlagMetric(metricValue);
+        const metricName = parsed?.metricName ?? option?.label.replace(/\s*\([^)]*\)\s*$/, '') ?? metricValue;
+        const metricUnit = parsed?.metricUnit ?? option?.label.match(/\(([^)]*)\)\s*$/)?.[1] ?? '';
+        const leg = forcePlateMetricLeg(metricValue);
+        const params = new URLSearchParams({ player: normalizedPlayer, metricName, metricUnit, groupId, testType: forceTestType || 'All', mode: 'average' });
         const [statsResponse, overviewResponse] = await Promise.all([
           fetch(`/api/player/force-plate-percentiles?${params.toString()}`, { cache: 'no-store' }),
-          fetch(`/api/dashboard/force-plates/overview?${new URLSearchParams({ player: normalizedPlayer, metrics: metricValue, test_type: 'All' }).toString()}`, { cache: 'no-store' }),
+          fetch(`/api/dashboard/force-plates/overview?${new URLSearchParams({ player: normalizedPlayer, metrics: metricValue, test_type: forceTestType || 'All' }).toString()}`, { cache: 'no-store' }),
         ]);
         const statsPayload = await statsResponse.json().catch(() => ({})) as { groups?: Array<{ id: string; categoryName?: string; name: string }>; stats?: { latest: PercentileStatValue } };
         const overviewPayload = await overviewResponse.json().catch(() => ({})) as OverviewLitePayload;
@@ -1203,11 +1619,13 @@ function PercentileSummaryPanel({
             const value = Number((point as Record<string, unknown>).value);
             return date && Number.isFinite(value) ? [{ date, value }] : [];
           });
-        const { latestValue, trendPct, favorable } = trendFromRows(rows, false);
+        const { latestValue, trendPct, favorable } = trendFromRows(rows, /^(millisecond|second|ms|s)$/i.test(metricUnit.trim()));
+        const panelLabel = metricName.replace(/\s+-\s+(Left|Right)$/i, '').trim();
         nextTiles.push({
           key: `force:${metricValue}`,
-          label: option?.label.replace(/\s*\([^)]*\)\s*$/, '') || metricValue,
-          unit: metricUnit,
+          label: compactMetricLabels ? compactForcePlatePanelLabel(panelLabel) : panelLabel,
+          leg,
+          unit: forcePlateDisplayUnit(metricUnit),
           value: latestValue,
           percentile: statsPayload.stats?.latest ?? null,
           trendPct,
@@ -1215,23 +1633,30 @@ function PercentileSummaryPanel({
         });
       }));
 
-      if (ovrExercises.length) {
+      const sideOrder = (leg: PercentileTile['leg']) => leg === 'left' ? 0 : leg === 'right' ? 1 : 2;
+      nextTiles.sort((a, b) => {
+        const byMetric = a.label.localeCompare(b.label);
+        if (byMetric !== 0) return byMetric;
+        return sideOrder(a.leg) - sideOrder(b.leg);
+      });
+
+      if (ovrExerciseValues.length) {
         const filtersResponse = await fetch('/api/dashboard/ovr-sprint/filters', { cache: 'no-store' });
         const filtersPayload = await filtersResponse.json().catch(() => ({})) as { player_ids?: Array<{ id: number; name: string }> };
         const playerEntry = (filtersPayload.player_ids ?? []).find((entry) => normalizeNameKey(entry.name) === normalizeNameKey(normalizedPlayer));
         if (playerEntry) {
           const percentileParams = new URLSearchParams({ playerId: String(playerEntry.id), metric: 'totalTime', groupId });
-          for (const exercise of ovrExercises) percentileParams.append('exercise', exercise);
+          for (const exercise of ovrExerciseValues) percentileParams.append('exercise', exercise);
           const [statsResponse, overviewResponse] = await Promise.all([
             fetch(`/api/ovr-sprint/percentile?${percentileParams.toString()}`, { cache: 'no-store' }),
-            fetch(`/api/dashboard/ovr-sprint/overview?${new URLSearchParams({ player: normalizedPlayer, exercises: ovrExercises.join(','), metric: 'totalTime' }).toString()}`, { cache: 'no-store' }),
+            fetch(`/api/dashboard/ovr-sprint/overview?${new URLSearchParams({ player: normalizedPlayer, exercises: ovrExerciseValues.join(','), metric: 'totalTime' }).toString()}`, { cache: 'no-store' }),
           ]);
           const statsPayload = await statsResponse.json().catch(() => ({})) as { groups?: Array<{ id: number; name: string }>; results?: Record<string, { stats: { latest: PercentileStatValue } }> };
           const overviewPayload = await overviewResponse.json().catch(() => ({})) as OverviewLitePayload;
           if (Array.isArray(statsPayload.groups)) {
             groups = statsPayload.groups.map((group) => ({ id: String(group.id), label: group.name }));
           }
-          for (const exercise of ovrExercises) {
+          for (const exercise of ovrExerciseValues) {
             const rows = (overviewPayload.chart_points ?? [])
               .filter((point) => String((point as Record<string, unknown>).exercise ?? '') === exercise)
               .flatMap((point) => {
@@ -1267,7 +1692,7 @@ function PercentileSummaryPanel({
     return () => {
       active = false;
     };
-  }, [normalizedPlayer, forceMetrics.join(','), ovrExercises.join(','), groupId]);
+  }, [compactMetricLabels, forceMetricSignature, forcePlateMetricOptions, forceTestType, groupId, normalizedPlayer, onGroupsLoaded, ovrExerciseSignature]);
 
   if (error) return <p className="portal-muted-text">{error}</p>;
   if (!tiles.length && !loading) return <p className="portal-muted-text">Choose at least one Force Plate metric or OVR Sprint exercise.</p>;
@@ -1277,12 +1702,23 @@ function PercentileSummaryPanel({
       {tiles.map((tile) => (
         <div key={tile.key} className="portal-custom-reports-kpi-card">
           <div className="portal-custom-reports-kpi-label-row">
-            <span>{tile.label}</span>
+            <div className="portal-custom-reports-kpi-title-stack">
+              {tile.leg ? <span className={`portal-custom-reports-leg-badge portal-custom-reports-leg-badge--${tile.leg}`} title={tile.leg === 'left' ? 'Left leg' : 'Right leg'} aria-label={tile.leg === 'left' ? 'Left leg' : 'Right leg'}>{tile.leg === 'left' ? 'L' : 'R'}</span> : null}
+              <span
+                className={`portal-custom-reports-kpi-metric-title${tile.label === 'Ecc. Braking RFD/BM' ? ' portal-custom-reports-kpi-metric-title--single-line' : ''}`}
+                title={tile.label}
+              >
+                {tile.label}
+              </span>
+            </div>
             {loading ? <span className="portal-custom-reports-percentile-badge">Ranking…</span>
               : tile.percentile?.percentile != null ? <span className={`portal-custom-reports-percentile-badge ${percentileTierClassName(tile.percentile.percentile)}`} title={`Compared with ${tile.percentile.sampleSize} athlete${tile.percentile.sampleSize === 1 ? '' : 's'} with qualifying data`}>{ordinalLabel(tile.percentile.percentile)} percentile</span>
               : <span className="portal-custom-reports-percentile-badge portal-custom-reports-percentile-unavailable">No rank</span>}
           </div>
-          <strong>{tile.value === null ? '—' : tile.value.toFixed(1)}{tile.unit ? <small> {tile.unit}</small> : null}</strong>
+          <strong className="portal-custom-reports-kpi-value-row">
+            <span className="portal-custom-reports-kpi-value">{tile.value === null ? '—' : tile.value.toFixed(1)}</span>
+            {tile.unit ? <small title={tile.unit}>{tile.unit}</small> : null}
+          </strong>
           {tile.trendPct !== null ? (
             <small className={tile.favorable ? 'portal-custom-reports-positive' : 'portal-custom-reports-negative'}>
               {tile.favorable ? '▲' : '▼'} {Math.abs(tile.trendPct).toFixed(1)}% vs. 30-day avg
@@ -1869,10 +2305,16 @@ function moveAllRowsToBottom<T extends Record<string, unknown>>(rows: T[], split
   return [...nonAllRows, ...allRows];
 }
 
+type PanelDuplicateDirection = 'left' | 'right' | 'above' | 'below';
+type RowDuplicateDirection = 'above' | 'below';
+type ColumnDuplicateDirection = 'left' | 'right';
+
 function CopyMenu({
   panelDisabled,
   rowDisabled,
   disabledReason,
+  canAddRow,
+  canAddColumn,
   onDuplicatePanel,
   onDuplicateRow,
   onDuplicateColumn,
@@ -1880,9 +2322,173 @@ function CopyMenu({
   panelDisabled?: boolean;
   rowDisabled?: boolean;
   disabledReason?: string;
-  onDuplicatePanel: () => void;
-  onDuplicateRow: () => void;
-  onDuplicateColumn: () => void;
+  canAddRow: boolean;
+  canAddColumn: boolean;
+  onDuplicatePanel: (direction: PanelDuplicateDirection) => void;
+  onDuplicateRow: (direction: RowDuplicateDirection) => void;
+  onDuplicateColumn: (direction: ColumnDuplicateDirection) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<'panel' | 'row' | 'column' | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+        setMode(null);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (mode) setMode(null);
+        else setOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [mode, open]);
+
+  const choose = (action: () => void) => {
+    setOpen(false);
+    setMode(null);
+    action();
+  };
+
+  const directionButton = (
+    direction: PanelDuplicateDirection,
+    label: string,
+    disabled: boolean,
+    action: () => void
+  ) => (
+    <button
+      type="button"
+      className="portal-custom-reports-copy-direction"
+      disabled={disabled}
+      onClick={() => choose(action)}
+    >
+      <span aria-hidden="true">{direction === 'left' ? '←' : direction === 'right' ? '→' : direction === 'above' ? '↑' : '↓'}</span>
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="portal-nav-overflow" ref={rootRef} data-export-ignore="true">
+      <button
+        type="button"
+        className="btn btn-ghost portal-nav-overflow-trigger portal-custom-reports-duplicate-trigger"
+        aria-label="Duplicate options"
+        title="Duplicate"
+        aria-haspopup="true"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => {
+          if (current) setMode(null);
+          return !current;
+        })}
+      >
+        <svg viewBox="0 0 20 20" aria-hidden="true" className="portal-custom-reports-duplicate-icon">
+          <rect x="6.5" y="6.5" width="9" height="9" rx="1.8" fill="none" stroke="currentColor" strokeWidth="1.5" />
+          <path d="M4.5 13.5h-.25A1.75 1.75 0 0 1 2.5 11.75v-7.5A1.75 1.75 0 0 1 4.25 2.5h7.5a1.75 1.75 0 0 1 1.75 1.75v.25" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
+      </button>
+      {open ? (
+        <div className="portal-nav-overflow-dropdown">
+          {mode ? (
+            <>
+              <div className="portal-custom-reports-copy-heading">
+                <button type="button" onClick={() => setMode(null)} aria-label="Back to copy options">←</button>
+                <span>Place {mode}</span>
+              </div>
+              <div className={`portal-custom-reports-copy-directions portal-custom-reports-copy-directions-${mode}`}>
+                {mode === 'panel' ? (
+                  <>
+                    {directionButton('above', 'Above', !canAddRow, () => onDuplicatePanel('above'))}
+                    {directionButton('left', 'Left', !canAddColumn, () => onDuplicatePanel('left'))}
+                    {directionButton('right', 'Right', !canAddColumn, () => onDuplicatePanel('right'))}
+                    {directionButton('below', 'Below', !canAddRow, () => onDuplicatePanel('below'))}
+                  </>
+                ) : null}
+                {mode === 'row' ? (
+                  <>
+                    {directionButton('above', 'Above', !canAddRow, () => onDuplicateRow('above'))}
+                    {directionButton('below', 'Below', !canAddRow, () => onDuplicateRow('below'))}
+                  </>
+                ) : null}
+                {mode === 'column' ? (
+                  <>
+                    {directionButton('left', 'Left', !canAddColumn, () => onDuplicateColumn('left'))}
+                    {directionButton('right', 'Right', !canAddColumn, () => onDuplicateColumn('right'))}
+                  </>
+                ) : null}
+              </div>
+              {(!canAddRow && mode === 'row') || (!canAddColumn && mode === 'column') || (!canAddRow && !canAddColumn && mode === 'panel') ? (
+                <span className="portal-custom-reports-copy-limit">Report size limit reached.</span>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <button type="button" className="portal-nav-overflow-item" disabled={panelDisabled} title={panelDisabled ? disabledReason : undefined} onClick={() => (panelDisabled ? undefined : setMode('panel'))}>Duplicate panel…</button>
+              <button type="button" className="portal-nav-overflow-item" disabled={rowDisabled} title={rowDisabled ? disabledReason : undefined} onClick={() => (rowDisabled ? undefined : setMode('row'))}>Duplicate row…</button>
+              <button type="button" className="portal-nav-overflow-item" onClick={() => setMode('column')}>Duplicate column…</button>
+            </>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function DragHandle({
+  title,
+  label,
+  draggable,
+  onDragStart,
+  onDragEnd,
+}: {
+  title: string;
+  label: string;
+  draggable: boolean;
+  onDragStart: (event: React.DragEvent) => void;
+  onDragEnd: () => void;
+}) {
+  if (!draggable) return null;
+  return (
+    <span
+      className="portal-custom-reports-drag-handle"
+      title={title}
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      data-export-ignore="true"
+    >
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <circle cx="7" cy="5" r="1.4" />
+        <circle cx="13" cy="5" r="1.4" />
+        <circle cx="7" cy="10" r="1.4" />
+        <circle cx="13" cy="10" r="1.4" />
+        <circle cx="7" cy="15" r="1.4" />
+        <circle cx="13" cy="15" r="1.4" />
+      </svg>
+      <span className="portal-custom-reports-drag-handle-label">{label}</span>
+    </span>
+  );
+}
+
+function DeleteGridMenu({
+  canDeleteRow,
+  canDeleteColumn,
+  onDeleteRow,
+  onDeleteColumn,
+}: {
+  canDeleteRow: boolean;
+  canDeleteColumn: boolean;
+  onDeleteRow: () => void;
+  onDeleteColumn: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -1912,21 +2518,37 @@ function CopyMenu({
     <div className="portal-nav-overflow" ref={rootRef} data-export-ignore="true">
       <button
         type="button"
-        className="btn btn-ghost portal-nav-overflow-trigger"
+        className="btn btn-ghost portal-nav-overflow-trigger portal-custom-reports-delete-trigger"
+        title="Delete row or column"
+        aria-label="Delete row or column"
         aria-haspopup="true"
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
       >
-        Copy
-        <svg viewBox="0 0 20 20" aria-hidden="true" className="portal-nav-overflow-caret">
-          <path d="M5.5 7.5 10 12l4.5-4.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <path d="M6.5 6.5v8m3.5-8v8m3.5-8v8M4.5 4.5h11M8 2.5h4l1 2H7l1-2Zm-2.5 2 1 12h7l1-12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
       {open ? (
         <div className="portal-nav-overflow-dropdown">
-          <button type="button" className="portal-nav-overflow-item" disabled={panelDisabled} title={panelDisabled ? disabledReason : undefined} onClick={() => (panelDisabled ? undefined : choose(onDuplicatePanel))}>Duplicate panel</button>
-          <button type="button" className="portal-nav-overflow-item" disabled={rowDisabled} title={rowDisabled ? disabledReason : undefined} onClick={() => (rowDisabled ? undefined : choose(onDuplicateRow))}>Duplicate row</button>
-          <button type="button" className="portal-nav-overflow-item" onClick={() => choose(onDuplicateColumn)}>Duplicate column</button>
+          <button
+            type="button"
+            className="portal-nav-overflow-item portal-custom-reports-delete-item"
+            disabled={!canDeleteRow}
+            title={!canDeleteRow ? 'A report must keep at least one row.' : undefined}
+            onClick={() => (canDeleteRow ? choose(onDeleteRow) : undefined)}
+          >
+            Delete this row
+          </button>
+          <button
+            type="button"
+            className="portal-nav-overflow-item portal-custom-reports-delete-item"
+            disabled={!canDeleteColumn}
+            title={!canDeleteColumn ? 'A report must keep at least one column.' : undefined}
+            onClick={() => (canDeleteColumn ? choose(onDeleteColumn) : undefined)}
+          >
+            Delete this column
+          </button>
         </div>
       ) : null}
     </div>
@@ -2272,6 +2894,7 @@ function emptyCell(): CellConfig {
     forcePlateMetrics: [],
     forcePlateMetricLabels: {},
     forcePlateTestType: 'All',
+    forcePlateLegDisplay: 'selected',
     metricChartMetric: '',
     metricChartLabel: '',
     chartBenchmarkValue: '',
@@ -2279,12 +2902,18 @@ function emptyCell(): CellConfig {
     ovrSprintExercises: [],
     ovrSprintMetric: 'totalTime',
     percentileSummaryForceMetrics: [],
+    percentileSummaryForceTestType: 'All',
+    percentileSummaryForceLegDisplay: 'selected',
     percentileSummaryOvrExercises: [],
     percentileSummaryGroupId: 'all',
     biomechanicsTableMode: 'Summary',
     biomechanicsPitchKey: '',
     biomechanicsChartMode: 'Force',
     biomechanicsForceMode: 'force',
+    assessmentFieldId: '',
+    questionnaireId: '',
+    questionnaireQuestionId: '',
+    questionnaireQuestionLabel: '',
   };
 }
 
@@ -2301,10 +2930,13 @@ function normalizeCellConfig(input: Partial<CellConfig> | undefined): CellConfig
     afterCountFilter: input?.afterCountFilter?.length ? input.afterCountFilter : base.afterCountFilter,
     forcePlateMetrics: input?.forcePlateMetrics?.length ? input.forcePlateMetrics : base.forcePlateMetrics,
     forcePlateMetricLabels: input?.forcePlateMetricLabels ?? base.forcePlateMetricLabels,
+    forcePlateLegDisplay: ['left', 'right', 'both'].includes(String(input?.forcePlateLegDisplay)) ? input!.forcePlateLegDisplay! : base.forcePlateLegDisplay,
     zoneLocations: input?.zoneLocations?.length ? input.zoneLocations : base.zoneLocations,
     ovrSprintExercises: input?.ovrSprintExercises?.length ? input.ovrSprintExercises : base.ovrSprintExercises,
     ovrSprintMetric: input?.ovrSprintMetric === 'speedMph' ? 'speedMph' : base.ovrSprintMetric,
     percentileSummaryForceMetrics: input?.percentileSummaryForceMetrics?.length ? input.percentileSummaryForceMetrics : base.percentileSummaryForceMetrics,
+    percentileSummaryForceTestType: input?.percentileSummaryForceTestType || base.percentileSummaryForceTestType,
+    percentileSummaryForceLegDisplay: ['left', 'right', 'both'].includes(String(input?.percentileSummaryForceLegDisplay)) ? input!.percentileSummaryForceLegDisplay! : base.percentileSummaryForceLegDisplay,
     percentileSummaryOvrExercises: input?.percentileSummaryOvrExercises?.length ? input.percentileSummaryOvrExercises : base.percentileSummaryOvrExercises,
     percentileSummaryGroupId: input?.percentileSummaryGroupId || base.percentileSummaryGroupId,
     biomechanicsTableMode: input?.biomechanicsTableMode || base.biomechanicsTableMode,
@@ -2648,6 +3280,15 @@ const formatHeatmapLegendValue = (metric: string, value: number): string => {
   if (metric === 'PV/100' || metric === 'RV/100') return value.toFixed(1);
   if (metric === 'Exit Velocity') return `${Math.round(value)}`;
   return `${Math.round(value)}%`;
+};
+const starPoints = (cx: number, cy: number, outerR: number, innerR: number): string => {
+  const points: string[] = [];
+  for (let i = 0; i < 10; i += 1) {
+    const r = i % 2 === 0 ? outerR : innerR;
+    const angle = -Math.PI / 2 + (i * Math.PI) / 5;
+    points.push(`${cx + r * Math.cos(angle)},${cy + r * Math.sin(angle)}`);
+  }
+  return points.join(' ');
 };
 const resultShape = (pitchCall: string, playResult: string, isProSchool = false): string => {
   if (isProSchool) {
@@ -3451,6 +4092,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const [columnNotes, setColumnNotes] = useState<string[]>(Array.from({ length: MAX_REPORT_COLS }, () => ''));
   const [columnNoteSpans, setColumnNoteSpans] = useState<number[]>(Array.from({ length: MAX_REPORT_COLS }, () => 1));
   const [cellConfigs, setCellConfigs] = useState<Record<string, CellConfig>>({ r1c1: emptyCell() });
+  const [dragState, setDragState] = useState<{ kind: 'panel' | 'row' | 'column'; id: string } | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [colSpanInputs, setColSpanInputs] = useState<Record<string, string>>({});
   const [savedReports, setSavedReports] = useState<SavedReportItem[]>([]);
   const [selectedReportId, setSelectedReportId] = useState<number | null>(null);
@@ -3480,6 +4123,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const [forcePlateMetricOptions, setForcePlateMetricOptions] = useState<Array<{ value: string; label: string; testTypes?: string[] }>>([]);
   const [forcePlateTestTypes, setForcePlateTestTypes] = useState<string[]>([]);
   const [ovrSprintExerciseOptions, setOvrSprintExerciseOptions] = useState<Array<{ value: string; label: string }>>([]);
+  const [assessmentFieldOptions, setAssessmentFieldOptions] = useState<Array<{ value: string; label: string }>>([]);
+  const [questionnaireCatalog, setQuestionnaireCatalog] = useState<Array<{ questionnaireId: number; questionnaireName: string; questions: Array<{ id: string; prompt: string }> }>>([]);
   const [percentileSummaryGroups, setPercentileSummaryGroups] = useState<PercentileGroupOption[]>([]);
   const [customTables, setCustomTables] = useState<CustomTableConfig[]>([]);
   const [teamCurrentRosterNames, setTeamCurrentRosterNames] = useState<string[] | null>(null);
@@ -4443,6 +5088,28 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   }, [initialSchoolCode, reportType, schoolCode]);
 
   useEffect(() => {
+    let active = true;
+    async function loadAssessmentQuestionnaireCatalog() {
+      try {
+        const response = await fetch('/api/dashboard/assessment-questionnaire/filters', { cache: 'no-store' });
+        const payload = (await response.json().catch(() => ({}))) as {
+          assessment_fields?: Array<{ value: string; label: string }>;
+          questionnaires?: Array<{ questionnaireId: number; questionnaireName: string; questions: Array<{ id: string; prompt: string }> }>;
+        };
+        if (!response.ok || !active) return;
+        setAssessmentFieldOptions(Array.isArray(payload.assessment_fields) ? payload.assessment_fields : []);
+        setQuestionnaireCatalog(Array.isArray(payload.questionnaires) ? payload.questionnaires : []);
+      } catch {
+        // Non-fatal: Assessment/Questionnaire panels just show empty pickers.
+      }
+    }
+    void loadAssessmentQuestionnaireCatalog();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     fetch('/api/dashboard/session-scope', { cache: 'no-store' })
       .then((response) => (response.ok ? response.json() : null))
@@ -4681,14 +5348,21 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             normalizedPanelType === 'OVR Sprint Line Chart' ||
             normalizedPanelType === 'OVR Sprint Bar Chart';
           const usesBiomechanicsTable = normalizedPanelType === 'Biomechanics Table';
+          const usesAssessmentData = normalizedPanelType === 'Assessment Line Chart' || normalizedPanelType === 'Assessment Bar Chart';
+          const usesQuestionnaireData = normalizedPanelType === 'Questionnaire Line Chart' || normalizedPanelType === 'Questionnaire Bar Chart';
           if (usesForcePlateData) {
-            const selectedMetrics = isMetricChart && reportType !== 'Force Plates' && config.metricChartMetric
+            const selectedMetricsBase = isMetricChart && reportType !== 'Force Plates' && config.metricChartMetric
               ? [config.metricChartMetric]
               : config.forcePlateMetrics?.length
                 ? config.forcePlateMetrics
               : forcePlateMetricOptions[0]?.value
                 ? [forcePlateMetricOptions[0].value]
                 : [];
+            const selectedMetrics = resolveForcePlateLegMetrics(
+              selectedMetricsBase,
+              config.forcePlateLegDisplay || 'selected',
+              forcePlateMetricOptions
+            );
             if (!selectedMetrics.length) {
               commitCellResult(cellId, {}, { status: 'ready', message: 'Choose at least one force-plate metric.' });
               return;
@@ -4745,10 +5419,61 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             commitCellResult(cellId, payload, { status: 'ready' });
             return;
           }
+          if (usesAssessmentData) {
+            if (!config.assessmentFieldId) {
+              commitCellResult(cellId, {}, { status: 'ready', message: 'Choose an assessment field.' });
+              return;
+            }
+            const assessmentParams = new URLSearchParams({ player: normalizedPlayer || 'All', source: 'assessment', fieldId: config.assessmentFieldId });
+            const assessmentKey = `/api/dashboard/assessment-questionnaire/overview?${assessmentParams.toString()}`;
+            if (active) setCellRequestUrls((current) => current[cellId] === assessmentKey ? current : { ...current, [cellId]: assessmentKey });
+            const cached = cellsCacheRef.current.get(assessmentKey);
+            if (cached && Date.now() - cached.at < 60_000) {
+              commitCellResult(cellId, cached.payload, { status: 'ready' });
+              return;
+            }
+            const response = await fetch(assessmentKey, { cache: 'no-store', signal: controller.signal });
+            const payload = (await response.json().catch(() => ({}))) as OverviewLitePayload & { error?: string };
+            if (!response.ok) throw new Error(payload.error ?? 'Failed to load assessment report data.');
+            cellsCacheRef.current.set(assessmentKey, { at: Date.now(), payload });
+            commitCellResult(cellId, payload, { status: 'ready' });
+            return;
+          }
+          if (usesQuestionnaireData) {
+            if (!config.questionnaireId || !config.questionnaireQuestionId) {
+              commitCellResult(cellId, {}, { status: 'ready', message: 'Choose a questionnaire and question.' });
+              return;
+            }
+            const questionnaireParams = new URLSearchParams({
+              player: normalizedPlayer || 'All',
+              source: 'questionnaire',
+              questionnaireId: config.questionnaireId,
+              questionId: config.questionnaireQuestionId,
+            });
+            const questionnaireKey = `/api/dashboard/assessment-questionnaire/overview?${questionnaireParams.toString()}`;
+            if (active) setCellRequestUrls((current) => current[cellId] === questionnaireKey ? current : { ...current, [cellId]: questionnaireKey });
+            const cached = cellsCacheRef.current.get(questionnaireKey);
+            if (cached && Date.now() - cached.at < 60_000) {
+              commitCellResult(cellId, cached.payload, { status: 'ready' });
+              return;
+            }
+            const response = await fetch(questionnaireKey, { cache: 'no-store', signal: controller.signal });
+            const payload = (await response.json().catch(() => ({}))) as OverviewLitePayload & { error?: string };
+            if (!response.ok) throw new Error(payload.error ?? 'Failed to load questionnaire report data.');
+            cellsCacheRef.current.set(questionnaireKey, { at: Date.now(), payload });
+            commitCellResult(cellId, payload, { status: 'ready' });
+            return;
+          }
           if (usesBiomechanicsTable) {
             const bioParams = new URLSearchParams({ pitcher: normalizedPlayer || 'All', forceMode: config.biomechanicsForceMode || 'force' });
             if (startDate) bioParams.set('startDate', startDate);
             if (endDate) bioParams.set('endDate', endDate);
+            const biomechanicsPitchTypes = useGlobalPitchTypes
+              ? selectedValues(globalPitchTypes)
+              : (config.filterSelect ?? ['Dates', 'Session Type', 'Pitch Types']).includes('Pitch Types')
+                ? selectedValues(config.pitchTypes)
+                : [];
+            if (biomechanicsPitchTypes.length) bioParams.set('pitchType', JSON.stringify(biomechanicsPitchTypes));
             // Cache key deliberately excludes biomechanicsTableMode (but DOES
             // include forceMode, since forceMode changes the actual server-
             // computed values, not just which columns are shown): the fetch
@@ -4760,23 +5485,29 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             // the cached payload.
             const bioKey = `/api/dashboard/biomechanics?${bioParams.toString()}`;
             if (active) setCellRequestUrls((current) => current[cellId] === bioKey ? current : { ...current, [cellId]: bioKey });
-            const applyTableMode = (payload: { table_columns?: string[]; table_rows?: Array<Record<string, string | number | null>> }) => {
-              const fullColumns = payload.table_columns ?? [];
+            const applyTableMode = (payload: { table_columns?: string[]; table_rows?: Array<Record<string, string | number | null>>; leaderboard_individual_rows?: Array<Record<string, string | number | null>> }) => {
+              const fullColumns = (payload.table_columns ?? []).filter((column) => column !== 'Tags');
               const customTable = config.biomechanicsTableMode?.startsWith('custom_saved:')
                 ? customTables.find((item) => customTableModeValue(item.id) === config.biomechanicsTableMode)
                 : null;
               const columns = customTable ? customTable.columns.filter((column) => fullColumns.includes(column)) : fullColumns;
-              return { table_columns: columns, table_rows: payload.table_rows ?? [] };
+              const individualRows = payload.leaderboard_individual_rows ?? [];
+              const rowsByPitchType = summarizeBiomechanicsRowsByPitchType(individualRows, fullColumns);
+              return { table_columns: columns, table_rows: rowsByPitchType.length ? rowsByPitchType : (payload.table_rows ?? []) };
             };
             const cached = cellsCacheRef.current.get(bioKey);
             if (cached && Date.now() - cached.at < 60_000) {
-              commitCellResult(cellId, applyTableMode(cached.payload as { table_columns?: string[]; table_rows?: Array<Record<string, string | number | null>> }), { status: 'ready' });
+              commitCellResult(cellId, applyTableMode(cached.payload as { table_columns?: string[]; table_rows?: Array<Record<string, string | number | null>>; leaderboard_individual_rows?: Array<Record<string, string | number | null>> }), { status: 'ready' });
               return;
             }
             const response = await fetch(bioKey, { cache: 'no-store', signal: controller.signal });
-            const payload = (await response.json().catch(() => ({}))) as { table_columns?: string[]; table_rows?: Array<Record<string, string | number | null>>; error?: string };
+            const payload = (await response.json().catch(() => ({}))) as { table_columns?: string[]; table_rows?: Array<Record<string, string | number | null>>; leaderboard_individual_rows?: Array<Record<string, string | number | null>>; error?: string };
             if (!response.ok) throw new Error(payload.error ?? 'Failed to load biomechanics report data.');
-            const fullPayload = { table_columns: payload.table_columns ?? [], table_rows: payload.table_rows ?? [] };
+            const fullPayload = {
+              table_columns: payload.table_columns ?? [],
+              table_rows: payload.table_rows ?? [],
+              leaderboard_individual_rows: payload.leaderboard_individual_rows ?? [],
+            };
             cellsCacheRef.current.set(bioKey, { at: Date.now(), payload: fullPayload });
             commitCellResult(cellId, applyTableMode(fullPayload), { status: 'ready' });
             return;
@@ -5853,81 +6584,293 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     setColSpanInputs((current) => ({ ...current, [cellId]: String(normalized) }));
   };
 
-  // Row/column/panel duplication: cellConfigs is a plain, self-contained,
-  // position-keyed (r{row}c{col}) map with no cross-cell references, so
-  // duplicating is just copying entries to new keys -- see rowColFromCellId/
-  // ensureCellConfigMap above for the same key convention these rely on.
-  const duplicatePanel = (cellId: string) => {
+  // Directional duplication inserts beside the source and shifts the existing
+  // grid. This keeps every configured panel intact instead of overwriting a
+  // neighbor or appending the copy to the bottom of the report.
+  const duplicatePanel = (cellId: string, direction: PanelDuplicateDirection) => {
     const { row, col } = rowColFromCellId(cellId);
-    // Land in the first empty cell in this row (to the right of the source),
-    // falling back to the first empty cell anywhere, else append a new row --
-    // never silently overwrite an already-configured panel.
-    const isEmptyCell = (key: string) => {
-      const existing = cellConfigs[key];
-      return !existing || existing.panelType === '';
-    };
-    let target: { row: number; col: number } | null = null;
-    for (let c = col + 1; c <= reportCols; c += 1) {
-      if (isEmptyCell(`r${row}c${c}`)) { target = { row, col: c }; break; }
-    }
-    if (!target) {
-      for (let r = 1; r <= reportRows && !target; r += 1) {
-        for (let c = 1; c <= reportCols; c += 1) {
-          if (r === row && c === col) continue;
-          if (isEmptyCell(`r${r}c${c}`)) { target = { row: r, col: c }; break; }
-        }
-      }
-    }
-    if (!target) {
+    const source = normalizeCellConfig(cellConfigs[cellId]);
+    if (direction === 'above' || direction === 'below') {
       if (reportRows >= MAX_REPORT_ROWS) {
-        window.alert(`Report is at the ${MAX_REPORT_ROWS}-row limit -- clear a panel first to make room.`);
+        window.alert(`Report is at the ${MAX_REPORT_ROWS}-row limit.`);
         return;
       }
-      target = { row: reportRows + 1, col: 1 };
-      setReportRows(reportRows + 1);
-    }
-    const source = normalizeCellConfig(cellConfigs[cellId]);
-    const targetKey = `r${target.row}c${target.col}`;
-    setCellConfigs((current) => ({ ...current, [targetKey]: { ...source } }));
-  };
-
-  const duplicateRow = (sourceRow: number) => {
-    if (reportRows >= MAX_REPORT_ROWS) {
-      window.alert(`Report is at the ${MAX_REPORT_ROWS}-row limit.`);
+      const insertRow = direction === 'above' ? row : row + 1;
+      const newRows = reportRows + 1;
+      setCellConfigs((current) => {
+        const next: Record<string, CellConfig> = {};
+        for (let nextRow = 1; nextRow <= newRows; nextRow += 1) {
+          for (let nextCol = 1; nextCol <= reportCols; nextCol += 1) {
+            const nextKey = `r${nextRow}c${nextCol}`;
+            if (nextRow === insertRow) {
+              next[nextKey] = nextCol === col ? { ...source } : emptyCell();
+            } else {
+              const previousRow = nextRow > insertRow ? nextRow - 1 : nextRow;
+              next[nextKey] = normalizeCellConfig(current[`r${previousRow}c${nextCol}`]);
+            }
+          }
+        }
+        return next;
+      });
+      setRowPlayers((current) => {
+        const next = [...current];
+        next.splice(insertRow - 1, 0, current[row - 1] ?? 'All');
+        return next.slice(0, MAX_REPORT_ROWS);
+      });
+      setRowNotes((current) => {
+        const next = [...current];
+        next.splice(insertRow - 1, 0, '');
+        return next.slice(0, MAX_REPORT_ROWS);
+      });
+      setRowNoteSpans((current) => {
+        const next = [...current];
+        next.splice(insertRow - 1, 0, 1);
+        return next.slice(0, MAX_REPORT_ROWS);
+      });
+      setReportRows(newRows);
+      setReportRowsInput(String(newRows));
       return;
     }
-    const newRow = reportRows + 1;
-    setCellConfigs((current) => {
-      const next = { ...current };
-      for (let c = 1; c <= reportCols; c += 1) {
-        next[`r${newRow}c${c}`] = { ...normalizeCellConfig(current[`r${sourceRow}c${c}`]) };
-      }
-      return next;
-    });
-    setRowNotes((current) => { const next = [...current]; next[newRow - 1] = current[sourceRow - 1] ?? ''; return next; });
-    setRowPlayers((current) => { const next = [...current]; next[newRow - 1] = current[sourceRow - 1] ?? 'All'; return next; });
-    setReportRows(newRow);
-  };
 
-  const duplicateColumn = (sourceCol: number) => {
     if (reportCols >= MAX_REPORT_COLS) {
       window.alert(`Report is at the ${MAX_REPORT_COLS}-column limit.`);
       return;
     }
-    const newCol = reportCols + 1;
+    const sourceSpan = Math.max(1, Math.min(reportCols - col + 1, Number(source.colSpan) || 1));
+    const insertCol = direction === 'left' ? col : Math.min(reportCols + 1, col + sourceSpan);
+    const newCols = reportCols + 1;
     setCellConfigs((current) => {
-      const next = { ...current };
-      for (let r = 1; r <= reportRows; r += 1) {
-        const sourceConfig = normalizeCellConfig(current[`r${r}c${sourceCol}`]);
-        // A duplicated column is always its own single column -- drop any
-        // colSpan from the source so it can't claim cells beyond the new
-        // column and silently blank out whatever was already in them.
-        next[`r${r}c${newCol}`] = { ...sourceConfig, colSpan: 1 };
+      const next: Record<string, CellConfig> = {};
+      for (let nextRow = 1; nextRow <= reportRows; nextRow += 1) {
+        for (let nextCol = 1; nextCol <= newCols; nextCol += 1) {
+          const nextKey = `r${nextRow}c${nextCol}`;
+          if (nextCol === insertCol) {
+            next[nextKey] = nextRow === row ? { ...source, colSpan: 1 } : emptyCell();
+          } else {
+            const previousCol = nextCol > insertCol ? nextCol - 1 : nextCol;
+            next[nextKey] = normalizeCellConfig(current[`r${nextRow}c${previousCol}`]);
+          }
+        }
       }
       return next;
     });
-    setColumnNotes((current) => { const next = [...current]; next[newCol - 1] = current[sourceCol - 1] ?? ''; return next; });
-    setReportCols(newCol);
+    setColumnNotes((current) => {
+      const next = [...current];
+      next.splice(insertCol - 1, 0, '');
+      return next.slice(0, MAX_REPORT_COLS);
+    });
+    setColumnNoteSpans((current) => {
+      const next = [...current];
+      next.splice(insertCol - 1, 0, 1);
+      return next.slice(0, MAX_REPORT_COLS);
+    });
+    setReportCols(newCols);
+    setReportColsInput(String(newCols));
+  };
+
+  const duplicateRow = (sourceRow: number, direction: RowDuplicateDirection) => {
+    if (reportRows >= MAX_REPORT_ROWS) {
+      window.alert(`Report is at the ${MAX_REPORT_ROWS}-row limit.`);
+      return;
+    }
+    const insertRow = direction === 'above' ? sourceRow : sourceRow + 1;
+    const newRows = reportRows + 1;
+    setCellConfigs((current) => {
+      const next: Record<string, CellConfig> = {};
+      for (let nextRow = 1; nextRow <= newRows; nextRow += 1) {
+        for (let col = 1; col <= reportCols; col += 1) {
+          const previousRow = nextRow === insertRow ? sourceRow : nextRow > insertRow ? nextRow - 1 : nextRow;
+          next[`r${nextRow}c${col}`] = { ...normalizeCellConfig(current[`r${previousRow}c${col}`]) };
+        }
+      }
+      return next;
+    });
+    setRowNotes((current) => { const next = [...current]; next.splice(insertRow - 1, 0, current[sourceRow - 1] ?? ''); return next.slice(0, MAX_REPORT_ROWS); });
+    setRowNoteSpans((current) => { const next = [...current]; next.splice(insertRow - 1, 0, current[sourceRow - 1] ?? 1); return next.slice(0, MAX_REPORT_ROWS); });
+    setRowPlayers((current) => { const next = [...current]; next.splice(insertRow - 1, 0, current[sourceRow - 1] ?? 'All'); return next.slice(0, MAX_REPORT_ROWS); });
+    setReportRows(newRows);
+    setReportRowsInput(String(newRows));
+  };
+
+  const duplicateColumn = (sourceCol: number, direction: ColumnDuplicateDirection) => {
+    if (reportCols >= MAX_REPORT_COLS) {
+      window.alert(`Report is at the ${MAX_REPORT_COLS}-column limit.`);
+      return;
+    }
+    const insertCol = direction === 'left' ? sourceCol : sourceCol + 1;
+    const newCols = reportCols + 1;
+    setCellConfigs((current) => {
+      const next: Record<string, CellConfig> = {};
+      for (let r = 1; r <= reportRows; r += 1) {
+        for (let nextCol = 1; nextCol <= newCols; nextCol += 1) {
+          const previousCol = nextCol === insertCol ? sourceCol : nextCol > insertCol ? nextCol - 1 : nextCol;
+          const sourceConfig = normalizeCellConfig(current[`r${r}c${previousCol}`]);
+          const isOriginalBesideRightCopy = direction === 'right' && previousCol === sourceCol && nextCol !== insertCol;
+          next[`r${r}c${nextCol}`] = nextCol === insertCol || isOriginalBesideRightCopy
+            ? { ...sourceConfig, colSpan: 1 }
+            : sourceConfig;
+        }
+      }
+      return next;
+    });
+    setColumnNotes((current) => { const next = [...current]; next.splice(insertCol - 1, 0, current[sourceCol - 1] ?? ''); return next.slice(0, MAX_REPORT_COLS); });
+    setColumnNoteSpans((current) => {
+      const next = [...current];
+      next.splice(insertCol - 1, 0, 1);
+      if (direction === 'right') next[sourceCol - 1] = 1;
+      return next.slice(0, MAX_REPORT_COLS);
+    });
+    setReportCols(newCols);
+    setReportColsInput(String(newCols));
+  };
+
+  const deleteRow = (targetRow: number) => {
+    if (reportRows <= 1) {
+      window.alert('A report must keep at least one row.');
+      return;
+    }
+    if (!window.confirm(`Delete Row ${targetRow}? Every panel in this row will be removed, and the rows below it will move up.`)) return;
+    const newRows = reportRows - 1;
+    setCellConfigs((current) => {
+      const next: Record<string, CellConfig> = {};
+      for (let row = 1; row <= newRows; row += 1) {
+        const sourceRow = row >= targetRow ? row + 1 : row;
+        for (let col = 1; col <= reportCols; col += 1) {
+          next[`r${row}c${col}`] = normalizeCellConfig(current[`r${sourceRow}c${col}`]);
+        }
+      }
+      return next;
+    });
+    setRowPlayers((current) => {
+      const next = [...current];
+      next.splice(targetRow - 1, 1);
+      next.push('All');
+      return next.slice(0, MAX_REPORT_ROWS);
+    });
+    setRowNotes((current) => {
+      const next = [...current];
+      next.splice(targetRow - 1, 1);
+      next.push('');
+      return next.slice(0, MAX_REPORT_ROWS);
+    });
+    setRowNoteSpans((current) => {
+      const next = [...current];
+      next.splice(targetRow - 1, 1);
+      next.push(1);
+      return next.slice(0, MAX_REPORT_ROWS);
+    });
+    setColSpanInputs({});
+    setReportRows(newRows);
+    setReportRowsInput(String(newRows));
+  };
+
+  const deleteColumn = (targetCol: number) => {
+    if (reportCols <= 1) {
+      window.alert('A report must keep at least one column.');
+      return;
+    }
+    if (!window.confirm(`Delete Column ${targetCol}? Every panel in this column will be removed, and the columns to its right will move left.`)) return;
+    const newCols = reportCols - 1;
+    setCellConfigs((current) => {
+      const next: Record<string, CellConfig> = {};
+      for (let row = 1; row <= reportRows; row += 1) {
+        for (let col = 1; col <= newCols; col += 1) {
+          const sourceCol = col >= targetCol ? col + 1 : col;
+          const source = normalizeCellConfig(current[`r${row}c${sourceCol}`]);
+          const originalSpan = Math.max(1, Number(source.colSpan) || 1);
+          const crossedDeletedColumn = sourceCol < targetCol && sourceCol + originalSpan - 1 >= targetCol;
+          const adjustedSpan = crossedDeletedColumn ? Math.max(1, originalSpan - 1) : originalSpan;
+          next[`r${row}c${col}`] = { ...source, colSpan: Math.min(adjustedSpan, newCols - col + 1) };
+        }
+      }
+      return next;
+    });
+    setColumnNotes((current) => {
+      const next = [...current];
+      next.splice(targetCol - 1, 1);
+      next.push('');
+      return next.slice(0, MAX_REPORT_COLS);
+    });
+    setColumnNoteSpans((current) => {
+      const next = [...current];
+      next.splice(targetCol - 1, 1);
+      next.push(1);
+      return next.slice(0, MAX_REPORT_COLS);
+    });
+    setColSpanInputs({});
+    setReportCols(newCols);
+    setReportColsInput(String(newCols));
+  };
+
+  // Drag-and-drop reordering (Single Player scope only -- Multi-Player/Team
+  // rows 2+ just mirror row 1, so there's nothing independent to drag there).
+  // Swap-on-drop keeps this reversible: dragging A onto B trades their
+  // contents rather than shifting every cell in between.
+  const swapPanels = (cellIdA: string, cellIdB: string) => {
+    if (cellIdA === cellIdB) return;
+    setCellConfigs((current) => {
+      const next = { ...current };
+      const a = normalizeCellConfig(current[cellIdA]);
+      const b = normalizeCellConfig(current[cellIdB]);
+      next[cellIdA] = b;
+      next[cellIdB] = a;
+      return next;
+    });
+  };
+
+  const swapRows = (rowA: number, rowB: number) => {
+    if (rowA === rowB) return;
+    setCellConfigs((current) => {
+      const next = { ...current };
+      for (let c = 1; c <= reportCols; c += 1) {
+        const keyA = `r${rowA}c${c}`;
+        const keyB = `r${rowB}c${c}`;
+        next[keyA] = normalizeCellConfig(current[keyB]);
+        next[keyB] = normalizeCellConfig(current[keyA]);
+      }
+      return next;
+    });
+    setRowNotes((current) => {
+      const next = [...current];
+      const a = current[rowA - 1] ?? '';
+      const b = current[rowB - 1] ?? '';
+      next[rowA - 1] = b;
+      next[rowB - 1] = a;
+      return next;
+    });
+    setRowPlayers((current) => {
+      const next = [...current];
+      const a = current[rowA - 1] ?? 'All';
+      const b = current[rowB - 1] ?? 'All';
+      next[rowA - 1] = b;
+      next[rowB - 1] = a;
+      return next;
+    });
+  };
+
+  const swapColumns = (colA: number, colB: number) => {
+    if (colA === colB) return;
+    setCellConfigs((current) => {
+      const next = { ...current };
+      for (let r = 1; r <= reportRows; r += 1) {
+        const keyA = `r${r}c${colA}`;
+        const keyB = `r${r}c${colB}`;
+        // Reset colSpan on both sides of the swap, same as duplicateColumn --
+        // a spanning cell moved into a new column could otherwise claim
+        // cells beyond it and silently blank out whatever was already there.
+        next[keyA] = { ...normalizeCellConfig(current[keyB]), colSpan: 1 };
+        next[keyB] = { ...normalizeCellConfig(current[keyA]), colSpan: 1 };
+      }
+      return next;
+    });
+    setColumnNotes((current) => {
+      const next = [...current];
+      const a = current[colA - 1] ?? '';
+      const b = current[colB - 1] ?? '';
+      next[colA - 1] = b;
+      next[colB - 1] = a;
+      return next;
+    });
   };
 
   // Shared by both PNG and PDF export: renders the report DOM to a canvas
@@ -5943,6 +6886,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     margin: number;
     rawW: number;
     rawH: number;
+    canvasOffsetX: number;
+    canvasOffsetY: number;
+    panelBounds: Array<{ top: number; bottom: number; height: number }>;
+    playerLabelBounds: Array<{ top: number; bottom: number; height: number }>;
     captureScale: number;
     restoreHeatmaps: (() => void) | null;
     restoreLogos: (() => void) | null;
@@ -5955,6 +6902,16 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     const exportMarkerAttr = 'data-custom-report-export-root';
     setIsExporting(true);
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const panelLoadDeadline = Date.now() + 10_000;
+    while (
+      Date.now() < panelLoadDeadline &&
+      Array.from(reportNode.querySelectorAll('.portal-custom-reports-cell')).some((panel) =>
+        /loading panel data/i.test(panel.textContent ?? '')
+      )
+    ) {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 120));
+    }
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
     restoreHeatmaps = await rasterizeHeatmapsForExport(reportNode);
     restoreLogos = await inlineBrandLogosForExport(reportNode);
     await waitForReportImages(reportNode);
@@ -5963,6 +6920,20 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
     reportNode.setAttribute(exportMarkerAttr, '1');
     const captureScale = Math.min(2, Math.max(1.5, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1));
+    const captureReportRect = reportNode.getBoundingClientRect();
+    const panelBoundsBeforeCapture = Array.from(reportNode.querySelectorAll('.portal-custom-reports-cell'))
+      .map((node) => {
+        const rect = node.getBoundingClientRect();
+        const labelNode = node.querySelector('.portal-custom-reports-row-player-label') as HTMLElement | null;
+        const labelRect = labelNode?.getBoundingClientRect();
+        const visualTop = labelRect ? Math.min(rect.top, labelRect.top) : rect.top;
+        return { top: visualTop - captureReportRect.top, bottom: rect.bottom - captureReportRect.top };
+      });
+    const playerLabelBoundsBeforeCapture = Array.from(reportNode.querySelectorAll('.portal-custom-reports-row-player-label'))
+      .map((node) => {
+        const rect = node.getBoundingClientRect();
+        return { top: rect.top - captureReportRect.top, bottom: rect.bottom - captureReportRect.top };
+      });
     const baseCanvas = await html2canvas(reportNode, {
       backgroundColor: isLightTheme ? '#f8fafc' : (isSinglePlayerScope ? null : '#000000'),
         scale: captureScale,
@@ -6066,11 +7037,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           }
         },
       });
-      const trimTransparentEdges = (input: HTMLCanvasElement): HTMLCanvasElement => {
+      const trimTransparentEdges = (input: HTMLCanvasElement): { canvas: HTMLCanvasElement; offsetX: number; offsetY: number } => {
         const width = Math.max(1, input.width);
         const height = Math.max(1, input.height);
         const ctx = input.getContext('2d');
-        if (!ctx) return input;
+        if (!ctx) return { canvas: input, offsetX: 0, offsetY: 0 };
         const data = ctx.getImageData(0, 0, width, height).data;
         let minX = width;
         let minY = height;
@@ -6087,21 +7058,32 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             if (y > maxY) maxY = y;
           }
         }
-        if (maxX < minX || maxY < minY) return input;
+        if (maxX < minX || maxY < minY) return { canvas: input, offsetX: 0, offsetY: 0 };
         const croppedW = Math.max(1, maxX - minX + 1);
         const croppedH = Math.max(1, maxY - minY + 1);
         const out = document.createElement('canvas');
         out.width = croppedW;
         out.height = croppedH;
         const outCtx = out.getContext('2d');
-        if (!outCtx) return input;
+        if (!outCtx) return { canvas: input, offsetX: 0, offsetY: 0 };
         outCtx.drawImage(input, minX, minY, croppedW, croppedH, 0, 0, croppedW, croppedH);
-        return out;
+        return { canvas: out, offsetX: minX, offsetY: minY };
       };
-      const canvas = isSinglePlayerScope ? trimTransparentEdges(baseCanvas) : baseCanvas;
+      const trimmed = isSinglePlayerScope
+        ? trimTransparentEdges(baseCanvas)
+        : { canvas: baseCanvas, offsetX: 0, offsetY: 0 };
+      const canvas = trimmed.canvas;
       const margin = isSinglePlayerScope ? 10 : 18;
       const rawW = Math.max(1, canvas.width);
       const rawH = Math.max(1, canvas.height);
+      const toCapturedBounds = (bounds: Array<{ top: number; bottom: number }>) => bounds
+        .map((entry) => {
+          const top = Math.max(0, Math.min(rawH, Math.round(entry.top * captureScale) - trimmed.offsetY));
+          const bottom = Math.max(top, Math.min(rawH, Math.round(entry.bottom * captureScale) - trimmed.offsetY));
+          return { top, bottom, height: Math.max(0, bottom - top) };
+        })
+        .filter((entry) => entry.height > 0)
+        .sort((a, b) => a.top - b.top || a.bottom - b.bottom);
       return {
         reportNode,
         canvas,
@@ -6110,6 +7092,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         margin,
         rawW,
         rawH,
+        canvasOffsetX: trimmed.offsetX,
+        canvasOffsetY: trimmed.offsetY,
+        panelBounds: toCapturedBounds(panelBoundsBeforeCapture),
+        playerLabelBounds: toCapturedBounds(playerLabelBoundsBeforeCapture),
         captureScale,
         restoreHeatmaps,
         restoreLogos,
@@ -6143,7 +7129,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     }
   };
 
-  const downloadReportPdf = async () => {
+  const downloadReportPdf = async (layout: 'current' | 'print' = 'current') => {
     const captured = await captureReportCanvas().catch((err) => {
       setError(err instanceof Error ? err.message : 'PDF export failed.');
       return null;
@@ -6152,8 +7138,93 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       setIsExporting(false);
       return;
     }
-    const { reportNode, canvas, isSinglePlayerScope, isLightTheme, margin, rawW, rawH, captureScale, restoreHeatmaps, restoreLogos, exportMarkerAttr } = captured;
+    const { reportNode, canvas, isSinglePlayerScope, isLightTheme, margin, rawW, rawH, panelBounds: capturedPanelBounds, playerLabelBounds: capturedPlayerLabelBounds, restoreHeatmaps, restoreLogos, exportMarkerAttr } = captured;
     try {
+      if (layout === 'print') {
+        const orientation: 'portrait' | 'landscape' = reportCols >= 3 ? 'landscape' : 'portrait';
+        const pdf = new jsPDF({ orientation, unit: 'pt', format: 'letter' });
+        const pageWidth = pdf.internal.pageSize.getWidth();
+        const pageHeight = pdf.internal.pageSize.getHeight();
+        const printMargin = 18;
+        const footerHeight = 16;
+        const contentWidth = pageWidth - printMargin * 2;
+        const contentHeight = pageHeight - printMargin * 2 - footerHeight;
+        const normalScale = contentWidth / rawW;
+        const panelIntervals = capturedPanelBounds.map(({ top, bottom }) => ({ top, bottom }));
+
+        const rowGroups: Array<{ top: number; bottom: number }> = [];
+        for (const interval of panelIntervals) {
+          const previous = rowGroups.at(-1);
+          if (previous && interval.top <= previous.bottom + 1) previous.bottom = Math.max(previous.bottom, interval.bottom);
+          else rowGroups.push({ ...interval });
+        }
+        const safeStarts = Array.from(new Set([0, ...rowGroups.map((group) => group.top)]))
+          .filter((value) => value >= 0 && value < rawH)
+          .sort((a, b) => a - b);
+        const blocks = safeStarts.map((start, index) => ({
+          start,
+          end: safeStarts[index + 1] ?? rawH,
+        })).filter((block) => block.end > block.start);
+        if (!blocks.length) blocks.push({ start: 0, end: rawH });
+
+        const paintPage = () => {
+          if (isLightTheme) pdf.setFillColor(248, 250, 252);
+          else pdf.setFillColor(4, 5, 7);
+          pdf.rect(0, 0, pageWidth, pageHeight, 'F');
+        };
+        const minimumDenseScale = normalScale * 0.82;
+        const packedPages: Array<Array<{ start: number; end: number }>> = [];
+        let currentPage: Array<{ start: number; end: number }> = [];
+        let currentSourceHeight = 0;
+        for (const block of blocks) {
+          const blockHeight = Math.max(1, block.end - block.start);
+          const nextSourceHeight = currentSourceHeight + blockHeight;
+          const requiredScale = contentHeight / nextSourceHeight;
+          if (currentPage.length && requiredScale < minimumDenseScale) {
+            packedPages.push(currentPage);
+            currentPage = [block];
+            currentSourceHeight = blockHeight;
+          } else {
+            currentPage.push(block);
+            currentSourceHeight = nextSourceHeight;
+          }
+        }
+        if (currentPage.length) packedPages.push(currentPage);
+
+        packedPages.forEach((pageBlocks, pageIndex) => {
+          if (pageIndex > 0) pdf.addPage('letter', orientation);
+          paintPage();
+          const totalSourceHeight = pageBlocks.reduce((sum, block) => sum + Math.max(1, block.end - block.start), 0);
+          const pageScale = Math.min(normalScale, contentHeight / Math.max(1, totalSourceHeight));
+          const drawWidth = rawW * pageScale;
+          const drawX = (pageWidth - drawWidth) / 2;
+          let cursorY = printMargin;
+          for (const block of pageBlocks) {
+            const sourceHeight = Math.max(1, block.end - block.start);
+            const blockCanvas = document.createElement('canvas');
+            blockCanvas.width = rawW;
+            blockCanvas.height = sourceHeight;
+            const blockContext = blockCanvas.getContext('2d');
+            if (!blockContext) continue;
+            blockContext.drawImage(canvas, 0, block.start, rawW, sourceHeight, 0, 0, rawW, sourceHeight);
+            const drawHeight = sourceHeight * pageScale;
+            pdf.addImage(blockCanvas.toDataURL('image/jpeg', 0.86), 'JPEG', drawX, cursorY, drawWidth, drawHeight, undefined, 'FAST');
+            cursorY += drawHeight;
+          }
+        });
+
+        const totalPages = Math.max(1, packedPages.length);
+        for (let index = 1; index <= totalPages; index += 1) {
+          pdf.setPage(index);
+          pdf.setFontSize(8);
+          pdf.setTextColor(isLightTheme ? 100 : 165, isLightTheme ? 116 : 176, isLightTheme ? 139 : 194);
+          pdf.text(`${index} / ${totalPages}`, pageWidth / 2, pageHeight - 10, { align: 'center' });
+        }
+        const safeName = (reportHeaderTitle || 'custom-report').replace(/[^a-z0-9_-]+/gi, '-').replace(/-+/g, '-');
+        deliverReportPdf(pdf, `${safeName}-print.pdf`, reportHeaderTitle || 'Custom Report');
+        return;
+      }
+
       if (isSinglePlayerScope) {
         // Match "tall one-page" style by using a custom portrait page sized to
         // the report content aspect ratio instead of forcing letter fit.
@@ -6197,28 +7268,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       const scale = contentWidth / rawW;
 
       const pageSourceHeight = Math.max(1, Math.floor(contentHeight / Math.max(scale, 1e-6)));
-      const reportRect = reportNode.getBoundingClientRect();
-      const panelBounds = Array.from(reportNode.querySelectorAll('.portal-custom-reports-cell'))
-        .map((node) => {
-          const rect = node.getBoundingClientRect();
-          const labelNode = node.querySelector('.portal-custom-reports-row-player-label') as HTMLElement | null;
-          const labelRect = labelNode?.getBoundingClientRect();
-          const visualTop = labelRect ? Math.min(rect.top, labelRect.top) : rect.top;
-          const top = Math.max(0, Math.round((visualTop - reportRect.top) * captureScale));
-          const bottom = Math.min(rawH, Math.round((rect.bottom - reportRect.top) * captureScale));
-          return { top, bottom, height: Math.max(0, bottom - top) };
-        })
-        .filter((entry) => entry.height > 0)
-        .sort((a, b) => a.top - b.top);
-      const playerLabelBounds = Array.from(reportNode.querySelectorAll('.portal-custom-reports-row-player-label'))
-        .map((node) => {
-          const rect = node.getBoundingClientRect();
-          const top = Math.max(0, Math.round((rect.top - reportRect.top) * captureScale));
-          const bottom = Math.min(rawH, Math.round((rect.bottom - reportRect.top) * captureScale));
-          return { top, bottom, height: Math.max(0, bottom - top) };
-        })
-        .filter((entry) => entry.height > 0)
-        .sort((a, b) => a.top - b.top);
+      const panelBounds = capturedPanelBounds;
+      const playerLabelBounds = capturedPlayerLabelBounds;
       const minPageSourceHeight = Math.max(1, Math.floor(pageSourceHeight * 0.55));
       const pageSlices: Array<{ start: number; end: number }> = [];
       let sourceY = 0;
@@ -6438,7 +7489,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           </button>
         ) : null}
         <ReportActionsDropdown
-          generate={downloadReportPdf}
+          generate={() => downloadReportPdf('current')}
+          downloadPrintPdf={() => downloadReportPdf('print')}
           downloadPng={downloadReportPng}
           title={reportHeaderTitle || 'Custom Report'}
           reportKey={`${reportType.toLowerCase()}-custom-report`}
@@ -7058,7 +8110,13 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                     contentType === 'Force Plate Line Chart' ||
                     contentType === 'Force Plate Bar Chart' ||
                     contentType === 'OVR Sprint Line Chart' ||
-                    contentType === 'OVR Sprint Bar Chart';
+                    contentType === 'OVR Sprint Bar Chart' ||
+                    contentType === 'Assessment Line Chart' ||
+                    contentType === 'Assessment Bar Chart' ||
+                    contentType === 'Questionnaire Line Chart' ||
+                    contentType === 'Questionnaire Bar Chart';
+                  const isAssessmentChart = contentType === 'Assessment Line Chart' || contentType === 'Assessment Bar Chart';
+                  const isQuestionnaireChart = contentType === 'Questionnaire Line Chart' || contentType === 'Questionnaire Bar Chart';
                   const usesForcePlateData =
                     reportType === 'Force Plates' ||
                     contentType === 'Force Plate Line Chart' ||
@@ -7067,11 +8125,16 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   const usesOvrSprintData =
                     contentType === 'OVR Sprint Line Chart' ||
                     contentType === 'OVR Sprint Bar Chart';
+                  const resolvedForcePlateMetrics = resolveForcePlateLegMetrics(
+                    config.forcePlateMetrics,
+                    config.forcePlateLegDisplay || 'selected',
+                    forcePlateMetricOptions
+                  );
                   const isPercentileSummary = contentType === 'Percentile Summary';
                   const usesBiomechanicsTable = contentType === 'Biomechanics Table';
                   const isBiomechanicsChart = contentType === 'Biomechanics Force Chart';
-                  const filterTokenOptions = (usesForcePlateData || usesOvrSprintData || usesBiomechanicsTable || isBiomechanicsChart ? ['Dates'] as FilterToken[] : FILTER_TOKENS.filter((entry) => entry !== 'Level' || isLeagueSchool)).map((entry) => ({ value: entry, label: entry }));
-                  const splitByOptions = (usesForcePlateData ? ['Date', 'Test Type', 'Player'] : usesOvrSprintData ? ['Date', 'Exercise', 'Player'] : (usesBiomechanicsTable || isBiomechanicsChart) ? ['Date', 'Player'] : availableSplitByOptions).map((entry) => ({ value: entry, label: splitByLabel(entry) }));
+                  const filterTokenOptions = (usesForcePlateData || usesOvrSprintData || usesBiomechanicsTable || isBiomechanicsChart || isAssessmentChart || isQuestionnaireChart ? ['Dates'] as FilterToken[] : FILTER_TOKENS.filter((entry) => entry !== 'Level' || isLeagueSchool)).map((entry) => ({ value: entry, label: entry }));
+                  const splitByOptions = (usesForcePlateData ? ['Date', 'Test Type', 'Player'] : usesOvrSprintData ? ['Date', 'Exercise', 'Player'] : (usesBiomechanicsTable || isBiomechanicsChart || isAssessmentChart || isQuestionnaireChart) ? ['Date', 'Player'] : availableSplitByOptions).map((entry) => ({ value: entry, label: splitByLabel(entry) }));
                   const isNote = contentType === 'Note Section';
                   const isSummaryTable = contentType === 'Summary Table';
                   const isLocation = contentType === 'Location Plot';
@@ -7104,13 +8167,30 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                     colSpan <= 2 &&
                     tableColumns.length > 0;
 
+                  const canDragReorder = reportScope === 'Single Player' && !isExporting;
+
                   return (
                     <article
                       key={cellId}
                       className={`portal-custom-reports-cell${!(config.showControls ?? true) ? ' portal-custom-reports-cell--collapsed' : ''}${
                         reportScope === 'Team' && rowWithinTeamPlayer === 1 ? ' portal-custom-reports-cell--team-player-start' : ''
-                      }`}
+                      }${dragOverId === `panel:${cellId}` ? ' portal-custom-reports-cell--drag-over' : ''}`}
                       style={{ gridColumn: `${gridColumnStart} / span ${colSpan}`, gridRow: `${rowNumber + labelRowOffset}` }}
+                      onDragOver={(event) => {
+                        if (!canDragReorder || !dragState) return;
+                        event.preventDefault();
+                        setDragOverId(`panel:${cellId}`);
+                      }}
+                      onDragLeave={() => setDragOverId((current) => (current === `panel:${cellId}` ? null : current))}
+                      onDrop={(event) => {
+                        if (!canDragReorder || !dragState) return;
+                        event.preventDefault();
+                        if (dragState.kind === 'panel') swapPanels(dragState.id, cellId);
+                        else if (dragState.kind === 'row') swapRows(Number(dragState.id), rowNumber);
+                        else if (dragState.kind === 'column') swapColumns(Number(dragState.id), colNumber);
+                        setDragState(null);
+                        setDragOverId(null);
+                      }}
                     >
                       {reportScope !== 'Single Player' && colNumber === 1 && (reportScope !== 'Team' || rowWithinTeamPlayer === 1) ? (
                         <div className="portal-custom-reports-row-player-label">
@@ -7146,33 +8226,90 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                       ) : null}
                       <div className="portal-custom-reports-cell-controls">
                         {!isExporting ? (
-                          <div className="portal-custom-reports-toolbar-row" data-export-ignore="true">
-                            <button
-                              type="button"
-                              className={`btn btn-ghost ${(config.showControls ?? true) ? '' : 'portal-custom-reports-show-btn'}`.trim()}
-                              data-export-ignore="true"
-                              disabled={isTemplateDrivenCell}
-                              onClick={() =>
-                                isTemplateDrivenCell
-                                  ? undefined
-                                  :
-                                setCellConfigs((current) => ({
-                                  ...current,
-                                  [sourceCellId]: { ...(current[sourceCellId] ?? emptyCell()), showControls: !(current[sourceCellId]?.showControls ?? true) },
-                                }))
-                              }
-                            >
-                              {(config.showControls ?? true) ? 'Hide Filters' : 'Show Filters'}
-                            </button>
-                            <CopyMenu
-                              panelDisabled={isTemplateDrivenCell}
-                              rowDisabled={isTemplateDrivenCell}
-                              disabledReason="This mirrors Row 1 -- duplicate from Row 1 instead."
-                              onDuplicatePanel={() => duplicatePanel(cellId)}
-                              onDuplicateRow={() => duplicateRow(rowColFromCellId(cellId).row)}
-                              onDuplicateColumn={() => duplicateColumn(rowColFromCellId(cellId).col)}
-                            />
-                          </div>
+                          <>
+                            <div className="portal-custom-reports-drag-row" data-export-ignore="true">
+                              {canDragReorder ? (
+                                <>
+                                <DragHandle
+                                  title="Drag to move this panel"
+                                  label="Panel"
+                                  draggable={!isTemplateDrivenCell}
+                                  onDragStart={(event) => {
+                                    event.dataTransfer.effectAllowed = 'move';
+                                    setDragState({ kind: 'panel', id: cellId });
+                                  }}
+                                  onDragEnd={() => {
+                                    setDragState(null);
+                                    setDragOverId(null);
+                                  }}
+                                />
+                                <DragHandle
+                                  title="Drag to reorder this row"
+                                  label="Row"
+                                  draggable={colNumber === 1 && !isTemplateDrivenCell}
+                                  onDragStart={(event) => {
+                                    event.dataTransfer.effectAllowed = 'move';
+                                    setDragState({ kind: 'row', id: String(rowNumber) });
+                                  }}
+                                  onDragEnd={() => {
+                                    setDragState(null);
+                                    setDragOverId(null);
+                                  }}
+                                />
+                                <DragHandle
+                                  title="Drag to reorder this column"
+                                  label="Col"
+                                  draggable={rowNumber === 1 && !isTemplateDrivenCell}
+                                  onDragStart={(event) => {
+                                    event.dataTransfer.effectAllowed = 'move';
+                                    setDragState({ kind: 'column', id: String(colNumber) });
+                                  }}
+                                  onDragEnd={() => {
+                                    setDragState(null);
+                                    setDragOverId(null);
+                                  }}
+                                />
+                                </>
+                              ) : null}
+                              <CopyMenu
+                                panelDisabled={isTemplateDrivenCell}
+                                rowDisabled={isTemplateDrivenCell}
+                                disabledReason="This mirrors Row 1 -- duplicate from Row 1 instead."
+                                canAddRow={reportRows < MAX_REPORT_ROWS}
+                                canAddColumn={reportCols < MAX_REPORT_COLS}
+                                onDuplicatePanel={(direction) => duplicatePanel(cellId, direction)}
+                                onDuplicateRow={(direction) => duplicateRow(rowColFromCellId(cellId).row, direction)}
+                                onDuplicateColumn={(direction) => duplicateColumn(rowColFromCellId(cellId).col, direction)}
+                              />
+                              {canDragReorder ? (
+                                <DeleteGridMenu
+                                  canDeleteRow={reportRows > 1}
+                                  canDeleteColumn={reportCols > 1}
+                                  onDeleteRow={() => deleteRow(rowNumber)}
+                                  onDeleteColumn={() => deleteColumn(colNumber)}
+                                />
+                              ) : null}
+                            </div>
+                            <div className="portal-custom-reports-toolbar-row" data-export-ignore="true">
+                              <button
+                                type="button"
+                                className={`btn btn-ghost ${(config.showControls ?? true) ? '' : 'portal-custom-reports-show-btn'}`.trim()}
+                                data-export-ignore="true"
+                                disabled={isTemplateDrivenCell}
+                                onClick={() =>
+                                  isTemplateDrivenCell
+                                    ? undefined
+                                    :
+                                  setCellConfigs((current) => ({
+                                    ...current,
+                                    [sourceCellId]: { ...(current[sourceCellId] ?? emptyCell()), showControls: !(current[sourceCellId]?.showControls ?? true) },
+                                  }))
+                                }
+                              >
+                                {(config.showControls ?? true) ? 'Hide Filters' : 'Show Filters'}
+                              </button>
+                            </div>
+                          </>
                         ) : null}
                         {(config.showControls ?? true) ? (
                           <>
@@ -7190,6 +8327,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                             const isForceChart = panelType === 'Force Plate Line Chart' || panelType === 'Force Plate Bar Chart';
                             const isMetricChart = panelType === 'Metric Line Chart' || panelType === 'Metric Bar Chart';
                             const isOvrChart = panelType === 'OVR Sprint Line Chart' || panelType === 'OVR Sprint Bar Chart';
+                            const isAssessmentChartType = panelType === 'Assessment Line Chart' || panelType === 'Assessment Bar Chart';
                             return {
                               ...current,
                               [cellId]: {
@@ -7208,6 +8346,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                   isOvrChart && !existing.ovrSprintExercises.length && ovrSprintExerciseOptions[0]?.value
                                     ? [ovrSprintExerciseOptions[0].value]
                                     : existing.ovrSprintExercises,
+                                assessmentFieldId:
+                                  isAssessmentChartType && !existing.assessmentFieldId && assessmentFieldOptions[0]?.value
+                                    ? assessmentFieldOptions[0].value
+                                    : existing.assessmentFieldId,
                               },
                             };
                           })}
@@ -7253,10 +8395,49 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                             {contentType === 'Force Plate Line Chart' || contentType === 'Force Plate Bar Chart' || contentType === 'Metric Line Chart' || contentType === 'Metric Bar Chart' ? <span className="portal-muted-text">Charts use the first selected metric; tables show every selected metric.</span> : null}
                             <label>Test Type</label>
                             <SearchableSingleSelect
-                              options={['All', ...Array.from(new Set(forcePlateMetricOptions.filter((option) => config.forcePlateMetrics.includes(option.value)).flatMap((option) => option.testTypes ?? forcePlateTestTypes.filter((value) => value !== 'All'))))].map((value) => ({ value, label: value }))}
+                              options={['All', ...Array.from(new Set([
+                                ...forcePlateTestTypes.filter((value) => value !== 'All'),
+                                ...forcePlateMetricOptions
+                                  .filter((option) => config.forcePlateMetrics.includes(option.value))
+                                  .flatMap((option) => option.testTypes ?? []),
+                              ]))].map((value) => ({ value, label: forcePlateTestTypeLabel(value) }))}
                               value={config.forcePlateTestType || 'All'}
                               onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), forcePlateTestType: next || 'All' } }))}
                             />
+                            {(config.forcePlateTestType === 'SLJ' || hasForcePlateLegMetric(config.forcePlateMetrics)) ? (
+                              <>
+                                <label>Leg Display</label>
+                                <SearchableSingleSelect
+                                  options={[
+                                    { value: 'selected', label: 'Selected metric' },
+                                    { value: 'left', label: 'Left leg' },
+                                    { value: 'right', label: 'Right leg' },
+                                    { value: 'both', label: 'Left + Right' },
+                                  ]}
+                                  value={config.forcePlateLegDisplay || 'selected'}
+                                  onChange={(next) => setCellConfigs((current) => ({
+                                    ...current,
+                                    [cellId]: {
+                                      ...(current[cellId] ?? emptyCell()),
+                                      forcePlateLegDisplay: next === 'left' || next === 'right' || next === 'both' ? next : 'selected',
+                                    },
+                                  }))}
+                                />
+                                {config.forcePlateLegDisplay !== 'selected' ? (
+                                  <>
+                                    <label>Percentile Group</label>
+                                    <SearchableSingleSelect
+                                      options={[{ value: 'all', label: 'All PCU athletes' }, ...percentileSummaryGroups.map((group) => ({ value: group.id, label: group.label }))]}
+                                      value={config.percentileSummaryGroupId || 'all'}
+                                      onChange={(next) => setCellConfigs((current) => ({
+                                        ...current,
+                                        [cellId]: { ...(current[cellId] ?? emptyCell()), percentileSummaryGroupId: next || 'all' },
+                                      }))}
+                                    />
+                                  </>
+                                ) : null}
+                              </>
+                            ) : null}
                             {config.forcePlateMetrics.map((metric) => (
                               <label key={`${cellId}-alias-${metric}`} title={forcePlateMetricOptions.find((option) => option.value === metric)?.label ?? dashboardMetricLabel(metric)}>
                                 Display Name · {forcePlateMetricOptions.find((option) => option.value === metric)?.label ?? dashboardMetricLabel(metric)}
@@ -7297,6 +8478,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                             config={config}
                             cellId={cellId}
                             forcePlateMetricOptions={forcePlateMetricOptions}
+                            availableForcePlateTestTypes={forcePlateTestTypes}
                             ovrSprintExerciseOptions={ovrSprintExerciseOptions}
                             percentileGroups={percentileSummaryGroups}
                             setCellConfigs={setCellConfigs}
@@ -7330,6 +8512,41 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                             endDate={useGlobalDates ? globalEndDate : config.dateEnd || globalEndDate}
                             setCellConfigs={setCellConfigs}
                           />
+                        ) : null}
+                        {isAssessmentChart ? (
+                          <>
+                            <label>Assessment Field</label>
+                            <SearchableSingleSelect
+                              options={assessmentFieldOptions}
+                              value={config.assessmentFieldId || assessmentFieldOptions[0]?.value || ''}
+                              onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), assessmentFieldId: next } }))}
+                            />
+                          </>
+                        ) : null}
+                        {isQuestionnaireChart ? (
+                          <>
+                            <label>Questionnaire</label>
+                            <SearchableSingleSelect
+                              options={questionnaireCatalog.map((entry) => ({ value: String(entry.questionnaireId), label: entry.questionnaireName }))}
+                              value={config.questionnaireId}
+                              onChange={(next) => setCellConfigs((current) => ({
+                                ...current,
+                                [cellId]: { ...(current[cellId] ?? emptyCell()), questionnaireId: next, questionnaireQuestionId: '', questionnaireQuestionLabel: '' },
+                              }))}
+                            />
+                            <label>Question</label>
+                            <SearchableSingleSelect
+                              options={(questionnaireCatalog.find((entry) => String(entry.questionnaireId) === config.questionnaireId)?.questions ?? []).map((question) => ({ value: question.id, label: question.prompt }))}
+                              value={config.questionnaireQuestionId}
+                              onChange={(next) => {
+                                const prompt = questionnaireCatalog.find((entry) => String(entry.questionnaireId) === config.questionnaireId)?.questions.find((question) => question.id === next)?.prompt ?? '';
+                                setCellConfigs((current) => ({
+                                  ...current,
+                                  [cellId]: { ...(current[cellId] ?? emptyCell()), questionnaireQuestionId: next, questionnaireQuestionLabel: prompt },
+                                }));
+                              }}
+                            />
+                          </>
                         ) : null}
                         {(contentType === 'Metric Line Chart' || contentType === 'Metric Bar Chart') && reportType !== 'Force Plates' ? (
                           <>
@@ -7982,14 +9199,14 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                   }),
                                 onMouseLeave: () => setChartHover(null),
                               };
-                              if (shape === 'Ball') return <circle key={`${cellId}-loc-${idx}`} cx={px} cy={py} r={0.095} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={0.026} {...hoverProps} />;
-                              if (shape === 'Called Strike') return <circle key={`${cellId}-loc-${idx}`} cx={px} cy={py} r={0.092} fill={color} stroke={color} strokeWidth={0.021} {...hoverProps} />;
-                              if (shape === 'Foul') return <polygon key={`${cellId}-loc-${idx}`} points={`${px},${py - 0.09} ${px - 0.078},${py + 0.07} ${px + 0.078},${py + 0.07}`} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={0.026} {...hoverProps} />;
-                              if (shape === 'Whiff') return <text key={`${cellId}-loc-${idx}`} x={px} y={py + 0.074} fontSize={0.26} textAnchor="middle" fill={color} {...hoverProps}>★</text>;
-                              if (shape === 'In Play (Out)') return <polygon key={`${cellId}-loc-${idx}`} points={`${px},${py - 0.09} ${px - 0.078},${py + 0.07} ${px + 0.078},${py + 0.07}`} fill={color} {...hoverProps} />;
-                              if (shape === 'In Play (Hit)') return <rect key={`${cellId}-loc-${idx}`} x={px - 0.073} y={py - 0.073} width={0.146} height={0.146} fill={color} {...hoverProps} />;
-                              if (shape === 'Error') return <rect key={`${cellId}-loc-${idx}`} x={px - 0.073} y={py - 0.073} width={0.146} height={0.146} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={0.026} {...hoverProps} />;
-                              return <circle key={`${cellId}-loc-${idx}`} cx={px} cy={py} r={0.09} fill={color} {...hoverProps} />;
+                              if (shape === 'Ball') return <circle key={`${cellId}-loc-${idx}`} cx={px} cy={py} r={0.105} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={0.028} {...hoverProps} />;
+                              if (shape === 'Called Strike') return <circle key={`${cellId}-loc-${idx}`} cx={px} cy={py} r={0.105} fill={color} stroke={color} strokeWidth={0.021} {...hoverProps} />;
+                              if (shape === 'Foul') return <polygon key={`${cellId}-loc-${idx}`} points={`${px},${py - 0.135} ${px - 0.13},${py + 0.1} ${px + 0.13},${py + 0.1}`} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={0.028} {...hoverProps} />;
+                              if (shape === 'Whiff') return <polygon key={`${cellId}-loc-${idx}`} points={starPoints(px, py, 0.15, 0.06)} fill={color} {...hoverProps} />;
+                              if (shape === 'In Play (Out)') return <polygon key={`${cellId}-loc-${idx}`} points={`${px},${py - 0.135} ${px - 0.13},${py + 0.1} ${px + 0.13},${py + 0.1}`} fill={color} {...hoverProps} />;
+                              if (shape === 'In Play (Hit)') return <rect key={`${cellId}-loc-${idx}`} x={px - 0.1} y={py - 0.1} width={0.2} height={0.2} fill={color} {...hoverProps} />;
+                              if (shape === 'Error') return <rect key={`${cellId}-loc-${idx}`} x={px - 0.1} y={py - 0.1} width={0.2} height={0.2} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={0.028} {...hoverProps} />;
+                              return <circle key={`${cellId}-loc-${idx}`} cx={px} cy={py} r={0.105} fill={color} {...hoverProps} />;
                             })}
                           </svg>
                         </div>
@@ -9433,15 +10650,31 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                         </div>
                       ) : contentType === 'Metric Line Chart' || contentType === 'Metric Bar Chart' ? (
                         reportType === 'Force Plates' ? (
-                          <ForcePlateReportChart
-                            points={chartPoints as unknown as Array<Record<string, unknown>>}
-                            metric={config.forcePlateMetrics[0] ?? forcePlateMetricOptions[0]?.value ?? ''}
-                            label={config.forcePlateMetricLabels[config.forcePlateMetrics[0] ?? ''] || forcePlateMetricOptions.find((option) => option.value === config.forcePlateMetrics[0])?.label || dashboardMetricLabel(config.forcePlateMetrics[0] ?? '')}
-                            kind={contentType === 'Metric Bar Chart' ? 'bar' : 'line'}
-                            benchmarkValue={config.chartBenchmarkValue}
-                            benchmarkLabel={config.chartBenchmarkLabel}
-                            onHover={setChartHover}
-                          />
+                          config.forcePlateLegDisplay !== 'selected' && resolvedForcePlateMetrics.some((metric) => forcePlateMetricLeg(metric)) ? (
+                            <ForcePlateLegComparisonPanel
+                              points={chartPoints as unknown as Array<Record<string, unknown>>}
+                              metrics={resolvedForcePlateMetrics}
+                              metricOptions={forcePlateMetricOptions}
+                              player={inheritedPlayer || resolvedInheritedName || config.player}
+                              testType={config.forcePlateTestType || 'All'}
+                              groupId={config.percentileSummaryGroupId || 'all'}
+                              kind={contentType === 'Metric Bar Chart' ? 'bar' : 'line'}
+                              benchmarkValue={config.chartBenchmarkValue}
+                              benchmarkLabel={config.chartBenchmarkLabel}
+                              onGroupsLoaded={setPercentileSummaryGroups}
+                              onHover={setChartHover}
+                            />
+                          ) : (
+                            <ForcePlateReportChart
+                              points={chartPoints as unknown as Array<Record<string, unknown>>}
+                              metric={config.forcePlateMetrics[0] ?? forcePlateMetricOptions[0]?.value ?? ''}
+                              label={config.forcePlateMetricLabels[config.forcePlateMetrics[0] ?? ''] || forcePlateMetricOptions.find((option) => option.value === config.forcePlateMetrics[0])?.label || dashboardMetricLabel(config.forcePlateMetrics[0] ?? '')}
+                              kind={contentType === 'Metric Bar Chart' ? 'bar' : 'line'}
+                              benchmarkValue={config.chartBenchmarkValue}
+                              benchmarkLabel={config.chartBenchmarkLabel}
+                              onHover={setChartHover}
+                            />
+                          )
                         ) : (
                           <MetricTableReportChart
                             rows={tableRows}
@@ -9454,15 +10687,31 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                           />
                         )
                       ) : contentType === 'Force Plate Line Chart' || contentType === 'Force Plate Bar Chart' ? (
-                        <ForcePlateReportChart
-                          points={chartPoints as unknown as Array<Record<string, unknown>>}
-                          metric={config.forcePlateMetrics[0] ?? ''}
-                          label={config.forcePlateMetricLabels[config.forcePlateMetrics[0] ?? ''] || forcePlateMetricOptions.find((option) => option.value === config.forcePlateMetrics[0])?.label || dashboardMetricLabel(config.forcePlateMetrics[0] ?? '')}
-                          kind={contentType === 'Force Plate Bar Chart' ? 'bar' : 'line'}
-                          benchmarkValue={config.chartBenchmarkValue}
-                          benchmarkLabel={config.chartBenchmarkLabel}
-                          onHover={setChartHover}
-                        />
+                        config.forcePlateLegDisplay !== 'selected' && resolvedForcePlateMetrics.some((metric) => forcePlateMetricLeg(metric)) ? (
+                          <ForcePlateLegComparisonPanel
+                            points={chartPoints as unknown as Array<Record<string, unknown>>}
+                            metrics={resolvedForcePlateMetrics}
+                            metricOptions={forcePlateMetricOptions}
+                            player={inheritedPlayer || resolvedInheritedName || config.player}
+                            testType={config.forcePlateTestType || 'All'}
+                            groupId={config.percentileSummaryGroupId || 'all'}
+                            kind={contentType === 'Force Plate Bar Chart' ? 'bar' : 'line'}
+                            benchmarkValue={config.chartBenchmarkValue}
+                            benchmarkLabel={config.chartBenchmarkLabel}
+                            onGroupsLoaded={setPercentileSummaryGroups}
+                            onHover={setChartHover}
+                          />
+                        ) : (
+                          <ForcePlateReportChart
+                            points={chartPoints as unknown as Array<Record<string, unknown>>}
+                            metric={config.forcePlateMetrics[0] ?? ''}
+                            label={config.forcePlateMetricLabels[config.forcePlateMetrics[0] ?? ''] || forcePlateMetricOptions.find((option) => option.value === config.forcePlateMetrics[0])?.label || dashboardMetricLabel(config.forcePlateMetrics[0] ?? '')}
+                            kind={contentType === 'Force Plate Bar Chart' ? 'bar' : 'line'}
+                            benchmarkValue={config.chartBenchmarkValue}
+                            benchmarkLabel={config.chartBenchmarkLabel}
+                            onHover={setChartHover}
+                          />
+                        )
                       ) : contentType === 'OVR Sprint Line Chart' || contentType === 'OVR Sprint Bar Chart' ? (
                         <OvrSprintReportChart
                           points={chartPoints as unknown as Array<Record<string, unknown>>}
@@ -9473,12 +10722,36 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                           benchmarkLabel={config.chartBenchmarkLabel}
                           onHover={setChartHover}
                         />
+                      ) : contentType === 'Assessment Line Chart' || contentType === 'Assessment Bar Chart' ? (
+                        <AssessmentReportChart
+                          points={chartPoints as unknown as Array<Record<string, unknown>>}
+                          label={assessmentFieldOptions.find((option) => option.value === config.assessmentFieldId)?.label || 'Assessment'}
+                          kind={contentType === 'Assessment Bar Chart' ? 'bar' : 'line'}
+                          benchmarkValue={config.chartBenchmarkValue}
+                          benchmarkLabel={config.chartBenchmarkLabel}
+                          onHover={setChartHover}
+                        />
+                      ) : contentType === 'Questionnaire Line Chart' || contentType === 'Questionnaire Bar Chart' ? (
+                        <QuestionnaireReportChart
+                          points={chartPoints as unknown as Array<Record<string, unknown>>}
+                          label={config.questionnaireQuestionLabel || 'Questionnaire'}
+                          kind={contentType === 'Questionnaire Bar Chart' ? 'bar' : 'line'}
+                          benchmarkValue={config.chartBenchmarkValue}
+                          benchmarkLabel={config.chartBenchmarkLabel}
+                          onHover={setChartHover}
+                        />
                       ) : contentType === 'Percentile Summary' ? (
                         <PercentileSummaryPanel
                           player={inheritedPlayer || resolvedInheritedName || config.player}
-                          forceMetrics={config.percentileSummaryForceMetrics}
+                          forceMetrics={resolveForcePlateLegMetrics(
+                            config.percentileSummaryForceMetrics,
+                            config.percentileSummaryForceLegDisplay || 'selected',
+                            forcePlateMetricOptions
+                          )}
+                          forceTestType={config.percentileSummaryForceTestType || 'All'}
                           ovrExercises={config.percentileSummaryOvrExercises}
                           groupId={config.percentileSummaryGroupId || 'all'}
+                          compactMetricLabels={!(config.showControls ?? true)}
                           forcePlateMetricOptions={forcePlateMetricOptions}
                           onGroupsLoaded={setPercentileSummaryGroups}
                         />
@@ -9627,7 +10900,6 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   ) : null}
                   {showLocationChartKey ? (
                     <div>
-                      <div className="portal-muted-text" style={{ marginBottom: 6 }}>Location Chart Results</div>
                       <div className="portal-custom-reports-legend-grid">
                         {[
                           { key: 'called_strike', label: 'Called Strike' },

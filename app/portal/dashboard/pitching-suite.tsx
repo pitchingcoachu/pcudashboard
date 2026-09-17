@@ -21,6 +21,7 @@ import { SaveReportToProfileButton } from '../components/save-report-to-profile'
 import DashboardGroupFilter from './dashboard-group-filter';
 import { IntendedTargetLocationSvg } from './intended-target-location-graphic';
 import type { LiveFlightPitch } from './live-flight-replay';
+import { dashboardMetricLabel } from '../../../lib/dashboard-metric-catalog';
 
 const BallFlightPanel = dynamic(() => import('./ball-flight-panel'), {
   loading: () => <p className="portal-muted-text">Loading Flight Lab…</p>,
@@ -78,6 +79,15 @@ const NCAA_LEVEL_FILTER_OPTIONS = ['All', 'D1', 'D2', 'D3', 'NAIA', 'JUCO'];
 const BREAK_LINES_LEVEL_OPTIONS = ['MLB', 'D1', 'D2', 'D3', 'JUCO', 'NAIA', 'ALL'];
 const DEFAULT_COLLEGE_PERCENTILE_SCOPE = 'D1';
 
+function starPoints(cx: number, cy: number, outerR: number, innerR: number): string {
+  const points: string[] = [];
+  for (let i = 0; i < 10; i += 1) {
+    const r = i % 2 === 0 ? outerR : innerR;
+    const angle = -Math.PI / 2 + (i * Math.PI) / 5;
+    points.push(`${cx + r * Math.cos(angle)},${cy + r * Math.sin(angle)}`);
+  }
+  return points.join(' ');
+}
 function dashboardPageSlug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
@@ -1636,6 +1646,8 @@ const FALLBACK_AVAILABLE_CUSTOM_COLUMNS = [
   'Comp%',
   'QP%',
   'Whiff%',
+  'IZswing%',
+  'Z-Whiff%',
   'SwStrk%',
   'K%',
   'BB%',
@@ -1750,6 +1762,8 @@ const INTENDED_TARGET_CUSTOM_COLUMNS = [
 ];
 
 const COLUMN_HEADER_TOOLTIPS: Record<string, string> = {
+  'IZswing%': 'Z-Swing%: swings on in-zone pitches divided by all in-zone pitches.',
+  'Z-Whiff%': 'Whiffs on in-zone pitches divided by swings on in-zone pitches.',
   'Fastball%': 'Fastball Usage Rate',
   'Sinker%': 'Sinker Usage Rate',
   'Cutter%': 'Cutter Usage Rate',
@@ -2407,13 +2421,13 @@ function AbPaChart({
                 }}
                 style={{ cursor: 'pointer' }}
               >
-                {shape === 'Ball' ? <circle cx={x} cy={y} r={7.6} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={2.2} /> : null}
-                {shape === 'Called Strike' ? <circle cx={x} cy={y} r={7.3} fill={color} stroke={color} strokeWidth={1.8} /> : null}
-                {shape === 'Foul' ? <polygon points={`${x},${y - 8.1} ${x - 7.1},${y + 6.2} ${x + 7.1},${y + 6.2}`} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={2.1} /> : null}
-                {shape === 'Whiff' ? <text x={x} y={y + 6.3} fontSize={20} textAnchor="middle" fill={color}>★</text> : null}
-                {shape === 'In Play (Out)' ? <polygon points={`${x},${y - 8.1} ${x - 7.1},${y + 6.2} ${x + 7.1},${y + 6.2}`} fill={color} /> : null}
-                {shape === 'In Play (Hit)' ? <rect x={x - 7.1} y={y - 7.1} width={14.2} height={14.2} fill={color} /> : null}
-                {shape === 'Error' ? <rect x={x - 7.1} y={y - 7.1} width={14.2} height={14.2} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={2.1} /> : null}
+                {shape === 'Ball' ? <circle cx={x} cy={y} r={8.6} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={2.3} /> : null}
+                {shape === 'Called Strike' ? <circle cx={x} cy={y} r={8.6} fill={color} stroke={color} strokeWidth={1.8} /> : null}
+                {shape === 'Foul' ? <polygon points={`${x},${y - 11} ${x - 10.7},${y + 8.2} ${x + 10.7},${y + 8.2}`} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={2.3} /> : null}
+                {shape === 'Whiff' ? <polygon points={starPoints(x, y, 12.2, 4.9)} fill={color} /> : null}
+                {shape === 'In Play (Out)' ? <polygon points={`${x},${y - 11} ${x - 10.7},${y + 8.2} ${x + 10.7},${y + 8.2}`} fill={color} /> : null}
+                {shape === 'In Play (Hit)' ? <rect x={x - 8.2} y={y - 8.2} width={16.4} height={16.4} fill={color} /> : null}
+                {shape === 'Error' ? <rect x={x - 8.2} y={y - 8.2} width={16.4} height={16.4} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={2.3} /> : null}
                 {shape === '' ? (
                   <path
                     d={`M ${x - 5.5} ${y - 5.5} L ${x + 5.5} ${y + 5.5} M ${x + 5.5} ${y - 5.5} L ${x - 5.5} ${y + 5.5}`}
@@ -13138,13 +13152,13 @@ export default function PitchingSuite({
         onMouseLeave: () => setLocationHover(null),
         onClick: () => (point ? openActionModal(locationVisiblePitches, point) : undefined),
       };
-      if (result === 'Ball') return <circle key={key} cx={x} cy={y} r={8.4} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.1} {...hoverProps} />;
-      if (result === 'Foul') return <polygon key={key} points={`${x},${y-8.1} ${x-7.3},${y+6.2} ${x+7.3},${y+6.2}`} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.1} {...hoverProps} />;
-      if (result === 'Whiff') return <text key={key} x={x} y={y + 6.3} fontSize={19} textAnchor="middle" fill={fill} {...hoverProps}>★</text>;
-      if (result === 'In Play (Out)') return <polygon key={key} points={`${x},${y-8.1} ${x-7.3},${y+6.2} ${x+7.3},${y+6.2}`} fill={fill} {...hoverProps} />;
-      if (result === 'In Play (Hit)' || result === 'Single' || result === 'Double' || result === 'Triple' || result === 'HomeRun') return <rect key={key} x={x - 6.9} y={y - 6.9} width={13.8} height={13.8} fill={fill} {...hoverProps} />;
-      if (result === 'Error') return <rect key={key} x={x - 6.9} y={y - 6.9} width={13.8} height={13.8} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={1.9} {...hoverProps} />;
-      return <circle key={key} cx={x} cy={y} r={8.4} fill={fill} {...hoverProps} />;
+      if (result === 'Ball') return <circle key={key} cx={x} cy={y} r={9.5} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.3} {...hoverProps} />;
+      if (result === 'Foul') return <polygon key={key} points={`${x},${y-12.2} ${x-11.8},${y+9} ${x+11.8},${y+9}`} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.3} {...hoverProps} />;
+      if (result === 'Whiff') return <polygon key={key} points={starPoints(x, y, 13.5, 5.4)} fill={fill} {...hoverProps} />;
+      if (result === 'In Play (Out)') return <polygon key={key} points={`${x},${y-12.2} ${x-11.8},${y+9} ${x+11.8},${y+9}`} fill={fill} {...hoverProps} />;
+      if (result === 'In Play (Hit)' || result === 'Single' || result === 'Double' || result === 'Triple' || result === 'HomeRun') return <rect key={key} x={x - 9} y={y - 9} width={18} height={18} fill={fill} {...hoverProps} />;
+      if (result === 'Error') return <rect key={key} x={x - 9} y={y - 9} width={18} height={18} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.1} {...hoverProps} />;
+      return <circle key={key} cx={x} cy={y} r={9.5} fill={fill} {...hoverProps} />;
     };
     return (
       <svg
@@ -13475,13 +13489,13 @@ export default function PitchingSuite({
         onMouseLeave: () => setLocationHover(null),
         onClick: () => (point ? openActionModal(locationVisiblePitches, point) : undefined),
       };
-      if (result === 'Ball') return <circle key={key} cx={x} cy={y} r={8.6} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.1} {...hoverProps} />;
-      if (result === 'Foul') return <polygon key={key} points={`${x},${y - 8.1} ${x - 7.3},${y + 6.2} ${x + 7.3},${y + 6.2}`} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.1} {...hoverProps} />;
-      if (result === 'Whiff') return <text key={key} x={x} y={y + 6.4} fontSize={19} textAnchor="middle" fill={fill} {...hoverProps}>★</text>;
-      if (result === 'In Play (Out)') return <polygon key={key} points={`${x},${y - 8.1} ${x - 7.3},${y + 6.2} ${x + 7.3},${y + 6.2}`} fill={fill} {...hoverProps} />;
-      if (result === 'In Play (Hit)' || result === 'Single' || result === 'Double' || result === 'Triple' || result === 'HomeRun') return <rect key={key} x={x - 6.9} y={y - 6.9} width={13.8} height={13.8} fill={fill} {...hoverProps} />;
-      if (result === 'Error') return <rect key={key} x={x - 6.9} y={y - 6.9} width={13.8} height={13.8} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={1.9} {...hoverProps} />;
-      return <circle key={key} cx={x} cy={y} r={8.6} fill={fill} {...hoverProps} />;
+      if (result === 'Ball') return <circle key={key} cx={x} cy={y} r={9.5} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.3} {...hoverProps} />;
+      if (result === 'Foul') return <polygon key={key} points={`${x},${y - 12.2} ${x - 11.8},${y + 9} ${x + 11.8},${y + 9}`} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.3} {...hoverProps} />;
+      if (result === 'Whiff') return <polygon key={key} points={starPoints(x, y, 13.5, 5.4)} fill={fill} {...hoverProps} />;
+      if (result === 'In Play (Out)') return <polygon key={key} points={`${x},${y - 12.2} ${x - 11.8},${y + 9} ${x + 11.8},${y + 9}`} fill={fill} {...hoverProps} />;
+      if (result === 'In Play (Hit)' || result === 'Single' || result === 'Double' || result === 'Triple' || result === 'HomeRun') return <rect key={key} x={x - 9} y={y - 9} width={18} height={18} fill={fill} {...hoverProps} />;
+      if (result === 'Error') return <rect key={key} x={x - 9} y={y - 9} width={18} height={18} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.1} {...hoverProps} />;
+      return <circle key={key} cx={x} cy={y} r={9.5} fill={fill} {...hoverProps} />;
     };
     return (
       <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 460, border: '1px solid rgba(255,255,255,0.16)', borderRadius: 10 }} onMouseLeave={() => setLocationHover(null)}>
@@ -15361,15 +15375,6 @@ export default function PitchingSuite({
                   />
                 </label>
                 <label>
-                  QP Locations
-                  <SearchableSingleSelect
-                    options={toOptions(filters.qp_location_options)}
-                    value={qpLocations}
-                    onChange={setQpLocations}
-                    placeholder="All"
-                  />
-                </label>
-                <label>
                   Break Lines
                   <SearchableSingleSelect
                     options={toOptions(filters.break_lines_options)}
@@ -16301,7 +16306,7 @@ export default function PitchingSuite({
                       <label>
                         Add Column
                         <SearchableSingleSelect
-                          options={remainingCustomColumns.map((column) => ({ value: column, label: column }))}
+                          options={remainingCustomColumns.map((column) => ({ value: column, label: dashboardMetricLabel(column) }))}
                           value={customColumnToAdd}
                           clearQueryOnSelect={false}
                           onChange={(next) => {
@@ -16365,7 +16370,7 @@ export default function PitchingSuite({
                               style={{ minHeight: 'unset', padding: '0.3rem 0.5rem', display: 'inline-flex', alignItems: 'center', gap: 8 }}
                             >
                               <span style={{ opacity: 0.7 }}>::</span>
-                              <span>{column}</span>
+                              <span>{dashboardMetricLabel(column)}</span>
                               <span
                                 style={{ opacity: 0.8 }}
                                 onClick={(event) => {
@@ -16424,7 +16429,7 @@ export default function PitchingSuite({
                       {displayedTableColumns.map((column, colIndex) => {
                         const isSortable = true;
                         const activeSort = leaderboardSortColumn === column;
-                        const label = isLeaderboardPage && colIndex === 0 ? (leaderboardViewBy === 'Team' ? 'Team' : 'Player') : column;
+                        const label = isLeaderboardPage && colIndex === 0 ? (leaderboardViewBy === 'Team' ? 'Team' : 'Player') : dashboardMetricLabel(column);
                         const headerTooltip = COLUMN_HEADER_TOOLTIPS[column];
                         return (
                           <th
@@ -18719,12 +18724,12 @@ export default function PitchingSuite({
                                       onMouseLeave: () => setQpLocationsHover(null),
                                       onClick: () => openActionModal(points, point),
                                     };
-                                    if (result === 'Ball') return <circle key={`qpl-pt-${idx}`} cx={x} cy={y} r={7.4} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={1.9} {...hoverProps} />;
-                                    if (result === 'Foul') return <polygon key={`qpl-pt-${idx}`} points={`${x},${y - 6.7} ${x - 6.0},${y + 5.1} ${x + 6.0},${y + 5.1}`} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={1.9} {...hoverProps} />;
-                                    if (result === 'Whiff') return <text key={`qpl-pt-${idx}`} x={x} y={y + 5.3} fontSize={17} textAnchor="middle" fill={color} {...hoverProps}>★</text>;
-                                    if (result === 'In Play (Out)') return <polygon key={`qpl-pt-${idx}`} points={`${x},${y - 6.7} ${x - 6.0},${y + 5.1} ${x + 6.0},${y + 5.1}`} fill={color} {...hoverProps} />;
-                                    if (result === 'In Play (Hit)' || result === 'Single' || result === 'Double' || result === 'Triple' || result === 'HomeRun') return <rect key={`qpl-pt-${idx}`} x={x - 5.7} y={y - 5.7} width={11.4} height={11.4} fill={color} {...hoverProps} />;
-                                    if (result === 'Error') return <rect key={`qpl-pt-${idx}`} x={x - 5.7} y={y - 5.7} width={11.4} height={11.4} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={1.8} {...hoverProps} />;
+                                    if (result === 'Ball') return <circle key={`qpl-pt-${idx}`} cx={x} cy={y} r={8.2} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={2.0} {...hoverProps} />;
+                                    if (result === 'Foul') return <polygon key={`qpl-pt-${idx}`} points={`${x},${y - 10.5} ${x - 10.2},${y + 7.75} ${x + 10.2},${y + 7.75}`} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={2.0} {...hoverProps} />;
+                                    if (result === 'Whiff') return <polygon key={`qpl-pt-${idx}`} points={starPoints(x, y, 11.6, 4.7)} fill={color} {...hoverProps} />;
+                                    if (result === 'In Play (Out)') return <polygon key={`qpl-pt-${idx}`} points={`${x},${y - 10.5} ${x - 10.2},${y + 7.75} ${x + 10.2},${y + 7.75}`} fill={color} {...hoverProps} />;
+                                    if (result === 'In Play (Hit)' || result === 'Single' || result === 'Double' || result === 'Triple' || result === 'HomeRun') return <rect key={`qpl-pt-${idx}`} x={x - 7} y={y - 7} width={14} height={14} fill={color} {...hoverProps} />;
+                                    if (result === 'Error') return <rect key={`qpl-pt-${idx}`} x={x - 7} y={y - 7} width={14} height={14} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={1.9} {...hoverProps} />;
                                     return <circle key={`qpl-pt-${idx}`} cx={x} cy={y} r={7.2} fill={color} {...hoverProps} />;
                                   })}
                                 </svg>

@@ -33,7 +33,7 @@ export const PITCHING_TABLE_METRICS = [
   'P', 'BF', 'P/IP', 'P/BF', 'Velo', 'Max', 'IVB', 'xIVB', 'dIVB', 'HB', 'xHB', 'dHB',
   'MagAngle', 'Spin', 'rTilt', 'bTilt', 'TiltDev', 'SpinEff', 'Height', 'Side', 'Ext', 'VAA', 'nVAA', 'HAA',
   'Strike%', 'Swing%', 'FPS%', 'FPS(FB)%', 'FPS(OS)%', 'Called-S%', 'Take%', 'Chase%', 'GoZoneSw%',
-  'IZswing%', 'EdgeSwing%', 'PosSD%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'InZone%', 'Comp%', 'QP%',
+  'IZswing%', 'Z-Whiff%', 'EdgeSwing%', 'PosSD%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'InZone%', 'Comp%', 'QP%',
   'Whiff%', 'SwStrk%', 'K%', 'BB%', 'K-BB%', 'GB%', 'Barrel%', 'CSW%', 'EV', 'LA',
   'Stuff+', 'Command+', 'Ctrl+', 'QP+', 'RV/100', 'PV/100',
   'ITMissAvg', 'ITMissMed',
@@ -47,7 +47,7 @@ export const HITTING_TABLE_METRICS = [
   'P', 'PA', 'BF', 'AB', 'AVG', 'SLG', 'OBP', 'OPS', 'wOBA', 'xWOBA', 'ISO', 'xISO', 'BABIP',
   'H', 'XBH', 'HR', 'Barrels', 'BB', 'HBP', 'K', 'Whiffs',
   'InZone%', 'Strike%', 'Swing%', 'Swing Rate', 'FPS%', 'FPS(FB)%', 'FPS(OS)%', 'Called-S%', 'Take%',
-  'Chase%', 'GoZoneSw%', 'IZswing%', 'EdgeSwing%', 'PosSD%', 'Early%', 'Ahead%', 'E+A%', '1-1W%',
+  'Chase%', 'GoZoneSw%', 'IZswing%', 'Z-Whiff%', 'EdgeSwing%', 'PosSD%', 'Early%', 'Ahead%', 'E+A%', '1-1W%',
   'Comp%', 'QP%', 'Whiff%', 'Whiff Rate', 'SwStrk%', 'K%', 'BB%', 'K-BB%', 'GB%', 'GB Rate',
   'Barrel%', 'CSW%', 'EV', 'Exit Velocity', 'LA', 'Stuff+', 'Ctrl+', 'QP+', 'RV/100', 'Run Values', 'PV/100',
 ] as const;
@@ -82,11 +82,18 @@ export function dashboardMetricLabel(metricInput: string): string {
   if (['Height', 'Side', 'Ext'].includes(metric)) return `${metric} (ft)`;
   if (metric === 'ITMissAvg') return 'Average Miss Distance (in)';
   if (metric === 'ITMissMed') return 'Median Miss Distance (in)';
+  if (metric === 'IZswing%') return 'Z-Swing%';
   if (metric === 'Spin') return 'Spin (rpm)';
   if (['MagAngle', 'VAA', 'nVAA', 'HAA', 'LA'].includes(metric)) return `${metric} (°)`;
   if (metric === 'SpinEff') return 'SpinEff (%)';
   if (['rTilt', 'bTilt', 'TiltDev'].includes(metric)) return `${metric} (clock)`;
   return metric;
+}
+
+export function forcePlateDisplayUnit(unitInput: string): string {
+  const unit = String(unitInput ?? '').trim();
+  if (/^Newton Per Second Per Kilo$/i.test(unit)) return 'N/(s·kg)';
+  return unit;
 }
 
 export function formatForcePlateMetricValue(metric: string, value: unknown): string {

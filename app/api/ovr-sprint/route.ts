@@ -4,7 +4,7 @@ import { getSessionFromCookies } from '../../../lib/auth';
 import { resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
 import { resolveProgrammingOrganizationId } from '../../../lib/programming-scope';
 import { getPlayerForUser } from '../../../lib/training-db';
-import { analyzeOvrSprintExport, importOvrSprintExport, listOvrSprintResults, listOvrSprintUploads } from '../../../lib/ovr-sprint';
+import { analyzeOvrSprintExport, importOvrSprintExport, listOvrSprintResults, listOvrSprintUploads, listOvrVbtResults } from '../../../lib/ovr-sprint';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -23,7 +23,7 @@ async function authContext() {
     appUrl: session.appUrl,
     apps: session.apps,
   }).trim().toUpperCase();
-  if (schoolCode !== 'PCU') return { error: NextResponse.json({ error: 'OVR Sprint is currently available only for PCU.' }, { status: 403 }) } as const;
+  if (schoolCode !== 'PCU') return { error: NextResponse.json({ error: 'OVR Data is currently available only for PCU.' }, { status: 403 }) } as const;
   const organizationId = await resolveProgrammingOrganizationId(session);
   return { session, schoolCode, organizationId } as const;
 }
@@ -37,13 +37,14 @@ export async function GET() {
       const player = await getPlayerForUser({ organizationId: auth.organizationId, userId: auth.session.userId ?? 0 });
       playerId = player?.id ?? -1;
     }
-    const [results, uploads] = await Promise.all([
+    const [results, vbtResults, uploads] = await Promise.all([
       listOvrSprintResults({ organizationId: auth.organizationId, schoolCode: auth.schoolCode, playerId }),
+      listOvrVbtResults({ organizationId: auth.organizationId, schoolCode: auth.schoolCode, playerId }),
       auth.session.role === 'player' ? Promise.resolve([]) : listOvrSprintUploads(auth.organizationId, auth.schoolCode),
     ]);
-    return NextResponse.json({ results, uploads }, { headers: { 'cache-control': 'private, no-store' } });
+    return NextResponse.json({ results, vbtResults, uploads }, { headers: { 'cache-control': 'private, no-store' } });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Unable to load OVR Sprint data.' }, { status: 500 });
+    return NextResponse.json({ error: error instanceof Error ? error.message : 'Unable to load OVR Data.' }, { status: 500 });
   }
 }
 
@@ -52,7 +53,7 @@ export async function POST(request: Request) {
     const auth = await authContext();
     if ('error' in auth) return auth.error;
     if (auth.session.role !== 'admin' && auth.session.role !== 'coach') {
-      return NextResponse.json({ error: 'Only coaches and admins can import OVR Sprint data.' }, { status: 403 });
+      return NextResponse.json({ error: 'Only coaches and admins can import OVR data.' }, { status: 403 });
     }
     const form = await request.formData();
     const action = String(form.get('action') ?? 'import').trim().toLowerCase();
@@ -71,7 +72,7 @@ export async function POST(request: Request) {
     });
     return NextResponse.json({ ok: true, ...imported });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to import the OVR Sprint export.';
+    const message = error instanceof Error ? error.message : 'Unable to import the OVR export.';
     const status = /choose|missing|invalid|empty|exceeds|could not|does not contain|no data/i.test(message) ? 400 : 500;
     return NextResponse.json({ error: message }, { status });
   }

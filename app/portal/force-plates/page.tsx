@@ -7,9 +7,9 @@ import { resolveSessionDashboardSchoolOptions } from '../../../lib/dashboard-sch
 import { canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../lib/programming-scope';
 import { getPlayerForUser, listPlayerChoicesByOrganization } from '../../../lib/training-db';
 import { loadForcePlateSnapshot } from '../../../lib/force-plate-cache-db';
-import { loadForcePlateSnapshotFromNeon } from '../../../lib/force-plate-neon-db';
+import { loadForcePlateMetricCatalog, loadForcePlateSnapshotFromNeon } from '../../../lib/force-plate-neon-db';
 import type { ValdSnapshot } from '../../../lib/vald-forceplates';
-import ForcePlatesDashboard from './force-plates-dashboard';
+import ValdOvrDataDashboard from './vald-ovr-data-dashboard';
 import PortalChrome from '../portal-chrome';
 import LogoutButton from '../logout-button';
 import PortalUserMenu from '../user-menu';
@@ -117,6 +117,7 @@ export default async function ForcePlatesPage({
   let error = '';
   let snapshot: ValdSnapshot | null = null;
   let availablePlayers: string[] = [];
+  let availableTestTypes: string[] = [];
   if (!isPcu) {
     error = 'Force Plate Data is currently enabled only for PCU.';
   } else if (!canAccessProgramming) {
@@ -126,14 +127,19 @@ export default async function ForcePlatesPage({
   } else {
     try {
       const preferredPlayerNames = selectedPlayers.length ? selectedPlayers : candidateNames.slice(0, 1);
-      const fromNeon = await loadForcePlateSnapshotFromNeon({
-        organizationId: orgId,
-        schoolCode: selectedSchoolCode,
-        allowedPlayerNames: candidateNames,
-        metricPlayerNames: preferredPlayerNames,
-        pointTypes: ['average'],
-        includeMetrics: false,
-      });
+      const [fromNeon, catalog] = await Promise.all([
+        loadForcePlateSnapshotFromNeon({
+          organizationId: orgId,
+          schoolCode: selectedSchoolCode,
+          allowedPlayerNames: candidateNames,
+          metricPlayerNames: preferredPlayerNames,
+          pointTypes: ['average'],
+          includeMetrics: false,
+        }),
+        loadForcePlateMetricCatalog({ organizationId: orgId, schoolCode: selectedSchoolCode })
+          .catch(() => ({ metrics: [], testTypes: [] })),
+      ]);
+      availableTestTypes = catalog.testTypes;
       const cached = fromNeon.snapshot
         ? { snapshot: fromNeon.snapshot }
         : await loadForcePlateSnapshot({ organizationId: orgId, schoolCode: selectedSchoolCode });
@@ -232,30 +238,21 @@ export default async function ForcePlatesPage({
       <div className="portal-admin-stack">
         <div className={`portal-admin-headline ${styles.pageHeadline}`}>
           <div className={styles.pageTitleGroup}>
-            <h2 style={{ margin: 0 }}>VALD Force Plate Data</h2>
+            <h2 style={{ margin: 0 }}>{isPcu ? 'VALD and OVR Data' : 'VALD Force Plate Data'}</h2>
           </div>
           <div className={styles.valdLogo}>
             <Image src="/vald.webp" alt="VALD" fill style={{ objectFit: 'cover', objectPosition: 'center' }} />
           </div>
         </div>
-        {error ? (
-          <article className="portal-admin-card">
-            <p className="auth-error" style={{ margin: 0 }}>
-              {error}
-            </p>
-          </article>
-        ) : null}
-
-        {snapshot ? (
-          <>
-            <ForcePlatesDashboard snapshot={snapshot} canManageViews={isStaff} />
-            <article className="portal-admin-card">
-              <p className="portal-muted-text" style={{ margin: 0 }}>
-                Last sync: {formatShortDateTime(snapshot.fetchedAt)}
-              </p>
-            </article>
-          </>
-        ) : null}
+        <ValdOvrDataDashboard
+          snapshot={snapshot}
+          valdError={error}
+          lastSyncLabel={snapshot ? formatShortDateTime(snapshot.fetchedAt) : ''}
+          canManageViews={isStaff}
+          canImport={isStaff}
+          showOvr={isPcu}
+          availableTestTypes={availableTestTypes}
+        />
       </div>
     </PortalChrome>
   );

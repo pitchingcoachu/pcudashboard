@@ -7,6 +7,11 @@ const REQUIRED_HEADERS = [
   'Athlete', 'Date', 'Exercise', 'Sprint #', 'Total Time (s)', 'In-Beam Start',
   'Trigger Start', 'Split #', 'Split Time (s)', 'Distance (yd)', 'Speed (mph)', 'Set Note',
 ] as const;
+const VELOCITY_REQUIRED_HEADERS = [
+  'Athlete', 'Date', 'Exercise', 'Set #', 'Load (lb)', 'Target Type', 'Target Min', 'Target Max',
+  'Rep #', 'Avg Velocity (m/s)', 'Peak Velocity (m/s)', 'Avg Power (W)', 'Peak Power (W)',
+  'ROM (in)', 'Duration (s)', 'TPV (s)', 'EA Index', 'Set Note',
+] as const;
 
 export type OvrSprintResult = {
   id: number;
@@ -22,6 +27,32 @@ export type OvrSprintResult = {
   splitTime: number;
   distanceYards: number | null;
   speedMph: number | null;
+  note: string;
+};
+
+export type OvrVbtResult = {
+  id: number;
+  playerId: number | null;
+  athleteName: string;
+  sport: string;
+  position: string;
+  groups: string;
+  date: string;
+  exercise: string;
+  setNumber: number;
+  loadLbs: number | null;
+  targetType: string;
+  targetMin: number | null;
+  targetMax: number | null;
+  repNumber: number;
+  avgVelocity: number | null;
+  peakVelocity: number | null;
+  avgPower: number | null;
+  peakPower: number | null;
+  romInches: number | null;
+  durationSeconds: number | null;
+  tpvSeconds: number | null;
+  eaIndex: number | null;
   note: string;
 };
 
@@ -47,9 +78,13 @@ export type OvrSprintImportPreview = {
   minDate: string | null;
   maxDate: string | null;
   warnings: string[];
+  sprintRows: number;
+  vbtRows: number;
+  vbtExercises: string[];
 };
 
 type ParsedRow = Omit<OvrSprintResult, 'id' | 'playerId'> & { resultKey: string; athleteNameNorm: string };
+type ParsedVbtRow = Omit<OvrVbtResult, 'id' | 'playerId'> & { resultKey: string; athleteNameNorm: string };
 
 let schemaReady: Promise<void> | null = null;
 
@@ -69,7 +104,9 @@ function clean(value: unknown): string {
 }
 
 function numberValue(value: unknown): number | null {
-  const parsed = Number(clean(value));
+  const normalized = clean(value);
+  if (!normalized) return null;
+  const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
@@ -148,32 +185,38 @@ function parseCsv(text: string): string[][] {
   return rows;
 }
 
-async function workbookRows(fileName: string, bytes: Uint8Array): Promise<string[][]> {
-  if (fileName.toLowerCase().endsWith('.csv')) return parseCsv(new TextDecoder('utf-8').decode(bytes).replace(/^\uFEFF/, ''));
+async function workbookRows(fileName: string, bytes: Uint8Array): Promise<{ sprint: string[][]; velocity: string[][] }> {
+  if (fileName.toLowerCase().endsWith('.csv')) return { sprint: parseCsv(new TextDecoder('utf-8').decode(bytes).replace(/^\uFEFF/, '')), velocity: [] };
   if (!fileName.toLowerCase().endsWith('.xlsx')) throw new Error('Choose an OVR .xlsx or Sprint .csv export.');
   const zip = await JSZip.loadAsync(bytes);
   const workbookXml = await zip.file('xl/workbook.xml')?.async('string');
   const relationshipsXml = await zip.file('xl/_rels/workbook.xml.rels')?.async('string');
   if (!workbookXml || !relationshipsXml) throw new Error('The workbook structure could not be read.');
-  const sprintSheet = Array.from(workbookXml.matchAll(/<sheet\s([^>]+)\/?\s*>/g))
-    .map((match) => ({ name: decodeXml(match[1].match(/\bname="([^"]+)"/)?.[1] ?? ''), id: match[1].match(/r:id="([^"]+)"/)?.[1] ?? '' }))
-    .find((sheet) => sheet.name.trim().toLowerCase() === 'sprint');
+  const sheets = Array.from(workbookXml.matchAll(/<sheet\s([^>]+)\/?\s*>/g))
+    .map((match) => ({ name: decodeXml(match[1].match(/\bname="([^"]+)"/)?.[1] ?? ''), id: match[1].match(/r:id="([^"]+)"/)?.[1] ?? '' }));
+  const sprintSheet = sheets.find((sheet) => sheet.name.trim().toLowerCase() === 'sprint');
   if (!sprintSheet) throw new Error('This OVR workbook does not contain a Sprint sheet.');
-  const relationship = Array.from(relationshipsXml.matchAll(/<Relationship\s([^>]+)\/?\s*>/g))
-    .map((match) => ({ id: match[1].match(/\bId="([^"]+)"/)?.[1] ?? '', target: match[1].match(/\bTarget="([^"]+)"/)?.[1] ?? '' }))
-    .find((entry) => entry.id === sprintSheet.id);
-  if (!relationship) throw new Error('The Sprint worksheet could not be located.');
-  const sheetPath = relationship.target.startsWith('/') ? relationship.target.slice(1) : `xl/${relationship.target.replace(/^\.\//, '')}`;
-  const sheetXml = await zip.file(sheetPath)?.async('string');
-  if (!sheetXml) throw new Error('The Sprint worksheet could not be opened.');
+  const relationships = Array.from(relationshipsXml.matchAll(/<Relationship\s([^>]+)\/?\s*>/g))
+    .map((match) => ({ id: match[1].match(/\bId="([^"]+)"/)?.[1] ?? '', target: match[1].match(/\bTarget="([^"]+)"/)?.[1] ?? '' }));
   const sharedXml = await zip.file('xl/sharedStrings.xml')?.async('string');
-  return parseWorksheet(sheetXml, sharedXml ? parseSharedStrings(sharedXml) : []);
+  const shared = sharedXml ? parseSharedStrings(sharedXml) : [];
+  const readSheet = async (name: string): Promise<string[][]> => {
+    const sheet = sheets.find((entry) => entry.name.trim().toLowerCase() === name.toLowerCase());
+    if (!sheet) return [];
+    const relationship = relationships.find((entry) => entry.id === sheet.id);
+    if (!relationship) return [];
+    const sheetPath = relationship.target.startsWith('/') ? relationship.target.slice(1) : `xl/${relationship.target.replace(/^\.\//, '')}`;
+    const sheetXml = await zip.file(sheetPath)?.async('string');
+    return sheetXml ? parseWorksheet(sheetXml, shared) : [];
+  };
+  return { sprint: await readSheet('Sprint'), velocity: await readSheet('Velocity') };
 }
 
-async function parseOvrSprint(fileName: string, bytes: Uint8Array): Promise<{ preview: OvrSprintImportPreview; rows: ParsedRow[] }> {
+async function parseOvrSprint(fileName: string, bytes: Uint8Array): Promise<{ preview: OvrSprintImportPreview; rows: ParsedRow[]; vbtRows: ParsedVbtRow[] }> {
   if (!bytes.byteLength) throw new Error(`${fileName} is empty.`);
   if (bytes.byteLength > MAX_FILE_BYTES) throw new Error(`${fileName} exceeds the 12 MB limit.`);
-  const grid = (await workbookRows(fileName, bytes)).filter((row) => row.some((value) => clean(value)));
+  const workbook = await workbookRows(fileName, bytes);
+  const grid = workbook.sprint.filter((row) => row.some((value) => clean(value)));
   if (grid.length < 2) throw new Error('The Sprint sheet has no data rows.');
   const headers = grid[0].map(clean);
   const missing = REQUIRED_HEADERS.filter((header) => !headers.includes(header));
@@ -204,14 +247,55 @@ async function parseOvrSprint(fileName: string, bytes: Uint8Array): Promise<{ pr
     }];
   });
   const dates = rows.map((row) => row.date).sort();
+  const velocityGrid = workbook.velocity.filter((row) => row.some((value) => clean(value)));
+  const vbtWarnings: string[] = [];
+  let vbtRows: ParsedVbtRow[] = [];
+  if (velocityGrid.length > 1) {
+    const velocityHeaders = velocityGrid[0].map(clean);
+    const missingVelocity = VELOCITY_REQUIRED_HEADERS.filter((header) => !velocityHeaders.includes(header));
+    if (missingVelocity.length) {
+      vbtWarnings.push(`Velocity sheet skipped because it is missing: ${missingVelocity.join(', ')}.`);
+    } else {
+      const velocityIndexes = new Map(velocityHeaders.map((header, index) => [header, index]));
+      const velocityValue = (row: string[], header: string) => clean(row[velocityIndexes.get(header) ?? -1]);
+      vbtRows = velocityGrid.slice(1).flatMap((row, rowIndex): ParsedVbtRow[] => {
+        const athleteName = velocityValue(row, 'Athlete');
+        const athleteNameNorm = normalizeOvrAthleteName(athleteName);
+        const date = isoDate(velocityValue(row, 'Date'));
+        const importedExercise = velocityValue(row, 'Exercise');
+        const exercise = importedExercise.toLowerCase() === 'bench press' ? 'Multi Grip Bench Press' : importedExercise;
+        const setNumber = integerValue(velocityValue(row, 'Set #'));
+        const repNumber = integerValue(velocityValue(row, 'Rep #'));
+        if (!athleteNameNorm || !date || !exercise || setNumber === null || repNumber === null) {
+          vbtWarnings.push(`Velocity row ${rowIndex + 2} was skipped because a required value was missing or invalid.`);
+          return [];
+        }
+        const numeric = (header: string) => numberValue(velocityValue(row, header));
+        const identity = [athleteNameNorm, date, importedExercise.toLowerCase(), setNumber, repNumber, velocityValue(row, 'Load (lb)'), velocityValue(row, 'Avg Velocity (m/s)'), velocityValue(row, 'Peak Velocity (m/s)')].join('|');
+        return [{
+          resultKey: createHash('sha256').update(identity).digest('hex'), athleteName, athleteNameNorm,
+          sport: velocityValue(row, 'Sport'), position: velocityValue(row, 'Position'), groups: velocityValue(row, 'Group(s)'),
+          date, exercise, setNumber, loadLbs: numeric('Load (lb)'), targetType: velocityValue(row, 'Target Type'),
+          targetMin: numeric('Target Min'), targetMax: numeric('Target Max'), repNumber,
+          avgVelocity: numeric('Avg Velocity (m/s)'), peakVelocity: numeric('Peak Velocity (m/s)'),
+          avgPower: numeric('Avg Power (W)'), peakPower: numeric('Peak Power (W)'), romInches: numeric('ROM (in)'),
+          durationSeconds: numeric('Duration (s)'), tpvSeconds: numeric('TPV (s)'), eaIndex: numeric('EA Index'),
+          note: velocityValue(row, 'Set Note'),
+        }];
+      });
+    }
+  }
+  const allDates = [...dates, ...vbtRows.map((row) => row.date)].sort();
   return {
     preview: {
-      fileName, totalRows: Math.max(0, grid.length - 1), validRows: rows.length,
-      athletes: [...new Set(rows.map((row) => row.athleteName))].sort(),
+      fileName, totalRows: Math.max(0, grid.length - 1) + Math.max(0, velocityGrid.length - 1), validRows: rows.length + vbtRows.length,
+      athletes: [...new Set([...rows.map((row) => row.athleteName), ...vbtRows.map((row) => row.athleteName)])].sort(),
       exercises: [...new Set(rows.map((row) => row.exercise))].sort(),
-      minDate: dates[0] ?? null, maxDate: dates.at(-1) ?? null, warnings: warnings.slice(0, 12),
+      minDate: allDates[0] ?? null, maxDate: allDates.at(-1) ?? null,
+      warnings: [...warnings, ...vbtWarnings].slice(0, 12), sprintRows: rows.length, vbtRows: vbtRows.length,
+      vbtExercises: [...new Set(vbtRows.map((row) => row.exercise))].sort(),
     },
-    rows,
+    rows, vbtRows,
   };
 }
 
@@ -239,10 +323,30 @@ async function ensureSchema(): Promise<void> {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (organization_id, school_code, result_key)
       );
+      CREATE TABLE IF NOT EXISTS ovr_vbt_results (
+        id BIGSERIAL PRIMARY KEY, organization_id BIGINT NOT NULL, school_code TEXT NOT NULL,
+        result_key TEXT NOT NULL, athlete_name TEXT NOT NULL, athlete_name_norm TEXT NOT NULL,
+        player_id BIGINT, sport TEXT NOT NULL DEFAULT '', position TEXT NOT NULL DEFAULT '', groups_text TEXT NOT NULL DEFAULT '',
+        result_date DATE NOT NULL, exercise TEXT NOT NULL, set_number INTEGER NOT NULL,
+        load_lbs DOUBLE PRECISION, target_type TEXT NOT NULL DEFAULT '', target_min DOUBLE PRECISION, target_max DOUBLE PRECISION,
+        rep_number INTEGER NOT NULL, avg_velocity_mps DOUBLE PRECISION, peak_velocity_mps DOUBLE PRECISION,
+        avg_power_watts DOUBLE PRECISION, peak_power_watts DOUBLE PRECISION, rom_inches DOUBLE PRECISION,
+        duration_seconds DOUBLE PRECISION, tpv_seconds DOUBLE PRECISION, ea_index DOUBLE PRECISION,
+        note TEXT NOT NULL DEFAULT '', source_upload_id BIGINT REFERENCES ovr_sprint_uploads(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (organization_id, school_code, result_key)
+      );
+      ALTER TABLE ovr_sprint_uploads ADD COLUMN IF NOT EXISTS sprint_row_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE ovr_sprint_uploads ADD COLUMN IF NOT EXISTS vbt_row_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE ovr_sprint_uploads ADD COLUMN IF NOT EXISTS vbt_inserted_rows INTEGER NOT NULL DEFAULT 0;
       CREATE INDEX IF NOT EXISTS ovr_sprint_results_scope_date_idx
         ON ovr_sprint_results (organization_id, school_code, result_date DESC);
       CREATE INDEX IF NOT EXISTS ovr_sprint_results_player_date_idx
         ON ovr_sprint_results (organization_id, school_code, player_id, result_date DESC);
+      CREATE INDEX IF NOT EXISTS ovr_vbt_results_scope_date_idx
+        ON ovr_vbt_results (organization_id, school_code, result_date DESC);
+      CREATE INDEX IF NOT EXISTS ovr_vbt_results_player_date_idx
+        ON ovr_vbt_results (organization_id, school_code, player_id, result_date DESC);
     `);
   })().catch((error) => { schemaReady = null; throw error; });
   return schemaReady;
@@ -254,32 +358,32 @@ export async function analyzeOvrSprintExport(fileName: string, bytes: Uint8Array
 
 export async function importOvrSprintExport(input: {
   organizationId: number; schoolCode: string; uploadedByUserId: number | null; fileName: string; bytes: Uint8Array;
-}): Promise<{ upload: OvrSprintUpload; duplicateFile: boolean }> {
+}): Promise<{ upload: OvrSprintUpload; duplicateFile: boolean; newRows: number }> {
   await ensureSchema();
   const parsed = await parseOvrSprint(input.fileName, input.bytes);
   const fileHash = createHash('sha256').update(input.bytes).digest('hex');
   const schoolCode = clean(input.schoolCode).toUpperCase();
   const pool = getDbPool();
   const existing = await pool.query('SELECT id FROM ovr_sprint_uploads WHERE organization_id=$1 AND school_code=$2 AND file_hash=$3', [input.organizationId, schoolCode, fileHash]);
-  if (existing.rows[0]) {
-    const uploads = await listOvrSprintUploads(input.organizationId, schoolCode);
-    const upload = uploads.find((entry) => entry.id === Number(existing.rows[0].id));
-    if (!upload) throw new Error('The existing import could not be loaded.');
-    return { upload, duplicateFile: true };
-  }
 
   const roster = await pool.query<{ id: string; full_name: string }>('SELECT id, full_name FROM players WHERE organization_id=$1', [input.organizationId]);
   const rosterByName = new Map(roster.rows.map((player) => [normalizeOvrAthleteName(player.full_name), Number(player.id)]));
-  const unmatched = [...new Set(parsed.rows.filter((row) => !rosterByName.has(row.athleteNameNorm)).map((row) => row.athleteName))].sort();
-  const matchedRows = parsed.rows.filter((row) => rosterByName.has(row.athleteNameNorm)).length;
+  const allRows = [...parsed.rows, ...parsed.vbtRows];
+  const unmatched = [...new Set(allRows.filter((row) => !rosterByName.has(row.athleteNameNorm)).map((row) => row.athleteName))].sort();
+  const matchedRows = allRows.filter((row) => rosterByName.has(row.athleteNameNorm)).length;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const uploadResult = await client.query<{ id: string }>(`
-      INSERT INTO ovr_sprint_uploads
-        (organization_id, school_code, file_name, file_hash, row_count, matched_rows, unmatched_rows, unmatched_athletes, min_date, max_date, uploaded_by_user_id)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11) RETURNING id
-    `, [input.organizationId, schoolCode, input.fileName.slice(0, 180), fileHash, parsed.rows.length, matchedRows, parsed.rows.length - matchedRows, JSON.stringify(unmatched), parsed.preview.minDate, parsed.preview.maxDate, input.uploadedByUserId]);
+    const uploadResult = existing.rows[0]
+      ? { rows: [{ id: String(existing.rows[0].id) }] }
+      : await client.query<{ id: string }>(`
+          INSERT INTO ovr_sprint_uploads
+            (organization_id, school_code, file_name, file_hash, row_count, matched_rows, unmatched_rows, unmatched_athletes,
+             min_date, max_date, uploaded_by_user_id, sprint_row_count, vbt_row_count)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13) RETURNING id
+        `, [input.organizationId, schoolCode, input.fileName.slice(0, 180), fileHash, allRows.length, matchedRows,
+          allRows.length - matchedRows, JSON.stringify(unmatched), parsed.preview.minDate, parsed.preview.maxDate,
+          input.uploadedByUserId, parsed.rows.length, parsed.vbtRows.length]);
     const uploadId = Number(uploadResult.rows[0].id);
     let insertedRows = 0;
     for (const row of parsed.rows) {
@@ -297,17 +401,76 @@ export async function importOvrSprintExport(input: {
         row.splitTime, row.distanceYards, row.speedMph, row.note, uploadId]);
       if (inserted.rows[0]?.inserted) insertedRows += 1;
     }
-    await client.query('UPDATE ovr_sprint_uploads SET inserted_rows=$1 WHERE id=$2', [insertedRows, uploadId]);
+    let insertedVbtRows = 0;
+    for (const row of parsed.vbtRows) {
+      const inserted = await client.query(`
+        INSERT INTO ovr_vbt_results
+          (organization_id, school_code, result_key, athlete_name, athlete_name_norm, player_id, sport, position, groups_text,
+           result_date, exercise, set_number, load_lbs, target_type, target_min, target_max, rep_number,
+           avg_velocity_mps, peak_velocity_mps, avg_power_watts, peak_power_watts, rom_inches, duration_seconds,
+           tpv_seconds, ea_index, note, source_upload_id)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
+        ON CONFLICT (organization_id, school_code, result_key) DO UPDATE SET
+          player_id=COALESCE(EXCLUDED.player_id,ovr_vbt_results.player_id), sport=EXCLUDED.sport, position=EXCLUDED.position,
+          groups_text=EXCLUDED.groups_text, exercise=EXCLUDED.exercise, load_lbs=EXCLUDED.load_lbs, target_type=EXCLUDED.target_type,
+          target_min=EXCLUDED.target_min, target_max=EXCLUDED.target_max, avg_velocity_mps=EXCLUDED.avg_velocity_mps,
+          peak_velocity_mps=EXCLUDED.peak_velocity_mps, avg_power_watts=EXCLUDED.avg_power_watts,
+          peak_power_watts=EXCLUDED.peak_power_watts, rom_inches=EXCLUDED.rom_inches,
+          duration_seconds=EXCLUDED.duration_seconds, tpv_seconds=EXCLUDED.tpv_seconds, ea_index=EXCLUDED.ea_index,
+          note=EXCLUDED.note, updated_at=NOW()
+        RETURNING (xmax = 0) AS inserted
+      `, [input.organizationId, schoolCode, row.resultKey, row.athleteName, row.athleteNameNorm,
+        rosterByName.get(row.athleteNameNorm) ?? null, row.sport, row.position, row.groups, row.date, row.exercise,
+        row.setNumber, row.loadLbs, row.targetType, row.targetMin, row.targetMax, row.repNumber, row.avgVelocity,
+        row.peakVelocity, row.avgPower, row.peakPower, row.romInches, row.durationSeconds, row.tpvSeconds,
+        row.eaIndex, row.note, uploadId]);
+      if (inserted.rows[0]?.inserted) insertedVbtRows += 1;
+    }
+    await client.query(`UPDATE ovr_sprint_uploads SET
+      row_count=$1, matched_rows=$2, unmatched_rows=$3, unmatched_athletes=$4::jsonb,
+      min_date=$5, max_date=$6, sprint_row_count=$7, vbt_row_count=$8,
+      inserted_rows=inserted_rows+$9, vbt_inserted_rows=vbt_inserted_rows+$10
+      WHERE id=$11`, [allRows.length, matchedRows, allRows.length - matchedRows, JSON.stringify(unmatched),
+      parsed.preview.minDate, parsed.preview.maxDate, parsed.rows.length, parsed.vbtRows.length,
+      insertedRows, insertedVbtRows, uploadId]);
     await client.query('COMMIT');
     const upload = (await listOvrSprintUploads(input.organizationId, schoolCode)).find((entry) => entry.id === uploadId);
     if (!upload) throw new Error('The completed import could not be loaded.');
-    return { upload, duplicateFile: false };
+    const newRows = insertedRows + insertedVbtRows;
+    return { upload, duplicateFile: newRows === 0, newRows };
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
   } finally {
     client.release();
   }
+}
+
+export async function listOvrVbtResults(input: {
+  organizationId: number; schoolCode: string; playerId?: number | null;
+}): Promise<OvrVbtResult[]> {
+  await ensureSchema();
+  const params: unknown[] = [input.organizationId, clean(input.schoolCode).toUpperCase()];
+  const playerFilter = input.playerId ? `AND r.player_id=$${params.push(input.playerId)}` : 'AND r.player_id IS NOT NULL';
+  const result = await getDbPool().query(`
+    SELECT r.id, r.player_id, COALESCE(p.full_name,r.athlete_name) AS athlete_name, r.sport, r.position, r.groups_text,
+      r.result_date::text, r.exercise, r.set_number, r.load_lbs, r.target_type, r.target_min, r.target_max,
+      r.rep_number, r.avg_velocity_mps, r.peak_velocity_mps, r.avg_power_watts, r.peak_power_watts,
+      r.rom_inches, r.duration_seconds, r.tpv_seconds, r.ea_index, r.note
+    FROM ovr_vbt_results r LEFT JOIN players p ON p.id=r.player_id AND p.organization_id=r.organization_id
+    WHERE r.organization_id=$1 AND r.school_code=$2 ${playerFilter}
+    ORDER BY r.result_date DESC, athlete_name, r.exercise, r.set_number, r.rep_number
+  `, params);
+  const nullable = (value: unknown) => value === null || value === undefined ? null : Number(value);
+  return result.rows.map((row) => ({
+    id: Number(row.id), playerId: row.player_id === null ? null : Number(row.player_id), athleteName: row.athlete_name,
+    sport: row.sport ?? '', position: row.position ?? '', groups: row.groups_text ?? '', date: row.result_date,
+    exercise: row.exercise, setNumber: Number(row.set_number), loadLbs: nullable(row.load_lbs), targetType: row.target_type ?? '',
+    targetMin: nullable(row.target_min), targetMax: nullable(row.target_max), repNumber: Number(row.rep_number),
+    avgVelocity: nullable(row.avg_velocity_mps), peakVelocity: nullable(row.peak_velocity_mps),
+    avgPower: nullable(row.avg_power_watts), peakPower: nullable(row.peak_power_watts), romInches: nullable(row.rom_inches),
+    durationSeconds: nullable(row.duration_seconds), tpvSeconds: nullable(row.tpv_seconds), eaIndex: nullable(row.ea_index), note: row.note ?? '',
+  }));
 }
 
 export async function listOvrSprintResults(input: {
@@ -349,6 +512,12 @@ export async function listOvrSprintUploads(organizationId: number, schoolCodeVal
 }
 
 export type OvrSprintGroup = { id: number; name: string };
+
+export type OvrVbtMetricKey = 'peakPower' | 'avgPower' | 'tpvSeconds' | 'peakVelocity' | 'avgVelocity';
+export type OvrVbtPercentileResult = {
+  groupLabel: string;
+  stats: Record<OvrVbtMetricKey, OvrSprintPercentileStat>;
+};
 
 export type OvrSprintPercentileStat = { value: number | null; percentile: number | null; sampleSize: number };
 export type OvrSprintPercentileResult = {
@@ -401,6 +570,86 @@ export async function listOvrSprintGroups(input: { organizationId: number; schoo
   return result.rows.map((row) => ({ id: Number(row.id), name: row.name }));
 }
 
+export async function listOvrVbtGroups(input: { organizationId: number; schoolCode: string }): Promise<OvrSprintGroup[]> {
+  await ensureSchema();
+  const result = await getDbPool().query<{ id: number; name: string }>(`
+    SELECT DISTINCT g.id, g.name
+    FROM player_groups g
+    JOIN player_group_members m ON m.group_id = g.id
+    JOIN ovr_vbt_results r ON r.player_id = m.player_id AND r.organization_id = g.organization_id AND r.school_code = $2
+    WHERE g.organization_id = $1
+    ORDER BY g.name ASC
+  `, [input.organizationId, clean(input.schoolCode).toUpperCase()]);
+  return result.rows.map((row) => ({ id: Number(row.id), name: row.name }));
+}
+
+export async function getOvrVbtPercentiles(input: {
+  organizationId: number;
+  schoolCode: string;
+  playerId: number;
+  exercise: string;
+  loadLbs?: number | null;
+  groupId: number | 'all';
+}): Promise<OvrVbtPercentileResult> {
+  await ensureSchema();
+  const params: unknown[] = [input.organizationId, clean(input.schoolCode).toUpperCase(), clean(input.exercise)];
+  let cohortJoin = '';
+  if (input.groupId !== 'all') {
+    params.push(input.groupId);
+    cohortJoin = `JOIN player_group_members gm ON gm.player_id=r.player_id AND gm.group_id=$${params.length}`;
+  }
+  let loadFilter = '';
+  if (typeof input.loadLbs === 'number' && Number.isFinite(input.loadLbs)) {
+    params.push(input.loadLbs);
+    loadFilter = ` AND r.load_lbs=$${params.length}`;
+  }
+  const result = await getDbPool().query<{
+    player_id: number; result_date: string; peak_power: number | null; avg_power: number | null;
+    tpv_seconds: number | null; peak_velocity: number | null; avg_velocity: number | null;
+  }>(`
+    SELECT r.player_id, r.result_date::text AS result_date, r.peak_power_watts AS peak_power,
+      r.avg_power_watts AS avg_power, r.tpv_seconds, r.peak_velocity_mps AS peak_velocity,
+      r.avg_velocity_mps AS avg_velocity
+    FROM ovr_vbt_results r
+    ${cohortJoin}
+    WHERE r.organization_id=$1 AND r.school_code=$2 AND r.exercise=$3
+      AND r.player_id IS NOT NULL${loadFilter}
+  `, params);
+  const byPlayer = new Map<number, typeof result.rows>();
+  for (const row of result.rows) {
+    const playerId = Number(row.player_id);
+    byPlayer.set(playerId, [...(byPlayer.get(playerId) ?? []), row]);
+  }
+  const metricColumns: Record<OvrVbtMetricKey, keyof (typeof result.rows)[number]> = {
+    peakPower: 'peak_power', avgPower: 'avg_power', tpvSeconds: 'tpv_seconds',
+    peakVelocity: 'peak_velocity', avgVelocity: 'avg_velocity',
+  };
+  const summaries = new Map<number, Record<OvrVbtMetricKey, number | null>>();
+  for (const [playerId, rows] of byPlayer) {
+    const latestDate = rows.map((row) => row.result_date).sort().at(-1);
+    const latestRows = rows.filter((row) => row.result_date === latestDate);
+    const summary = {} as Record<OvrVbtMetricKey, number | null>;
+    for (const [metric, column] of Object.entries(metricColumns) as Array<[OvrVbtMetricKey, keyof (typeof result.rows)[number]]>) {
+      const values = latestRows.flatMap((row) => row[column] === null ? [] : [Number(row[column])]).filter(Number.isFinite);
+      summary[metric] = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+    }
+    summaries.set(playerId, summary);
+  }
+  let groupLabel = 'All PCU athletes';
+  if (input.groupId !== 'all') {
+    const group = await getDbPool().query<{ name: string }>('SELECT name FROM player_groups WHERE id=$1 AND organization_id=$2', [input.groupId, input.organizationId]);
+    groupLabel = group.rows[0]?.name ?? 'Group';
+  }
+  const target = summaries.get(input.playerId);
+  const stats = {} as Record<OvrVbtMetricKey, OvrSprintPercentileStat>;
+  for (const metric of Object.keys(metricColumns) as OvrVbtMetricKey[]) {
+    const value = target?.[metric] ?? null;
+    const ranked = ovrPercentile(value, [...summaries.values()].map((summary) => summary[metric]), metric === 'tpvSeconds');
+    stats[metric] = { value, ...ranked };
+  }
+  return { groupLabel, stats };
+}
+
 type PlayerSummary = { latest: number | null; previous: number | null; change: number | null; average: number | null; peak: number | null };
 
 /** Same reduction as Force Plate's summarize() (app/api/player/force-plate-percentiles/route.ts):
@@ -409,13 +658,19 @@ type PlayerSummary = { latest: number | null; previous: number | null; change: n
  * qualifying row in range. */
 function summarizePlayer(rows: Array<{ date: string; sprintNumber: number; value: number }>, lowerIsBetter: boolean): PlayerSummary {
   const sorted = [...rows].sort((a, b) => a.date.localeCompare(b.date) || a.sprintNumber - b.sprintNumber);
-  const latestRow = sorted.at(-1) ?? null;
-  const previousRow = sorted.length > 1 ? sorted[sorted.length - 2] : null;
+  const byDate = new Map<string, number[]>();
+  for (const row of sorted) byDate.set(row.date, [...(byDate.get(row.date) ?? []), row.value]);
+  const sessions = [...byDate.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, sessionValues]) => ({
+    date,
+    value: sessionValues.reduce((sum, value) => sum + value, 0) / sessionValues.length,
+  }));
+  const latestSession = sessions.at(-1) ?? null;
+  const previousSession = sessions.length > 1 ? sessions[sessions.length - 2] : null;
   const values = sorted.map((row) => row.value);
   return {
-    latest: latestRow?.value ?? null,
-    previous: previousRow?.value ?? null,
-    change: latestRow && previousRow ? latestRow.value - previousRow.value : null,
+    latest: latestSession?.value ?? null,
+    previous: previousSession?.value ?? null,
+    change: latestSession && previousSession ? latestSession.value - previousSession.value : null,
     average: values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null,
     peak: values.length ? (lowerIsBetter ? Math.min(...values) : Math.max(...values)) : null,
   };

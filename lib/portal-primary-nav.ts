@@ -46,8 +46,9 @@ export function buildStaffMoreNavItems(input: {
       : []),
     ...(input.canAccessActivityTracker ? [{ href: '/portal/admin/activity', label: 'Activity Tracker' }] : []),
     ...(input.canAccessEmailAutomations ? [{ href: '/portal/admin/email-templates', label: 'Email Automations' }] : []),
-    ...(!isTrial ? [{ href: '/portal/force-plates', label: 'Force Plate Data' }] : []),
-    ...(school === 'PCU' ? [{ href: '/portal/ovr-sprint', label: 'OVR Sprint' }] : []),
+    ...(!isTrial
+      ? [{ href: '/portal/force-plates', label: school === 'PCU' ? 'VALD and OVR Data' : 'Force Plate Data' }]
+      : []),
     ...(!isTrial && isStaff ? [{ href: '/portal/admin/csv-uploads', label: 'CSV Uploads' }] : []),
   ];
 }

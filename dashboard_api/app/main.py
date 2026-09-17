@@ -15,7 +15,7 @@ import urllib.parse
 import urllib.request
 from functools import lru_cache
 import threading
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Sequence, Set
 
 from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -3367,6 +3367,7 @@ ALL_TABLE_COLUMNS: List[str] = [
     "Chase%",
     "GoZoneSw%",
     "IZswing%",
+    "Z-Whiff%",
     "EdgeSwing%",
     "PosSD%",
     "Swings",
@@ -3487,6 +3488,16 @@ def _is_fastball_or_sinker_pitch_type(value: Any) -> bool:
 
 def _fps_swing_count_from_rollup_row(row: Dict[str, Any]) -> int:
     return int(row.get("fps_swing_num") or row.get("fps_num") or 0)
+
+
+def _zone_decision_counts_from_rollup_rows(rows: Sequence[Dict[str, Any]]) -> tuple[Optional[int], Optional[int]]:
+    """Return forward-populated in-zone swing/whiff counts without treating legacy rows as zero."""
+    if not rows or any(row.get("iz_swing_n") is None or row.get("iz_whiff_n") is None for row in rows):
+        return None, None
+    return (
+        sum(int(row.get("iz_swing_n") or 0) for row in rows),
+        sum(int(row.get("iz_whiff_n") or 0) for row in rows),
+    )
 
 
 def _pitch_type_family(value: Any) -> str:
@@ -4250,6 +4261,7 @@ def _build_dynamic_table(
         gozone_sw_num = 0
         iz_den = 0
         iz_sw_num = 0
+        iz_whiff_num = 0
         edge_den = 0
         edge_sw_num = 0
         possd_points = 0
@@ -4290,6 +4302,11 @@ def _build_dynamic_table(
         for r in grp:
             pitch_call = _effective_pitch_call_for_metrics(r)
             is_swing = pitch_call in swing_calls
+            is_whiff = (
+                pitch_call == "StrikeSwinging"
+                or _pro_pitch_call_from_description(_pro_norm_token(r.get("description"))) == "StrikeSwinging"
+                or _is_foul_tip_row(r)
+            )
             if is_swing:
                 swings_count += 1
             if pitch_call == "StrikeCalled":
@@ -4331,6 +4348,8 @@ def _build_dynamic_table(
                 iz_den += 1
                 if is_swing:
                     iz_sw_num += 1
+                    if is_whiff:
+                        iz_whiff_num += 1
             if is_edge:
                 edge_den += 1
                 if is_swing:
@@ -5099,6 +5118,7 @@ def _build_dynamic_table(
             "Chase%": f"{round(100.0 * chase_num / chase_den, 1)}%" if chase_den else None,
             "GoZoneSw%": f"{round(100.0 * gozone_sw_num / gozone_den, 1)}%" if gozone_den else None,
             "IZswing%": f"{round(100.0 * iz_sw_num / iz_den, 1)}%" if iz_den else None,
+            "Z-Whiff%": f"{round(100.0 * iz_whiff_num / iz_sw_num, 1)}%" if iz_sw_num else None,
             "EdgeSwing%": f"{round(100.0 * edge_sw_num / edge_den, 1)}%" if edge_den else None,
             "PosSD%": f"{round(100.0 * possd_points / n, 1)}%" if n else None,
             "Early%": f"{round(100.0 * early_n / fps_opp, 1)}%" if fps_opp else None,
@@ -5338,7 +5358,7 @@ def _build_dynamic_table(
         "Pitch Usage": _pitch_usage_mode_columns(split_col_name),
         "Raw Data": [split_col_name, "IP", "P", "BF", "P/IP", "P/BF", "H", "1B", "2B", "3B", "HR", "XBH", "Barrels", "BB", "HBP", "K", "Whiffs"],
         "Batted Ball Data": [split_col_name, "PA", "AB", "AVG", "SLG", "OBP", "OPS", "wOBA", "xWOBA", "ISO", "xISO", "BABIP", "FPS(FB)%", "FPS(OS)%", "Barrel%"],
-        "Swing Decisions": [split_col_name, "Swing%", "FPS%", "FPS(FB)%", "FPS(OS)%", "Called-S%", "Take%", "Chase%", "GoZoneSw%", "IZswing%", "EdgeSwing%", "PosSD%"],
+        "Swing Decisions": [split_col_name, "Swing%", "FPS%", "FPS(FB)%", "FPS(OS)%", "Called-S%", "Take%", "Chase%", "GoZoneSw%", "IZswing%", "Z-Whiff%", "EdgeSwing%", "PosSD%"],
         "Custom": [split_col_name],
     }
     if mode_key == "Custom":
@@ -7210,6 +7230,8 @@ def _ensure_performance_indexes() -> None:
           hb_sum DOUBLE PRECISION NOT NULL,
           hb_n INT NOT NULL,
           in_zone_n INT NOT NULL,
+          iz_swing_n INT NULL,
+          iz_whiff_n INT NULL,
           loc_n INT NOT NULL,
           strike_n INT NOT NULL,
           swing_n INT NOT NULL,
@@ -7307,6 +7329,8 @@ def _ensure_performance_indexes() -> None:
           hb_sum DOUBLE PRECISION NOT NULL,
           hb_n INT NOT NULL,
           in_zone_n INT NOT NULL,
+          iz_swing_n INT NULL,
+          iz_whiff_n INT NULL,
           loc_n INT NOT NULL,
           strike_n INT NOT NULL,
           swing_n INT NOT NULL,
@@ -7444,6 +7468,24 @@ def _ensure_performance_indexes() -> None:
         """,
         """
         ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS comp_n INT NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS iz_swing_n INT NULL
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS iz_whiff_n INT NULL
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league_split ADD COLUMN IF NOT EXISTS iz_swing_n INT NULL
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league_split ADD COLUMN IF NOT EXISTS iz_whiff_n INT NULL
+        """,
+        """
+        ALTER TABLE public.pitch_events_game_rollup_league ADD COLUMN IF NOT EXISTS iz_swing_n INT NULL
+        """,
+        """
+        ALTER TABLE public.pitch_events_game_rollup_league ADD COLUMN IF NOT EXISTS iz_whiff_n INT NULL
         """,
         """
         ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS fps_swing_num INT NOT NULL DEFAULT 0
@@ -7887,6 +7929,8 @@ def _ensure_performance_indexes() -> None:
           hb_sum DOUBLE PRECISION NOT NULL,
           hb_n INT NOT NULL,
           in_zone_n INT NOT NULL,
+          iz_swing_n INT NULL,
+          iz_whiff_n INT NULL,
           loc_n INT NOT NULL,
           strike_n INT NOT NULL,
           swing_n INT NOT NULL,
@@ -7965,6 +8009,24 @@ def _ensure_performance_indexes() -> None:
         """,
         """
         ALTER TABLE public.pro_pitch_events_daily_rollup ADD COLUMN IF NOT EXISTS sf_n INT NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE public.pro_pitch_events_daily_rollup ADD COLUMN IF NOT EXISTS iz_swing_n INT NULL
+        """,
+        """
+        ALTER TABLE public.pro_pitch_events_daily_rollup ADD COLUMN IF NOT EXISTS iz_whiff_n INT NULL
+        """,
+        """
+        ALTER TABLE IF EXISTS public.pro_pitch_events_daily_rollup_split ADD COLUMN IF NOT EXISTS iz_swing_n INT NULL
+        """,
+        """
+        ALTER TABLE IF EXISTS public.pro_pitch_events_daily_rollup_split ADD COLUMN IF NOT EXISTS iz_whiff_n INT NULL
+        """,
+        """
+        ALTER TABLE IF EXISTS public.pro_pitch_events_game_rollup ADD COLUMN IF NOT EXISTS iz_swing_n INT NULL
+        """,
+        """
+        ALTER TABLE IF EXISTS public.pro_pitch_events_game_rollup ADD COLUMN IF NOT EXISTS iz_whiff_n INT NULL
         """,
         """
         ALTER TABLE public.pro_pitch_events_daily_rollup ADD COLUMN IF NOT EXISTS rel_height_sum DOUBLE PRECISION NOT NULL DEFAULT 0.0
@@ -8163,6 +8225,8 @@ def _ensure_performance_indexes() -> None:
           hb_sum DOUBLE PRECISION NOT NULL,
           hb_n INT NOT NULL,
           in_zone_n INT NOT NULL,
+          iz_swing_n INT NULL,
+          iz_whiff_n INT NULL,
           loc_n INT NOT NULL,
           strike_n INT NOT NULL,
           swing_n INT NOT NULL,
@@ -8190,6 +8254,12 @@ def _ensure_performance_indexes() -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_pro_pitcher_lb_level_date
         ON public.pro_pitcher_leaderboard_daily_rollup (school_code, level_bucket, session_date)
+        """,
+        """
+        ALTER TABLE public.pro_pitcher_leaderboard_daily_rollup ADD COLUMN IF NOT EXISTS iz_swing_n INT NULL
+        """,
+        """
+        ALTER TABLE public.pro_pitcher_leaderboard_daily_rollup ADD COLUMN IF NOT EXISTS iz_whiff_n INT NULL
         """,
         """
         CREATE INDEX IF NOT EXISTS idx_pro_pitcher_lb_pitcher_date
@@ -8604,6 +8674,30 @@ def _refresh_league_daily_rollup(
             cur.execute(
                 """
                 SELECT
+                  EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'pitch_events_daily_rollup_league'
+                      AND column_name = 'iz_whiff_n'
+                  ) AS base_ready,
+                  EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'pitch_events_daily_rollup_league_split'
+                      AND column_name = 'iz_whiff_n'
+                  ) AS split_ready,
+                  EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'pitch_events_game_rollup_league'
+                      AND column_name = 'iz_whiff_n'
+                  ) AS game_ready
+                """
+            )
+            zone_columns_ready = cur.fetchone() or {}
+            if not all(bool(zone_columns_ready.get(key)) for key in ("base_ready", "split_ready", "game_ready")):
+                _ensure_performance_indexes()
+                return
+            cur.execute(
+                """
+                SELECT
                   MIN(session_date)::date AS min_date,
                   MAX(session_date)::date AS max_date
                 FROM public.pitch_events
@@ -8857,7 +8951,7 @@ def _refresh_league_daily_rollup(
                   school_code, session_date, level_bucket, pitch_type, pitcher_name, batter_name, catcher_name, pitcher_norm, batter_norm, catcher_norm,
                   pitcher_team_norm, batter_team_norm_eff, pitcherthrows_norm, batterside_norm, session_bucket,
                   pitches, velo_sum, velo_n, velo_max, spin_sum, spin_n, ivb_sum, ivb_n, hb_sum, hb_n,
-                  in_zone_n, loc_n, strike_n, swing_n, whiff_n, csw_n, comp_n, fps_num, fps_swing_num, fps_den,
+                  in_zone_n, iz_swing_n, iz_whiff_n, loc_n, strike_n, swing_n, whiff_n, csw_n, comp_n, fps_num, fps_swing_num, fps_den,
                   early_num, early_den, ahead_num, ahead_den, oneone_num, oneone_den,
                   ea_num, ea_den, in_play_n, gb_n, fb_n, pu_n, barrel_n, ev_sum, ev_n, la_sum, la_n,
                   rv_sum, pv_sum,
@@ -8899,6 +8993,18 @@ def _refresh_league_daily_rollup(
                            AND b.plate_height BETWEEN %(zone_bottom)s::double precision AND %(zone_top)s::double precision
                       THEN 1 ELSE 0 END
                   )::int AS in_zone_n,
+                  SUM(
+                    CASE WHEN b.plate_side BETWEEN %(zone_left)s::double precision AND %(zone_right)s::double precision
+                           AND b.plate_height BETWEEN %(zone_bottom)s::double precision AND %(zone_top)s::double precision
+                           AND b.pitch_call IN ('StrikeSwinging','FoulBall','FoulBallFieldable','FoulBallNotFieldable','InPlay')
+                      THEN 1 ELSE 0 END
+                  )::int AS iz_swing_n,
+                  SUM(
+                    CASE WHEN b.plate_side BETWEEN %(zone_left)s::double precision AND %(zone_right)s::double precision
+                           AND b.plate_height BETWEEN %(zone_bottom)s::double precision AND %(zone_top)s::double precision
+                           AND b.pitch_call = 'StrikeSwinging'
+                      THEN 1 ELSE 0 END
+                  )::int AS iz_whiff_n,
                   SUM(CASE WHEN b.plate_side IS NOT NULL AND b.plate_height IS NOT NULL THEN 1 ELSE 0 END)::int AS loc_n,
                   SUM(
                     CASE WHEN b.pitch_call IN ('StrikeCalled','StrikeSwinging','FoulBall','FoulBallFieldable','FoulBallNotFieldable','InPlay','RapsodoStrike') THEN 1 ELSE 0 END
@@ -9411,7 +9517,7 @@ def _refresh_league_daily_rollup(
                   pitcher_name, batter_name, catcher_name, pitcher_norm, batter_norm, catcher_norm,
                   pitcher_team_norm, batter_team_norm_eff, pitcherthrows_norm, batterside_norm, session_bucket,
                   pitches, velo_sum, velo_n, velo_max, spin_sum, spin_n, ivb_sum, ivb_n, hb_sum, hb_n,
-                  in_zone_n, loc_n, strike_n, swing_n, whiff_n, csw_n, comp_n, fps_num, fps_swing_num, fps_den,
+                  in_zone_n, iz_swing_n, iz_whiff_n, loc_n, strike_n, swing_n, whiff_n, csw_n, comp_n, fps_num, fps_swing_num, fps_den,
                   early_num, early_den, ahead_num, ahead_den, oneone_num, oneone_den,
                   ea_num, ea_den, in_play_n, gb_n, fb_n, pu_n, barrel_n, ev_sum, ev_n, la_sum, la_n,
                   rv_sum, pv_sum,
@@ -9455,6 +9561,18 @@ def _refresh_league_daily_rollup(
                            AND e.plate_height BETWEEN %(zone_bottom)s::double precision AND %(zone_top)s::double precision
                       THEN 1 ELSE 0 END
                   )::int AS in_zone_n,
+                  SUM(
+                    CASE WHEN e.plate_side BETWEEN %(zone_left)s::double precision AND %(zone_right)s::double precision
+                           AND e.plate_height BETWEEN %(zone_bottom)s::double precision AND %(zone_top)s::double precision
+                           AND e.pitch_call IN ('StrikeSwinging','FoulBall','FoulBallFieldable','FoulBallNotFieldable','InPlay')
+                      THEN 1 ELSE 0 END
+                  )::int AS iz_swing_n,
+                  SUM(
+                    CASE WHEN e.plate_side BETWEEN %(zone_left)s::double precision AND %(zone_right)s::double precision
+                           AND e.plate_height BETWEEN %(zone_bottom)s::double precision AND %(zone_top)s::double precision
+                           AND e.pitch_call = 'StrikeSwinging'
+                      THEN 1 ELSE 0 END
+                  )::int AS iz_whiff_n,
                   SUM(CASE WHEN e.plate_side IS NOT NULL AND e.plate_height IS NOT NULL THEN 1 ELSE 0 END)::int AS loc_n,
                   SUM(CASE WHEN e.pitch_call IN ('StrikeCalled','StrikeSwinging','FoulBall','FoulBallFieldable','FoulBallNotFieldable','InPlay','RapsodoStrike') THEN 1 ELSE 0 END)::int AS strike_n,
                   SUM(CASE WHEN e.pitch_call IN ('StrikeSwinging','FoulBall','FoulBallFieldable','FoulBallNotFieldable','InPlay') THEN 1 ELSE 0 END)::int AS swing_n,
@@ -9606,7 +9724,7 @@ def _refresh_league_daily_rollup(
                       pitcher_name, batter_name, catcher_name, pitcher_norm, batter_norm, catcher_norm,
                       pitcher_team_norm, batter_team_norm_eff, pitcherthrows_norm, batterside_norm, session_bucket,
                       pitches, velo_sum, velo_n, velo_max, spin_sum, spin_n, ivb_sum, ivb_n, hb_sum, hb_n,
-                      in_zone_n, loc_n, strike_n, swing_n, whiff_n, csw_n, comp_n, fps_num, fps_swing_num, fps_den,
+                      in_zone_n, iz_swing_n, iz_whiff_n, loc_n, strike_n, swing_n, whiff_n, csw_n, comp_n, fps_num, fps_swing_num, fps_den,
                       early_num, early_den, ahead_num, ahead_den, oneone_num, oneone_den,
                       ea_num, ea_den, in_play_n, gb_n, fb_n, pu_n, barrel_n, ev_sum, ev_n, la_sum, la_n,
                       rv_sum, pv_sum,
@@ -9628,7 +9746,8 @@ def _refresh_league_daily_rollup(
                       SUM(spin_sum)::double precision, SUM(spin_n)::int,
                       SUM(ivb_sum)::double precision, SUM(ivb_n)::int,
                       SUM(hb_sum)::double precision, SUM(hb_n)::int,
-                      SUM(in_zone_n)::int, SUM(loc_n)::int, SUM(strike_n)::int, SUM(swing_n)::int,
+                      SUM(in_zone_n)::int, SUM(iz_swing_n)::int, SUM(iz_whiff_n)::int,
+                      SUM(loc_n)::int, SUM(strike_n)::int, SUM(swing_n)::int,
                       SUM(whiff_n)::int, SUM(csw_n)::int, SUM(comp_n)::int,
                       SUM(fps_num)::int, SUM(fps_swing_num)::int, SUM(fps_den)::int,
                       SUM(early_num)::int, SUM(early_den)::int,
@@ -10672,6 +10791,8 @@ def _try_pitching_overview_daily_rollup(
         "HAA",
         "Strike%",
         "Swing%",
+        "IZswing%",
+        "Z-Whiff%",
         "FPS%",
         "FPS(FB)%",
         "FPS(OS)%",
@@ -10979,6 +11100,8 @@ def _try_pitching_overview_daily_rollup(
                       SUM(hb_sum)::double precision AS hb_sum,
                       SUM(hb_n)::int AS hb_n,
                       SUM(in_zone_n)::int AS in_zone_n,
+                      CASE WHEN COUNT(iz_swing_n) = COUNT(*) THEN SUM(iz_swing_n)::int END AS iz_swing_n,
+                      CASE WHEN COUNT(iz_whiff_n) = COUNT(*) THEN SUM(iz_whiff_n)::int END AS iz_whiff_n,
                       SUM(loc_n)::int AS loc_n,
                       SUM(strike_n)::int AS strike_n,
                       SUM(swing_n)::int AS swing_n,
@@ -11204,6 +11327,8 @@ def _try_pitching_overview_daily_rollup(
                   SUM(pitches) FILTER (WHERE pitcherthrows_norm = 'Left')::int AS left_n,
                   SUM(pitches) FILTER (WHERE pitcherthrows_norm = 'Right')::int AS right_n,
                   SUM(in_zone_n)::int AS in_zone_n,
+                  CASE WHEN COUNT(iz_swing_n) = COUNT(*) THEN SUM(iz_swing_n)::int END AS iz_swing_n,
+                  CASE WHEN COUNT(iz_whiff_n) = COUNT(*) THEN SUM(iz_whiff_n)::int END AS iz_whiff_n,
                   SUM(loc_n)::int AS loc_n,
                   SUM(strike_n)::int AS strike_n,
                   SUM(swing_n)::int AS swing_n,
@@ -11657,6 +11782,7 @@ def _try_pitching_overview_daily_rollup(
             timings["command_batch_ms"] = round((time.perf_counter() - command_batch_started) * 1000.0, 1)
 
     def _build_common_row(label: str, rows_for_split: List[Dict[str, Any]]) -> Dict[str, Any]:
+        iz_swing_n, iz_whiff_n = _zone_decision_counts_from_rollup_rows(rows_for_split)
         pitches = int(sum(int(r.get("pitches") or 0) for r in rows_for_split))
         velo_n = int(sum(int(r.get("velo_n") or 0) for r in rows_for_split))
         ivb_n = int(sum(int(r.get("ivb_n") or 0) for r in rows_for_split))
@@ -11953,6 +12079,8 @@ def _try_pitching_overview_daily_rollup(
             "Comp%": _safe_pct(sum(int(r.get("comp_n") or 0) for r in rows_for_split), loc_n),
             "Strike%": _safe_pct(sum(int(r.get("strike_n") or 0) for r in rows_for_split), pitches),
             "Swing%": _safe_pct(swing_n, pitches),
+            "IZswing%": _safe_pct(iz_swing_n, sum(int(r.get("in_zone_n") or 0) for r in rows_for_split)) if iz_swing_n is not None else None,
+            "Z-Whiff%": _safe_pct(iz_whiff_n, iz_swing_n) if iz_swing_n is not None and iz_whiff_n is not None else None,
             "Whiff%": _safe_pct(sum(int(r.get("whiff_n") or 0) for r in rows_for_split), swing_n),
             "SwStrk%": _safe_pct(sum(int(r.get("whiff_n") or 0) for r in rows_for_split), pitches),
             "K%": _safe_pct(k_n, bf_n),
@@ -12326,6 +12454,11 @@ def _refresh_pro_daily_rollup(
                       AND column_name = 'official_er_w_sum'
                   ) AS base_has_official,
                   EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'pro_pitch_events_daily_rollup'
+                      AND column_name = 'iz_whiff_n'
+                  ) AS base_has_zone_decisions,
+                  EXISTS (
                     SELECT 1
                     FROM information_schema.columns
                     WHERE table_schema = 'public'
@@ -12333,16 +12466,33 @@ def _refresh_pro_daily_rollup(
                       AND column_name = 'official_er_w_sum'
                   ) AS split_has_official,
                   EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'pro_pitch_events_daily_rollup_split'
+                      AND column_name = 'iz_whiff_n'
+                  ) AS split_has_zone_decisions,
+                  EXISTS (
                     SELECT 1
                     FROM information_schema.columns
                     WHERE table_schema = 'public'
                       AND table_name = 'pro_pitch_events_game_rollup'
                       AND column_name = 'official_er_w_sum'
-                  ) AS game_has_official
+                  ) AS game_has_official,
+                  EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'pro_pitch_events_game_rollup'
+                      AND column_name = 'iz_whiff_n'
+                  ) AS game_has_zone_decisions
                 """
             )
             col_ready = cur.fetchone() or {}
-            if not (bool(col_ready.get("base_has_official")) and bool(col_ready.get("split_has_official")) and bool(col_ready.get("game_has_official"))):
+            if not (
+                bool(col_ready.get("base_has_official"))
+                and bool(col_ready.get("split_has_official"))
+                and bool(col_ready.get("game_has_official"))
+                and bool(col_ready.get("base_has_zone_decisions"))
+                and bool(col_ready.get("split_has_zone_decisions"))
+                and bool(col_ready.get("game_has_zone_decisions"))
+            ):
                 _ensure_performance_indexes()
                 return
             cur.execute(
@@ -12618,7 +12768,7 @@ def _refresh_pro_daily_rollup(
                   pitcher_team_code, batter_team_code, pitcherthrows_norm, batterside_norm,
                   balls_num, strikes_num,
                   pitches, velo_sum, velo_n, velo_max, spin_sum, spin_n, ivb_sum, ivb_n, hb_sum, hb_n,
-                  in_zone_n, loc_n, strike_n, swing_n, whiff_n, csw_n, comp_n, fps_num, fps_swing_num, fps_den,
+                  in_zone_n, iz_swing_n, iz_whiff_n, loc_n, strike_n, swing_n, whiff_n, csw_n, comp_n, fps_num, fps_swing_num, fps_den,
                   chase_num, chase_den,
                   early_num, early_den, ahead_num, ahead_den, oneone_num, oneone_den, ea_num, ea_den,
                   in_play_n, gb_n, fb_n, pu_n, barrel_n, ev_sum, ev_n, la_sum, la_n,
@@ -12652,6 +12802,17 @@ def _refresh_pro_daily_rollup(
                         WHEN zone_num BETWEEN 1 AND 9 THEN 1
                         ELSE 0
                       END)::int AS in_zone_n,
+                  SUM(CASE
+                        WHEN zone_num BETWEEN 1 AND 9
+                         AND (pitch_call_norm IN ('strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','swinging_pitchout','missed_bunt','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay','in_play')
+                              OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%')
+                        THEN 1 ELSE 0
+                      END)::int AS iz_swing_n,
+                  SUM(CASE
+                        WHEN zone_num BETWEEN 1 AND 9
+                         AND pitch_call_norm IN ('strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','swinging_pitchout','missed_bunt','foul_tip','foultip')
+                        THEN 1 ELSE 0
+                      END)::int AS iz_whiff_n,
                   SUM(CASE WHEN plate_side IS NOT NULL AND plate_height IS NOT NULL THEN 1 ELSE 0 END)::int AS loc_n,
                   SUM(CASE WHEN pitch_call_norm IN ('strikecalled','strike_called','called_strike','strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','swinging_pitchout','missed_bunt','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay','in_play')
                              OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%'
@@ -13200,7 +13361,7 @@ def _refresh_pro_daily_rollup(
                   pitcher_team_code, batter_team_code, pitcherthrows_norm, batterside_norm,
                   balls_num, strikes_num,
                   pitches, velo_sum, velo_n, velo_max, spin_sum, spin_n, ivb_sum, ivb_n, hb_sum, hb_n,
-                  in_zone_n, loc_n, strike_n, swing_n, whiff_n, csw_n, comp_n, fps_num, fps_swing_num, fps_den,
+                  in_zone_n, iz_swing_n, iz_whiff_n, loc_n, strike_n, swing_n, whiff_n, csw_n, comp_n, fps_num, fps_swing_num, fps_den,
                   chase_num, chase_den,
                   early_num, early_den, ahead_num, ahead_den, oneone_num, oneone_den, ea_num, ea_den,
                   in_play_n, gb_n, fb_n, pu_n, barrel_n, ev_sum, ev_n, la_sum, la_n,
@@ -13234,6 +13395,17 @@ def _refresh_pro_daily_rollup(
                   COUNT(hb)::int AS hb_n,
                   SUM(CASE WHEN zone_num BETWEEN 1 AND 9 THEN 1
                            ELSE 0 END)::int AS in_zone_n,
+                  SUM(CASE
+                        WHEN zone_num BETWEEN 1 AND 9
+                         AND (pitch_call_norm IN ('strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','swinging_pitchout','missed_bunt','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay','in_play')
+                              OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%')
+                        THEN 1 ELSE 0
+                      END)::int AS iz_swing_n,
+                  SUM(CASE
+                        WHEN zone_num BETWEEN 1 AND 9
+                         AND pitch_call_norm IN ('strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','swinging_pitchout','missed_bunt','foul_tip','foultip')
+                        THEN 1 ELSE 0
+                      END)::int AS iz_whiff_n,
                   SUM(CASE WHEN plate_side IS NOT NULL AND plate_height IS NOT NULL THEN 1 ELSE 0 END)::int AS loc_n,
                   SUM(CASE WHEN pitch_call_norm IN ('strikecalled','strike_called','called_strike','strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','swinging_pitchout','missed_bunt','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay','in_play')
                              OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%' THEN 1 ELSE 0 END)::int AS strike_n,
@@ -13418,7 +13590,7 @@ def _refresh_pro_daily_rollup(
                   school_code, session_date, level_bucket, pitcher_name, pitcher_norm,
                   pitcher_team_code, pitcherthrows_norm, batterside_norm,
                   pitches, velo_sum, velo_n, velo_max, ivb_sum, ivb_n, hb_sum, hb_n,
-                  in_zone_n, loc_n, strike_n, swing_n, whiff_n, comp_n,
+                  in_zone_n, iz_swing_n, iz_whiff_n, loc_n, strike_n, swing_n, whiff_n, comp_n,
                   fps_num, fps_swing_num, fps_den, ea_num, ea_den,
                   bf_n, k_n, bb_n, hbp_n, single_n, double_n, triple_n, hr_n
                 )
@@ -13440,6 +13612,8 @@ def _refresh_pro_daily_rollup(
                   SUM(hb_sum)::double precision AS hb_sum,
                   SUM(hb_n)::int AS hb_n,
                   SUM(in_zone_n)::int AS in_zone_n,
+                  CASE WHEN COUNT(iz_swing_n) = COUNT(*) THEN SUM(iz_swing_n)::int END AS iz_swing_n,
+                  CASE WHEN COUNT(iz_whiff_n) = COUNT(*) THEN SUM(iz_whiff_n)::int END AS iz_whiff_n,
                   SUM(loc_n)::int AS loc_n,
                   SUM(strike_n)::int AS strike_n,
                   SUM(swing_n)::int AS swing_n,
@@ -13730,6 +13904,8 @@ def _try_pro_pitching_overview_rollup(
         "HAA",
         "Strike%",
         "Swing%",
+        "IZswing%",
+        "Z-Whiff%",
         "FPS%",
         "FPS(FB)%",
         "FPS(OS)%",
@@ -13957,6 +14133,8 @@ def _try_pro_pitching_overview_rollup(
                       SUM(hb_sum)::double precision AS hb_sum,
                       SUM(hb_n)::int AS hb_n,
                       SUM(in_zone_n)::int AS in_zone_n,
+                      CASE WHEN COUNT(iz_swing_n) = COUNT(*) THEN SUM(iz_swing_n)::int END AS iz_swing_n,
+                      CASE WHEN COUNT(iz_whiff_n) = COUNT(*) THEN SUM(iz_whiff_n)::int END AS iz_whiff_n,
                       SUM(loc_n)::int AS loc_n,
                       SUM(strike_n)::int AS strike_n,
                       SUM(swing_n)::int AS swing_n,
@@ -14123,6 +14301,8 @@ def _try_pro_pitching_overview_rollup(
                   SUM(pitches) FILTER (WHERE pitcherthrows_norm = 'Left')::int AS left_n,
                   SUM(pitches) FILTER (WHERE pitcherthrows_norm = 'Right')::int AS right_n,
                   SUM(in_zone_n)::int AS in_zone_n,
+                  CASE WHEN COUNT(iz_swing_n) = COUNT(*) THEN SUM(iz_swing_n)::int END AS iz_swing_n,
+                  CASE WHEN COUNT(iz_whiff_n) = COUNT(*) THEN SUM(iz_whiff_n)::int END AS iz_whiff_n,
                   SUM(loc_n)::int AS loc_n,
                   SUM(strike_n)::int AS strike_n,
                   SUM(swing_n)::int AS swing_n,
@@ -14660,6 +14840,7 @@ def _try_pro_pitching_overview_rollup(
         official_totals_by_split = {}
 
     def _build_common_row(label: str, rows_for_split: List[Dict[str, Any]]) -> Dict[str, Any]:
+        iz_swing_n, iz_whiff_n = _zone_decision_counts_from_rollup_rows(rows_for_split)
         pitches = int(sum(int(r.get("pitches") or 0) for r in rows_for_split))
         velo_n = int(sum(int(r.get("velo_n") or 0) for r in rows_for_split))
         spin_n = int(sum(int(r.get("spin_n") or 0) for r in rows_for_split))
@@ -14943,6 +15124,8 @@ def _try_pro_pitching_overview_rollup(
             "Comp%": _safe_pct(sum(int(r.get("comp_n") or 0) for r in rows_for_split), loc_n),
             "Strike%": _safe_pct(sum(int(r.get("strike_n") or 0) for r in rows_for_split), pitches),
             "Swing%": _safe_pct(swing_n, pitches),
+            "IZswing%": _safe_pct(iz_swing_n, sum(int(r.get("in_zone_n") or 0) for r in rows_for_split)) if iz_swing_n is not None else None,
+            "Z-Whiff%": _safe_pct(iz_whiff_n, iz_swing_n) if iz_swing_n is not None and iz_whiff_n is not None else None,
             "Whiff%": _safe_pct(sum(int(r.get("whiff_n") or 0) for r in rows_for_split), swing_n),
             "SwStrk%": _safe_pct(sum(int(r.get("whiff_n") or 0) for r in rows_for_split), pitches),
             "Chase%": _safe_pct(sum(int(r.get("chase_num") or 0) for r in rows_for_split), sum(int(r.get("chase_den") or 0) for r in rows_for_split)),
@@ -15248,10 +15431,9 @@ def _try_pro_hitting_overview_rollup(
         return None
     if venue_filter:
         return None
-    # Swing Decisions requires row-level pitch context (for example GoZoneSw%,
-    # IZswing%, EdgeSwing%, PosSD%) that is not fully represented in PRO rollups.
+    # Some Swing Decisions metrics still require row-level pitch context.
     # Route that mode to the full overview path for parity with league/school.
-    if mode_raw not in {"Results", "Batted Ball Data"}:
+    if mode_raw not in {"Results", "Batted Ball Data", "Custom"}:
         return None
     if selected_zone_locations or selected_pitch_results or selected_after_count_filters or selected_bip_results or selected_in_zone:
         return None
@@ -15267,6 +15449,8 @@ def _try_pro_hitting_overview_rollup(
         "K%",
         "BB%",
         "Swing%",
+        "IZswing%",
+        "Z-Whiff%",
         "Whiff%",
         "CSW%",
         "FPS%",
@@ -15371,6 +15555,8 @@ def _try_pro_hitting_overview_rollup(
                   {fps_swing_sum_select},
                   SUM(fps_den)::int AS fps_den,
                   SUM(in_zone_n)::int AS in_zone_n,
+                  CASE WHEN COUNT(iz_swing_n) = COUNT(*) THEN SUM(iz_swing_n)::int END AS iz_swing_n,
+                  CASE WHEN COUNT(iz_whiff_n) = COUNT(*) THEN SUM(iz_whiff_n)::int END AS iz_whiff_n,
                   SUM(loc_n)::int AS loc_n,
                   SUM(in_play_n)::int AS in_play_n,
                   SUM(gb_n)::int AS gb_n,
@@ -15452,6 +15638,7 @@ def _try_pro_hitting_overview_rollup(
         else (lambda kv: (-sum(int(r.get("pitches") or 0) for r in kv[1]), str(kv[0])))
     )
     for split_value, rows_for_split in sorted(grouped_by_split.items(), key=split_sort_key):
+        iz_swing_n, iz_whiff_n = _zone_decision_counts_from_rollup_rows(rows_for_split)
         pitches = int(sum(int(r.get("pitches") or 0) for r in rows_for_split))
         bf = int(sum(int(r.get("bf_n") or 0) for r in rows_for_split))
         bb = int(sum(int(r.get("bb_n") or 0) for r in rows_for_split))
@@ -15515,6 +15702,8 @@ def _try_pro_hitting_overview_rollup(
                 "K%": _safe_pct(k, bf),
                 "BB%": _safe_pct(bb, bf),
                 "Swing%": _safe_pct(sum(int(r.get("swing_n") or 0) for r in rows_for_split), pitches),
+                "IZswing%": _safe_pct(iz_swing_n, sum(int(r.get("in_zone_n") or 0) for r in rows_for_split)) if iz_swing_n is not None else None,
+                "Z-Whiff%": _safe_pct(iz_whiff_n, iz_swing_n) if iz_swing_n is not None and iz_whiff_n is not None else None,
                 "Whiff%": _safe_pct(sum(int(r.get("whiff_n") or 0) for r in rows_for_split), sum(int(r.get("swing_n") or 0) for r in rows_for_split)),
                 "CSW%": _safe_pct(sum(int(r.get("csw_n") or 0) for r in rows_for_split), pitches),
                 "FPS%": _safe_pct(sum(int(r.get("fps_num") or 0) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
@@ -15532,6 +15721,7 @@ def _try_pro_hitting_overview_rollup(
     split_col_name = split_by if split_by else "Pitch Types"
     if table_rows:
         rows_for_split = grouped_rows
+        iz_swing_n, iz_whiff_n = _zone_decision_counts_from_rollup_rows(rows_for_split)
         pitches = int(sum(int(r.get("pitches") or 0) for r in rows_for_split))
         bf = int(sum(int(r.get("bf_n") or 0) for r in rows_for_split))
         bb = int(sum(int(r.get("bb_n") or 0) for r in rows_for_split))
@@ -15594,6 +15784,8 @@ def _try_pro_hitting_overview_rollup(
             "K%": _safe_pct(k, bf),
             "BB%": _safe_pct(bb, bf),
             "Swing%": _safe_pct(sum(int(r.get("swing_n") or 0) for r in rows_for_split), pitches),
+            "IZswing%": _safe_pct(iz_swing_n, sum(int(r.get("in_zone_n") or 0) for r in rows_for_split)) if iz_swing_n is not None else None,
+            "Z-Whiff%": _safe_pct(iz_whiff_n, iz_swing_n) if iz_swing_n is not None and iz_whiff_n is not None else None,
             "Whiff%": _safe_pct(sum(int(r.get("whiff_n") or 0) for r in rows_for_split), sum(int(r.get("swing_n") or 0) for r in rows_for_split)),
             "CSW%": _safe_pct(sum(int(r.get("csw_n") or 0) for r in rows_for_split), pitches),
             "FPS%": _safe_pct(sum(int(r.get("fps_num") or 0) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
@@ -15704,6 +15896,8 @@ def _try_league_hitting_overview_rollup(
         "xISO",
         "BABIP",
         "Swing%",
+        "IZswing%",
+        "Z-Whiff%",
         "FPS%",
         "FPS(FB)%",
         "FPS(OS)%",
@@ -15824,6 +16018,8 @@ def _try_league_hitting_overview_rollup(
                   {fps_swing_sum_select},
                   SUM(fps_den)::int AS fps_den,
                   SUM(in_zone_n)::int AS in_zone_n,
+                  CASE WHEN COUNT(iz_swing_n) = COUNT(*) THEN SUM(iz_swing_n)::int END AS iz_swing_n,
+                  CASE WHEN COUNT(iz_whiff_n) = COUNT(*) THEN SUM(iz_whiff_n)::int END AS iz_whiff_n,
                   SUM(loc_n)::int AS loc_n,
                   SUM(in_play_n)::int AS in_play_n,
                   SUM(gb_n)::int AS gb_n,
@@ -15909,6 +16105,7 @@ def _try_league_hitting_overview_rollup(
         else (lambda kv: (-sum(int(r.get("pitches") or 0) for r in kv[1]), str(kv[0])))
     )
     for split_value, rows_for_split in sorted(grouped_by_split.items(), key=split_sort_key):
+        iz_swing_n, iz_whiff_n = _zone_decision_counts_from_rollup_rows(rows_for_split)
         pitches = int(sum(int(r.get("pitches") or 0) for r in rows_for_split))
         pa = int(sum(int(r.get("bf_n") or 0) for r in rows_for_split))
         bb = int(sum(int(r.get("bb_n") or 0) for r in rows_for_split))
@@ -15990,6 +16187,8 @@ def _try_league_hitting_overview_rollup(
                 "xISO": xiso,
                 "BABIP": round(babip, 3) if babip is not None else None,
                 "Swing%": _safe_pct(sum(int(r.get("swing_n") or 0) for r in rows_for_split), pitches),
+                "IZswing%": _safe_pct(iz_swing_n, sum(int(r.get("in_zone_n") or 0) for r in rows_for_split)) if iz_swing_n is not None else None,
+                "Z-Whiff%": _safe_pct(iz_whiff_n, iz_swing_n) if iz_swing_n is not None and iz_whiff_n is not None else None,
                 "FPS%": _safe_pct(sum(int(r.get("fps_num") or 0) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
                 "FPS(FB)%": _safe_pct(fps_fb_num, fps_fb_den),
                 "FPS(OS)%": _safe_pct(fps_os_num, fps_os_den),
@@ -16009,6 +16208,7 @@ def _try_league_hitting_overview_rollup(
     split_col_name = split_by if split_by else "Pitch Types"
     if table_rows:
         rows_for_split = grouped_rows
+        iz_swing_n, iz_whiff_n = _zone_decision_counts_from_rollup_rows(rows_for_split)
         pitches = int(sum(int(r.get("pitches") or 0) for r in rows_for_split))
         pa = int(sum(int(r.get("bf_n") or 0) for r in rows_for_split))
         bb = int(sum(int(r.get("bb_n") or 0) for r in rows_for_split))
@@ -16089,6 +16289,8 @@ def _try_league_hitting_overview_rollup(
             "xISO": xiso,
             "BABIP": round(babip, 3) if babip is not None else None,
             "Swing%": _safe_pct(sum(int(r.get("swing_n") or 0) for r in rows_for_split), pitches),
+            "IZswing%": _safe_pct(iz_swing_n, sum(int(r.get("in_zone_n") or 0) for r in rows_for_split)) if iz_swing_n is not None else None,
+            "Z-Whiff%": _safe_pct(iz_whiff_n, iz_swing_n) if iz_swing_n is not None and iz_whiff_n is not None else None,
             "FPS%": _safe_pct(sum(int(r.get("fps_num") or 0) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
             "FPS(FB)%": _safe_pct(fps_fb_num, fps_fb_den),
             "FPS(OS)%": _safe_pct(fps_os_num, fps_os_den),
@@ -22883,7 +23085,6 @@ def pitching_overview(
     selected_count_filters = _parse_csv_list(count_filter)
     selected_after_count_filters = _parse_csv_list(after_count_filter)
     selected_custom_columns = _parse_csv_list(custom_columns)
-
     parsed_velo_min = _parse_optional_float(velo_min, "velo_min")
     parsed_velo_max = _parse_optional_float(velo_max, "velo_max")
     parsed_ivb_min = _parse_optional_float(ivb_min, "ivb_min")
@@ -26881,7 +27082,6 @@ def hitting_overview(
         "Take%",
         "Chase%",
         "GoZoneSw%",
-        "IZswing%",
         "EdgeSwing%",
         "PosSD%",
         "Swings",

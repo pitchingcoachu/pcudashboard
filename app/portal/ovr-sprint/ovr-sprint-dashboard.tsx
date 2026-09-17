@@ -4,9 +4,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { OvrSprintImportPreview, OvrSprintResult, OvrSprintUpload } from '../../../lib/ovr-sprint';
 import styles from './ovr-sprint.module.css';
 
-type Props = { initialResults: OvrSprintResult[]; initialUploads: OvrSprintUpload[]; canImport: boolean };
+type Props = {
+  initialResults: OvrSprintResult[];
+  initialUploads: OvrSprintUpload[];
+  canImport: boolean;
+  viewMode?: 'sprint' | 'imports';
+};
 type Metric = 'totalTime' | 'splitTime' | 'speedMph';
-type PercentileMetric = 'totalTime' | 'speedMph';
 type Tab = 'athlete' | 'leaderboard' | 'imports';
 type DisplayMode = 'individual' | 'dailyAverage' | 'dailyBest';
 type ChartPoint = { id: string; date: string; exercise: string; value: number; count: number };
@@ -37,6 +41,7 @@ const METRICS: Array<{ key: Metric; label: string; shortLabel: string; unit: str
   { key: 'splitTime', label: 'Split Time', shortLabel: 'Split', unit: 's', lowerIsBetter: true },
   { key: 'speedMph', label: 'Speed', shortLabel: 'Speed', unit: 'mph', lowerIsBetter: false },
 ];
+const SPRINT_PANEL_EXERCISES = ['10yd Sprint', '40yd Sprint', '60yd Sprint'] as const;
 
 function metricValue(row: OvrSprintResult, metric: Metric): number | null {
   const value = row[metric];
@@ -236,17 +241,17 @@ function SprintChart({ points, metric, mode, athlete, reduceLabel }: { points: C
   );
 }
 
-export default function OvrSprintDashboard({ initialResults, initialUploads, canImport }: Props) {
+export default function OvrSprintDashboard({ initialResults, initialUploads, canImport, viewMode = 'sprint' }: Props) {
   const [results, setResults] = useState(initialResults);
   const [uploads, setUploads] = useState(initialUploads);
-  const [tab, setTab] = useState<Tab>('athlete');
+  const [tab, setTab] = useState<Tab>(viewMode === 'imports' ? 'imports' : 'athlete');
   const [athlete, setAthlete] = useState(initialResults[0]?.athleteName ?? '');
   const [athleteSearch, setAthleteSearch] = useState('');
   const [athletePickerOpen, setAthletePickerOpen] = useState(false);
   const [exercise, setExercise] = useState(initialResults[0]?.exercise ?? 'All');
   const [distance, setDistance] = useState('All');
   const [metric, setMetric] = useState<Metric>('totalTime');
-  const [displayMode, setDisplayMode] = useState<DisplayMode>('individual');
+  const [displayMode, setDisplayMode] = useState<DisplayMode>('dailyAverage');
   const [chartMode, setChartMode] = useState<'line' | 'bar'>('bar');
   const [leaderSort, setLeaderSort] = useState<{ key: string; direction: 'asc' | 'desc' }>({ key: 'Player', direction: 'asc' });
   const [leaderDisplay, setLeaderDisplay] = useState<'values' | 'percentiles' | 'both'>('values');
@@ -262,7 +267,6 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
 
   const [percentileGroupId, setPercentileGroupId] = useState<'all' | number>('all');
   const [percentileGroups, setPercentileGroups] = useState<PercentileGroup[]>([]);
-  const [panelValueType, setPanelValueType] = useState<'average' | 'best'>('average');
   const [panelPercentiles, setPanelPercentiles] = useState<Record<string, PercentileEntry>>({});
   const [percentileLoading, setPercentileLoading] = useState(false);
   const [percentileError, setPercentileError] = useState('');
@@ -279,23 +283,19 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
   ), [athlete, distance, endDate, exercise, metric, results, startDate, tab]);
   const chronological = useMemo(() => [...filtered].sort((a, b) => a.date.localeCompare(b.date) || a.sprintNumber - b.sprintNumber || a.splitNumber - b.splitNumber), [filtered]);
   const metricConfig = METRICS.find((entry) => entry.key === metric) ?? METRICS[0];
-  // Percentile panels only support Total Time / Speed (no split-time percentile);
-  // Split Time falls back to Total Time so the panels still track the top filter.
-  const percentileMetric: PercentileMetric = metric === 'speedMph' ? 'speedMph' : 'totalTime';
   const chartPoints = useMemo(() => chartPointsForRows(chronological, metric, displayMode, metricConfig.lowerIsBetter), [chronological, metric, displayMode, metricConfig.lowerIsBetter]);
   const athletePlayerId = useMemo(() => results.find((row) => row.athleteName === athlete)?.playerId ?? null, [results, athlete]);
 
-  // Panels always cover every exercise the athlete has run (within the date
-  // range), independent of the chart's `exercise` filter -- switching that
-  // filter changes which line the chart draws, not which panels are shown.
+  // The three sprint cards are intentionally independent of the chart filters.
+  // The chart follows the controls above; the cards consistently summarize
+  // the athlete's 10-, 40-, and 60-yard sprint performance.
   const athleteRows = useMemo(() => results.filter((row) =>
     row.athleteName === athlete
     && (!startDate || row.date >= startDate) && (!endDate || row.date <= endDate)
   ), [results, athlete, startDate, endDate]);
-  const athleteExercises = useMemo(() => [...new Set(athleteRows.map((row) => row.exercise))].sort(), [athleteRows]);
 
   useEffect(() => {
-    if (tab !== 'athlete' || !athletePlayerId || !athleteExercises.length) {
+    if (tab !== 'athlete' || !athletePlayerId) {
       setPanelPercentiles({});
       setPercentileError('');
       return;
@@ -305,10 +305,10 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
     setPercentileError('');
     const params = new URLSearchParams({
       playerId: String(athletePlayerId),
-      metric: percentileMetric,
+      metric: 'totalTime',
       groupId: String(percentileGroupId),
     });
-    for (const entry of athleteExercises) params.append('exercise', entry);
+    for (const entry of SPRINT_PANEL_EXERCISES) params.append('exercise', entry);
     // Deliberately no startDate/endDate: percentiles always compare against
     // each athlete's and the cohort's full history, not the currently
     // filtered date range -- a narrow filter shouldn't shrink the sample.
@@ -323,33 +323,19 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
       .catch(() => { if (active) { setPercentileError('Unable to load percentile data.'); setPanelPercentiles({}); } })
       .finally(() => { if (active) setPercentileLoading(false); });
     return () => { active = false; };
-  }, [tab, athletePlayerId, athleteExercises, percentileMetric, percentileGroupId]);
+  }, [tab, athletePlayerId, percentileGroupId]);
 
-  // One panel per exercise. "Average" shows the athlete's average time/speed
-  // on their most recent session date, percentiled against the matching
-  // "latest" stat from panelPercentiles (the route's `latest` is the single
-  // most recent row, one of the trials being averaged here). "Best" shows
-  // the athlete's best time/speed anywhere in the current date range,
-  // percentiled against the matching "peak" stat (same best-in-range
-  // aggregate the server already computes). Either way, the trend arrow
-  // compares the latest session's value (session average, or session best,
-  // per panelValueType) against the athlete's own equivalent average over
-  // the prior 30 days, excluding the latest session itself.
+  // Each card shows the average time from the latest session and compares it
+  // with the average of the athlete's prior sessions in the preceding 30 days.
   const exercisePanels = useMemo(() => {
-    const panelMetricConfig = METRICS.find((entry) => entry.key === percentileMetric) ?? METRICS[0];
-    return athleteExercises.map((exerciseName) => {
+    return SPRINT_PANEL_EXERCISES.map((exerciseName) => {
       const rows = athleteRows.filter((row) => row.exercise === exerciseName);
-      const values = (percentileMetric === 'totalTime' ? uniqueTrials(rows) : rows)
-        .flatMap((row) => { const value = metricValue(row, percentileMetric); return value === null ? [] : [{ date: row.date, value }]; })
+      const values = uniqueTrials(rows)
+        .map((row) => ({ date: row.date, value: row.totalTime }))
         .sort((a, b) => a.date.localeCompare(b.date));
       const latestDate = values.at(-1)?.date ?? null;
       const latestDateValues = latestDate ? values.filter((entry) => entry.date === latestDate).map((entry) => entry.value) : [];
-      const latestSessionValue = panelValueType === 'best'
-        ? (latestDateValues.length ? (panelMetricConfig.lowerIsBetter ? Math.min(...latestDateValues) : Math.max(...latestDateValues)) : null)
-        : average(latestDateValues);
-      const headline = panelValueType === 'best'
-        ? (values.length ? (panelMetricConfig.lowerIsBetter ? Math.min(...values.map((entry) => entry.value)) : Math.max(...values.map((entry) => entry.value))) : null)
-        : latestSessionValue;
+      const headline = average(latestDateValues);
 
       let trendPct: number | null = null;
       if (latestDate) {
@@ -361,33 +347,25 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
           if (entry.date >= latestDate || entry.date < cutoffStr) continue;
           baselineDates.set(entry.date, [...(baselineDates.get(entry.date) ?? []), entry.value]);
         }
-        const baselinePerDay = [...baselineDates.values()].map((dayValues) => panelValueType === 'best'
-          ? (panelMetricConfig.lowerIsBetter ? Math.min(...dayValues) : Math.max(...dayValues))
-          : average(dayValues) ?? 0);
+        const baselinePerDay = [...baselineDates.values()].map((dayValues) => average(dayValues) ?? 0);
         const baselineAvg = average(baselinePerDay);
-        if (latestSessionValue !== null && baselineAvg !== null && baselineAvg !== 0) {
-          trendPct = ((latestSessionValue - baselineAvg) / Math.abs(baselineAvg)) * 100;
+        if (headline !== null && baselineAvg !== null && baselineAvg !== 0) {
+          trendPct = ((headline - baselineAvg) / Math.abs(baselineAvg)) * 100;
         }
       }
-      const favorable = trendPct !== null ? (panelMetricConfig.lowerIsBetter ? trendPct < 0 : trendPct > 0) : null;
+      const favorable = trendPct === null || Math.abs(trendPct) < .0001 ? null : trendPct < 0;
       const percentileEntry = panelPercentiles[exerciseName];
-      const percentileStat = panelValueType === 'best' ? percentileEntry?.stats.peak : percentileEntry?.stats.latest;
       return {
         exercise: exerciseName,
-        unit: panelMetricConfig.unit,
+        unit: 's',
         headline,
-        headlinePercentile: percentileStat ?? null,
+        headlinePercentile: percentileEntry?.stats.latest ?? null,
         trendPct,
         favorable,
+        latestDate,
       };
     });
-  }, [athleteExercises, athleteRows, percentileMetric, panelValueType, panelPercentiles]);
-  const values = chartPoints.map((point) => point.value);
-  const latest = values.at(-1) ?? null;
-  const previous = values.at(-2) ?? null;
-  const change = latest !== null && previous !== null ? latest - previous : null;
-  const best = values.length ? (metricConfig.lowerIsBetter ? Math.min(...values) : Math.max(...values)) : null;
-  const rangeAverage = average(values);
+  }, [athleteRows, panelPercentiles]);
 
   const leaderboard = useMemo(() => {
     const grouped = new Map<string, Map<string, { times: number[]; speeds: number[] }>>();
@@ -478,7 +456,8 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
       if (action === 'preview') setPreview(payload.preview);
       else {
         const upload = payload.upload as OvrSprintUpload;
-        setNotice(payload.duplicateFile ? 'This exact export was already imported. No duplicates were added.' : `${upload.insertedRows} new result${upload.insertedRows === 1 ? '' : 's'} imported. ${upload.unmatchedRows ? `${upload.unmatchedRows} unmatched row${upload.unmatchedRows === 1 ? '' : 's'} held for review.` : 'Every athlete matched the PCU roster.'}`);
+        const newRows = Number(payload.newRows ?? upload.insertedRows);
+        setNotice(payload.duplicateFile ? 'This exact export was already imported. No duplicates were added.' : `${newRows} new Sprint/VBT result${newRows === 1 ? '' : 's'} imported. ${upload.unmatchedRows ? `${upload.unmatchedRows} unmatched row${upload.unmatchedRows === 1 ? '' : 's'} held for review.` : 'Every athlete matched the PCU roster.'}`);
         setPreview(null); setSelectedFile(null); if (fileRef.current) fileRef.current.value = '';
         await refreshData();
       }
@@ -489,12 +468,11 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
   return (
     <div className={styles.workspace}>
       <section className={styles.commandBar}>
-        <div><p className={styles.eyebrow}>SPEED LAB</p><h3>{tab === 'athlete' ? athlete || 'Athlete analysis' : tab === 'leaderboard' ? 'Organization leaderboard' : 'Data intake'}</h3><p>{results.length.toLocaleString()} roster-matched results · {athletes.length} athletes</p></div>
-        <div className={styles.tabs} role="tablist">
+        <div><p className={styles.eyebrow}>SPEED LAB</p><h3>{tab === 'athlete' ? athlete || 'Athlete analysis' : tab === 'leaderboard' ? 'Organization leaderboard' : 'Data intake'}</h3></div>
+        {viewMode === 'sprint' ? <div className={styles.tabs} role="tablist">
           <button className={tab === 'athlete' ? styles.active : ''} onClick={() => setTab('athlete')}>Athlete</button>
           <button className={tab === 'leaderboard' ? styles.active : ''} onClick={() => setTab('leaderboard')}>Leaderboard</button>
-          {canImport ? <button className={tab === 'imports' ? styles.active : ''} onClick={() => setTab('imports')}>Imports</button> : null}
-        </div>
+        </div> : null}
       </section>
 
       {tab !== 'imports' ? <>
@@ -516,16 +494,9 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
         {tab === 'athlete' ? <>
           <section className={styles.chartPanel}>
             <div className={styles.sectionHeading}>
-              <div><p className={styles.eyebrow}>02 · PERFORMANCE SIGNAL</p><h3>Exercise summary</h3><p>{panelValueType === 'best' ? 'Best time in range' : 'Average time for the latest date'}, this date range · vs. last session's 30-day trend</p></div>
+              <div><p className={styles.eyebrow}>02 · PERFORMANCE SIGNAL</p><h3>Sprint test summary</h3><p>Latest session average · percentile and prior 30-day trend</p></div>
               <div className={styles.panelControls}>
                 <label><span>Compare against</span><select value={String(percentileGroupId)} onChange={(event) => setPercentileGroupId(event.target.value === 'all' ? 'all' : Number(event.target.value))}><option value="all">All PCU athletes</option>{percentileGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label>
-                <div className={styles.displayToggle}>
-                  <span>Value</span>
-                  <div className={styles.displayToggleGroup} role="group" aria-label="Panel value type">
-                    <button type="button" className={panelValueType === 'average' ? styles.active : undefined} onClick={() => setPanelValueType('average')}>Average</button>
-                    <button type="button" className={panelValueType === 'best' ? styles.active : undefined} onClick={() => setPanelValueType('best')}>Best</button>
-                  </div>
-                </div>
               </div>
             </div>
             {percentileError ? <p className={styles.error}>{percentileError}</p> : null}
@@ -539,14 +510,14 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
                       : <span className={`${styles.percentileBadge} ${styles.percentileUnavailable}`}>No rank</span>}
                   </div>
                   <strong>
-                    {panel.headline === null ? '—' : formatValue(panel.headline, percentileMetric)}
+                    {panel.headline === null ? '—' : formatValue(panel.headline, 'totalTime')}
                     {panel.headline !== null ? <small className={styles.statUnit}>{panel.unit}</small> : null}
                   </strong>
                   {panel.trendPct !== null ? (
-                    <span className={panel.favorable ? styles.good : styles.bad}>
-                      {panel.favorable ? '▲' : '▼'} {Math.abs(panel.trendPct).toFixed(1)}% vs. 30-day avg
+                    <span className={panel.favorable === null ? undefined : panel.favorable ? styles.good : styles.bad}>
+                      {panel.trendPct > 0 ? '▲' : panel.trendPct < 0 ? '▼' : '→'} {Math.abs(panel.trendPct).toFixed(1)}% vs. prior 30-day avg
                     </span>
-                  ) : <span>No 30-day baseline yet</span>}
+                  ) : <span>{panel.latestDate ? `Latest session · ${formatDate(panel.latestDate)}` : 'No qualifying session'}</span>}
                 </article>
               ))}
             </div> : <p className={styles.emptyChart}>No qualifying results for this athlete in this date range.</p>}
@@ -611,15 +582,19 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
           }
         </section> : null}
       </> : <section className={styles.importPanel}>
-        <div className={styles.sectionHeading}><div><p className={styles.eyebrow}>01 · IMPORT OVR CONNECT</p><h3>Bring sprint results into Pearl</h3><p>Upload the original OVR workbook. Pearl reads only its Sprint sheet.</p></div></div>
+        <div className={styles.sectionHeading}><div><p className={styles.eyebrow}>01 · IMPORT OVR CONNECT</p><h3>Bring OVR results into Pearl</h3><p>Upload the original OVR workbook. Pearl imports both Sprint and Velocity (VBT) sheets.</p></div></div>
         <div className={styles.dropzone}>
-          <input ref={fileRef} type="file" accept=".xlsx,.csv" onChange={(event) => { setSelectedFile(event.target.files?.[0] ?? null); setPreview(null); setNotice(''); setError(''); }} />
-          <div><strong>{selectedFile?.name ?? 'Choose an OVR export'}</strong><span>.xlsx workbook or Sprint .csv · 12 MB maximum</span></div>
+          <label className={styles.filePicker}>
+            <input ref={fileRef} type="file" accept=".xlsx,.csv" onChange={(event) => { setSelectedFile(event.target.files?.[0] ?? null); setPreview(null); setNotice(''); setError(''); }} />
+            <span className={styles.filePickerIcon} aria-hidden="true">↑</span>
+            <span><strong>{selectedFile ? 'Change file' : 'Select OVR file'}</strong><small>Browse your computer</small></span>
+          </label>
+          <div className={styles.fileDetails}><strong>{selectedFile?.name ?? 'No file selected'}</strong><span>.xlsx workbook or Sprint .csv · 12 MB maximum</span></div>
           <button disabled={!selectedFile || uploading} onClick={() => submitFile('preview')}>{uploading ? 'Reading…' : 'Preview file'}</button>
         </div>
-        {preview ? <div className={styles.previewCard}><div><p>Valid results</p><strong>{preview.validRows}</strong></div><div><p>Athletes</p><strong>{preview.athletes.length}</strong></div><div><p>Date range</p><strong>{preview.minDate ? `${formatDate(preview.minDate)} – ${formatDate(preview.maxDate ?? preview.minDate)}` : '—'}</strong></div><div><p>Tests</p><strong>{preview.exercises.length}</strong></div><button disabled={uploading} onClick={() => submitFile('import')}>Import results</button>{preview.warnings.length ? <p className={styles.warning}>{preview.warnings.join(' ')}</p> : null}</div> : null}
+        {preview ? <div className={styles.previewCard}><div><p>Sprint results</p><strong>{preview.sprintRows}</strong></div><div><p>VBT results</p><strong>{preview.vbtRows}</strong></div><div><p>Athletes</p><strong>{preview.athletes.length}</strong></div><div><p>Date range</p><strong>{preview.minDate ? `${formatDate(preview.minDate)} – ${formatDate(preview.maxDate ?? preview.minDate)}` : '—'}</strong></div><button disabled={uploading} onClick={() => submitFile('import')}>Import results</button>{preview.warnings.length ? <p className={styles.warning}>{preview.warnings.join(' ')}</p> : null}</div> : null}
         {notice ? <p className={styles.notice}>{notice}</p> : null}{error ? <p className={styles.error}>{error}</p> : null}
-        <div className={styles.importHistory}><h3>Import history</h3>{uploads.length ? uploads.map((upload) => <article key={upload.id}><div><strong>{upload.fileName}</strong><span>{new Date(upload.createdAt).toLocaleString()} · {upload.minDate ? `${formatDate(upload.minDate)} – ${formatDate(upload.maxDate ?? upload.minDate)}` : 'No dates'}</span></div><b>{upload.insertedRows} added</b><em>{upload.unmatchedRows ? `${upload.unmatchedRows} unmatched: ${upload.unmatchedAthletes.join(', ')}` : 'Roster matched'}</em></article>) : <p>No OVR Sprint exports have been imported yet.</p>}</div>
+        <div className={styles.importHistory}><h3>Import history</h3>{uploads.length ? uploads.map((upload) => <article key={upload.id}><div><strong>{upload.fileName}</strong><span>{new Date(upload.createdAt).toLocaleString()} · {upload.minDate ? `${formatDate(upload.minDate)} – ${formatDate(upload.maxDate ?? upload.minDate)}` : 'No dates'}</span></div><b>{upload.insertedRows} added</b><em>{upload.unmatchedRows ? `${upload.unmatchedRows} unmatched: ${upload.unmatchedAthletes.join(', ')}` : 'Roster matched'}</em></article>) : <p>No OVR exports have been imported yet.</p>}</div>
       </section>}
     </div>
   );

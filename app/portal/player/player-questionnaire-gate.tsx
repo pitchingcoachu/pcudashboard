@@ -121,6 +121,7 @@ export default function PlayerQuestionnaireGate({ playerId }: Props) {
                   type="range"
                   min={question.scaleMin}
                   max={question.scaleMax}
+                  step={question.scaleStep || 1}
                   value={answers[question.id] ?? String(question.scaleMin)}
                   onChange={(event) => setAnswers((previous) => ({ ...previous, [question.id]: event.target.value }))}
                 />

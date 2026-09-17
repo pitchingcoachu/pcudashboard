@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { formatTableDisplayValue } from '../../../lib/table-sort';
 import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
 import type { PlayerPlanGoalRow } from '../../../lib/training-db';
+import { chartableAssessmentFields } from '../../../lib/assessment-questionnaire-metrics';
 
 type GoalSlot = 1 | 2 | 3;
 type GoalChartState = {
@@ -36,6 +37,10 @@ type ParsedGoal = {
   hand: string;
   batterSide: string;
   sessionType: string;
+  testType: string;
+  assessmentFieldId: string;
+  questionnaireId: string;
+  questionnaireQuestionId: string;
 };
 
 type ProfilePlanGoalsPanelProps = {
@@ -114,6 +119,10 @@ function parseGoal(row: PlayerPlanGoalRow): ParsedGoal | null {
     hand: 'All',
     batterSide: 'All',
     sessionType: 'Season',
+    testType: 'All',
+    assessmentFieldId: '',
+    questionnaireId: '',
+    questionnaireQuestionId: '',
   };
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -143,6 +152,10 @@ function parseGoal(row: PlayerPlanGoalRow): ParsedGoal | null {
       hand: String(filters.hand ?? 'All') || 'All',
       batterSide: String(filters.batterSide ?? 'All') || 'All',
       sessionType: String(filters.sessionType ?? 'Season') || 'Season',
+      testType: String(filters.testType ?? 'All') || 'All',
+      assessmentFieldId: String(parsed.assessmentFieldId ?? ''),
+      questionnaireId: String(parsed.questionnaireId ?? ''),
+      questionnaireQuestionId: String(parsed.questionnaireQuestionId ?? ''),
     };
   } catch {
     return base;
@@ -154,7 +167,14 @@ function goalDomain(goal: ParsedGoal): 'pitching' | 'hitting' {
 }
 
 function isChartCapableGoal(goal: ParsedGoal): boolean {
-  return goal.category === 'Stuff' || goal.category === 'Execution' || goal.category === 'Hitting Stats';
+  return (
+    goal.category === 'Stuff' ||
+    goal.category === 'Execution' ||
+    goal.category === 'Hitting Stats' ||
+    goal.category === 'Force Plate Metrics' ||
+    goal.category === 'Assessment' ||
+    goal.category === 'Questionnaire'
+  );
 }
 
 function metricLabel(goal: ParsedGoal): string {
@@ -162,6 +182,9 @@ function metricLabel(goal: ParsedGoal): string {
     if (goal.stuffType === 'Movement') return goal.movementAxis || 'Movement';
     return goal.stuffType || 'Stuff';
   }
+  if (goal.category === 'Force Plate Metrics') return goal.executionStat || 'Metric';
+  if (goal.category === 'Assessment') return chartableAssessmentFields().find((field) => field.id === goal.assessmentFieldId)?.label || 'Assessment';
+  if (goal.category === 'Questionnaire') return 'Questionnaire';
   return goal.executionStat || 'Stat';
 }
 
@@ -173,6 +196,8 @@ function metricValue(goal: ParsedGoal, point: Record<string, unknown>): number |
     }
     return null;
   };
+  if (goal.category === 'Force Plate Metrics') return num('force_plate_value', 'value');
+  if (goal.category === 'Assessment' || goal.category === 'Questionnaire') return num('value');
   if (goal.category === 'Stuff') {
     if (goal.stuffType === 'Velocity') return num('velo', 'rel_speed');
     if (goal.stuffType === 'Movement') {
@@ -745,6 +770,45 @@ export default function ProfilePlanGoalsPanel({ playerId, playerName, goals, can
 
     Promise.allSettled(
       chartGoals.map(async (goal) => {
+        if (goal.category === 'Force Plate Metrics') {
+          const params = new URLSearchParams({ player: playerName, metrics: goal.executionStat });
+          if (goal.startDate) params.set('start_date', goal.startDate);
+          if (goal.endDate) params.set('end_date', goal.endDate);
+          if (goal.testType && goal.testType !== 'All') params.set('test_type', goal.testType);
+          const response = await fetch(`/api/dashboard/force-plates/overview?${params.toString()}`, { cache: 'no-store', signal: controller.signal });
+          const payload = (await response.json().catch(() => ({}))) as { chart_points?: Array<Record<string, unknown>>; error?: string };
+          if (!response.ok) throw new Error(payload.error ?? 'Failed to load force-plate goal data.');
+          return {
+            slotIndex: goal.slotIndex,
+            points: (payload.chart_points ?? []).map((point) => ({ ...point, force_plate_value: point.value })),
+          };
+        }
+        if (goal.category === 'Assessment') {
+          if (!playerId || !goal.assessmentFieldId) return { slotIndex: goal.slotIndex, points: [] };
+          const params = new URLSearchParams({ playerId: String(playerId), fieldId: goal.assessmentFieldId });
+          const response = await fetch(`/api/player/assessment-trend?${params.toString()}`, { cache: 'no-store', signal: controller.signal });
+          const payload = (await response.json().catch(() => ({}))) as { series?: Array<{ date: string; value: number }>; error?: string };
+          if (!response.ok) throw new Error(payload.error ?? 'Failed to load assessment goal data.');
+          return {
+            slotIndex: goal.slotIndex,
+            points: (payload.series ?? []).map((point) => ({ session_date: point.date, value: point.value })),
+          };
+        }
+        if (goal.category === 'Questionnaire') {
+          if (!playerId || !goal.questionnaireId || !goal.questionnaireQuestionId) return { slotIndex: goal.slotIndex, points: [] };
+          const params = new URLSearchParams({
+            playerId: String(playerId),
+            questionnaireId: goal.questionnaireId,
+            questionId: goal.questionnaireQuestionId,
+          });
+          const response = await fetch(`/api/player/questionnaire-trend?${params.toString()}`, { cache: 'no-store', signal: controller.signal });
+          const payload = (await response.json().catch(() => ({}))) as { series?: Array<{ date: string; value: number }>; error?: string };
+          if (!response.ok) throw new Error(payload.error ?? 'Failed to load questionnaire goal data.');
+          return {
+            slotIndex: goal.slotIndex,
+            points: (payload.series ?? []).map((point) => ({ session_date: point.date, value: point.value })),
+          };
+        }
         const domain = goalDomain(goal);
         let lastError = '';
         if (domain === 'pitching' && isIntendedTargetGoal(goal)) {
@@ -831,7 +895,7 @@ export default function ProfilePlanGoalsPanel({ playerId, playerName, goals, can
       active = false;
       controller.abort();
     };
-  }, [parsedGoals, playerName]);
+  }, [parsedGoals, playerName, playerId]);
 
   if (!parsedGoals.length) return null;
 

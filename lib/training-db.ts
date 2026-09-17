@@ -4,7 +4,13 @@ import { resolveHomeDashboardSchoolCode } from './dashboard-home-school';
 import { pitchLocationLabel } from './pitch-location';
 import { intendedTargetLocation } from './intended-target-location';
 import type { PortalActivityEventType } from './portal-activity';
-import { PLAYER_ASSESSMENT_FIELDS, PLAYER_ASSESSMENT_FIELD_IDS } from './player-assessment-fields';
+import { PLAYER_ASSESSMENT_FIELDS, PLAYER_ASSESSMENT_FIELD_IDS, type PlayerAssessmentField } from './player-assessment-fields';
+import {
+  chartableAssessmentFields,
+  isChartableQuestionnaireQuestion,
+  numericValueForAssessmentAnswer,
+  numericValueForQuestionnaireAnswer,
+} from './assessment-questionnaire-metrics';
 export { intendedTargetLocation } from './intended-target-location';
 const DEFAULT_DASHBOARD_URL = 'https://pitchingcoachu.shinyapps.io/TMdata/';
 const DASHBOARD_TRIAL_ORG_PREFIX = 'Dashboard Trial - ';
@@ -14268,6 +14274,7 @@ export type QuestionnaireQuestion = {
   options: string[];
   scaleMin: number;
   scaleMax: number;
+  scaleStep: number;
 };
 
 export type QuestionnaireAssignmentRow = {
@@ -14528,6 +14535,8 @@ function normalizeQuestionnaireQuestions(value: unknown): QuestionnaireQuestion[
       const scaleMaxRaw = Number(entry.scaleMax ?? 10);
       const scaleMin = Number.isFinite(scaleMinRaw) ? Math.max(0, Math.min(99, Math.floor(scaleMinRaw))) : 1;
       const scaleMax = Number.isFinite(scaleMaxRaw) ? Math.max(scaleMin + 1, Math.min(100, Math.floor(scaleMaxRaw))) : 10;
+      const scaleStepRaw = Number(entry.scaleStep ?? 1);
+      const scaleStep = Number.isFinite(scaleStepRaw) ? Math.max(0.1, Math.min(scaleMax - scaleMin, scaleStepRaw)) : 1;
       return {
         id: String(entry.id ?? `q-${index + 1}`).trim() || `q-${index + 1}`,
         prompt,
@@ -14535,6 +14544,7 @@ function normalizeQuestionnaireQuestions(value: unknown): QuestionnaireQuestion[
         options,
         scaleMin,
         scaleMax,
+        scaleStep,
       };
     })
     .filter((question): question is QuestionnaireQuestion => question !== null)
@@ -14948,6 +14958,100 @@ export async function listQuestionnaireResponses(input: {
     answers: row.answers_json && typeof row.answers_json === 'object' && !Array.isArray(row.answers_json) ? (row.answers_json as Record<string, string>) : {},
     submittedAt: row.submitted_at,
   }));
+}
+
+export type TrendSeriesPoint = { date: string; value: number };
+
+/** Time series of one Player Assessment field's value across a player's
+ * assessment history, for trend charts (player profile goals, Custom
+ * Reports). Only number_in/number_sec fields are chartable -- see
+ * chartableAssessmentFields(). */
+export async function listPlayerAssessmentSeries(input: {
+  organizationId: number;
+  playerId: number;
+  fieldId: string;
+}): Promise<TrendSeriesPoint[]> {
+  const field = PLAYER_ASSESSMENT_FIELDS.find((entry) => entry.id === input.fieldId);
+  if (!field || (field.type !== 'number_in' && field.type !== 'number_sec')) return [];
+  const rows = await listPlayerAssessments({ organizationId: input.organizationId, playerId: input.playerId });
+  const points: TrendSeriesPoint[] = [];
+  for (const row of rows) {
+    const value = numericValueForAssessmentAnswer(row.answers[field.id]);
+    if (value !== null) points.push({ date: row.assessmentDate, value });
+  }
+  points.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  return points;
+}
+
+/** Time series of one questionnaire question's value across a player's
+ * submitted responses to that questionnaire, for trend charts. Only
+ * number/scale/yes_no question types are chartable -- see
+ * isChartableQuestionnaireQuestion(). Uses each response's due date (the
+ * response's stable identity date) as the x-axis. */
+export async function listQuestionnaireQuestionSeries(input: {
+  organizationId: number;
+  playerId: number;
+  questionnaireId: number;
+  questionId: string;
+}): Promise<TrendSeriesPoint[]> {
+  const questionnaires = await listQuestionnairesForOrganization(input.organizationId);
+  const questionnaire = questionnaires.find((entry) => entry.id === input.questionnaireId);
+  const question = questionnaire?.questions.find((entry) => entry.id === input.questionId);
+  if (!questionnaire || !question || !isChartableQuestionnaireQuestion(question)) return [];
+  const responses = await listQuestionnaireResponses({
+    organizationId: input.organizationId,
+    questionnaireId: input.questionnaireId,
+    playerId: input.playerId,
+  });
+  const points: TrendSeriesPoint[] = [];
+  for (const response of responses) {
+    const value = numericValueForQuestionnaireAnswer(question, response.answers[question.id]);
+    if (value !== null) points.push({ date: response.dueDate, value });
+  }
+  points.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  return points;
+}
+
+export type ChartableQuestionnaireCatalogEntry = {
+  questionnaireId: number;
+  questionnaireName: string;
+  questions: Array<{ id: string; prompt: string }>;
+};
+
+function chartableQuestionsCatalog(questionnaires: QuestionnaireRow[]): ChartableQuestionnaireCatalogEntry[] {
+  const out: ChartableQuestionnaireCatalogEntry[] = [];
+  for (const questionnaire of questionnaires) {
+    const questions = questionnaire.questions
+      .filter((question) => isChartableQuestionnaireQuestion(question))
+      .map((question) => ({ id: question.id, prompt: question.prompt }));
+    if (questions.length) out.push({ questionnaireId: questionnaire.id, questionnaireName: questionnaire.name, questions });
+  }
+  return out;
+}
+
+/** Chartable questionnaire/question catalog scoped to questionnaires a
+ * specific player has actually answered -- used by the player-profile goal
+ * picker, so a coach can't pick a question with no data for this player. */
+export async function listPlayerAnsweredQuestionnaireCatalog(input: {
+  organizationId: number;
+  playerId: number;
+}): Promise<ChartableQuestionnaireCatalogEntry[]> {
+  const responses = await listQuestionnaireResponses({ organizationId: input.organizationId, playerId: input.playerId });
+  const answeredIds = new Set(responses.map((response) => response.questionnaireId));
+  const questionnaires = await listQuestionnairesForOrganization(input.organizationId);
+  return chartableQuestionsCatalog(questionnaires.filter((questionnaire) => answeredIds.has(questionnaire.id)));
+}
+
+/** Chartable questionnaire/question catalog for the whole organization,
+ * unfiltered by player -- used by Custom Reports, where a panel's player is
+ * dynamic per report row. */
+export async function listOrgQuestionnaireCatalog(input: { organizationId: number }): Promise<ChartableQuestionnaireCatalogEntry[]> {
+  const questionnaires = await listQuestionnairesForOrganization(input.organizationId);
+  return chartableQuestionsCatalog(questionnaires);
+}
+
+export function listChartableAssessmentFields(): PlayerAssessmentField[] {
+  return chartableAssessmentFields();
 }
 
 export async function listPendingQuestionnairesForPlayer(input: {

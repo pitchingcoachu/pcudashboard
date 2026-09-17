@@ -15,6 +15,7 @@ type QuestionDraft = {
   optionsText: string;
   scaleMin: number;
   scaleMax: number;
+  scaleStep: number;
 };
 
 type AssignmentDraft = {
@@ -52,6 +53,7 @@ function newQuestion(): QuestionDraft {
     optionsText: '',
     scaleMin: 1,
     scaleMax: 10,
+    scaleStep: 1,
   };
 }
 
@@ -140,6 +142,7 @@ export default function QuestionnaireBuilder({
         optionsText: question.options.join('\n'),
         scaleMin: question.scaleMin,
         scaleMax: question.scaleMax,
+        scaleStep: question.scaleStep,
       }))
     );
     const activeAssignments = questionnaire.assignments.filter((assignment) => assignment.isActive);
@@ -225,6 +228,7 @@ export default function QuestionnaireBuilder({
             .filter(Boolean),
           scaleMin: question.scaleMin,
           scaleMax: question.scaleMax,
+          scaleStep: question.scaleStep,
         })),
         assignments,
       };
@@ -360,6 +364,10 @@ export default function QuestionnaireBuilder({
                   <label className="portal-inline-filter">
                     Scale Max
                     <input type="number" value={question.scaleMax} onChange={(event) => updateQuestion(index, { scaleMax: Number(event.target.value) })} />
+                  </label>
+                  <label className="portal-inline-filter">
+                    Scale Step
+                    <input type="number" step={0.1} min={0.1} value={question.scaleStep} onChange={(event) => updateQuestion(index, { scaleStep: Number(event.target.value) })} />
                   </label>
                 </div>
               ) : null}

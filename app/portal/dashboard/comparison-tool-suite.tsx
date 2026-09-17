@@ -588,6 +588,15 @@ function subjectLabel(domain: Domain): string {
   if (domain === 'Hitting') return 'Hitter';
   return 'Catcher';
 }
+function starPoints(cx: number, cy: number, outerR: number, innerR: number): string {
+  const points: string[] = [];
+  for (let i = 0; i < 10; i += 1) {
+    const r = i % 2 === 0 ? outerR : innerR;
+    const angle = -Math.PI / 2 + (i * Math.PI) / 5;
+    points.push(`${cx + r * Math.cos(angle)},${cy + r * Math.sin(angle)}`);
+  }
+  return points.join(' ');
+}
 function resultShape(pitchCallRaw: string | null | undefined, playResultRaw: string | null | undefined): string {
   const pitchCall = String(pitchCallRaw ?? '');
   const playResult = String(playResultRaw ?? '');
@@ -1832,13 +1841,13 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
         onMouseMove: (event: { clientX: number; clientY: number }) => setLocationHover({ x: event.clientX, y: event.clientY, text: titleText, bg: fill }),
         onMouseLeave: () => setLocationHover(null),
       };
-      if (result === 'Ball') return <circle key={key} cx={x} cy={y} r={8.4} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.1} {...hoverProps} />;
-      if (result === 'Foul') return <polygon key={key} points={`${x},${y - 8.1} ${x - 7.3},${y + 6.2} ${x + 7.3},${y + 6.2}`} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.1} {...hoverProps} />;
-      if (result === 'Whiff') return <text key={key} x={x} y={y + 6.3} fontSize={19} textAnchor="middle" fill={fill} {...hoverProps}>★</text>;
-      if (result === 'In Play (Out)') return <polygon key={key} points={`${x},${y - 8.1} ${x - 7.3},${y + 6.2} ${x + 7.3},${y + 6.2}`} fill={fill} {...hoverProps} />;
-      if (result === 'In Play (Hit)' || result === 'Single' || result === 'Double' || result === 'Triple' || result === 'HomeRun') return <rect key={key} x={x - 6.9} y={y - 6.9} width={13.8} height={13.8} fill={fill} {...hoverProps} />;
-      if (result === 'Error') return <rect key={key} x={x - 6.9} y={y - 6.9} width={13.8} height={13.8} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={1.9} {...hoverProps} />;
-      return <circle key={key} cx={x} cy={y} r={8.4} fill={fill} {...hoverProps} />;
+      if (result === 'Ball') return <circle key={key} cx={x} cy={y} r={9.5} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.3} {...hoverProps} />;
+      if (result === 'Foul') return <polygon key={key} points={`${x},${y - 12.2} ${x - 11.8},${y + 9} ${x + 11.8},${y + 9}`} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.3} {...hoverProps} />;
+      if (result === 'Whiff') return <polygon key={key} points={starPoints(x, y, 13.5, 5.4)} fill={fill} {...hoverProps} />;
+      if (result === 'In Play (Out)') return <polygon key={key} points={`${x},${y - 12.2} ${x - 11.8},${y + 9} ${x + 11.8},${y + 9}`} fill={fill} {...hoverProps} />;
+      if (result === 'In Play (Hit)' || result === 'Single' || result === 'Double' || result === 'Triple' || result === 'HomeRun') return <rect key={key} x={x - 9} y={y - 9} width={18} height={18} fill={fill} {...hoverProps} />;
+      if (result === 'Error') return <rect key={key} x={x - 9} y={y - 9} width={18} height={18} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.1} {...hoverProps} />;
+      return <circle key={key} cx={x} cy={y} r={9.5} fill={fill} {...hoverProps} />;
     };
     return (
       <svg className="portal-plot-dark-grid" viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 360 }} onMouseLeave={() => setLocationHover(null)}>
