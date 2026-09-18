@@ -92,6 +92,7 @@ function schoolFromOrganizationName(name: string | null | undefined): string | n
   if (upper.includes('GUNDERSON BASEBALL')) return 'GUND';
   if (upper.includes('LONG ISLAND DUCKS')) return 'LI';
   if (upper.includes('ATLANTIC LEAGUE')) return 'INDY';
+  if (upper.includes('BOULDER CREEK')) return 'BC';
   const compact = upper.replace(/[^A-Z0-9]/g, '');
   const allowed = resolveAllowedDashboardSchoolCodes();
   for (const school of allowed) {

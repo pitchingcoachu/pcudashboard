@@ -1025,8 +1025,6 @@ export default function ForcePlatesDashboard({
   useEffect(() => {
     if (!selectedPlayer || !activeMetricIdentity.name || loadingPlayer) return;
     let cancelled = false;
-    // Deliberately no startDate/endDate -- see the fixed-panel percentile
-    // fetch below for why percentiles ignore the active date filter.
     const params = new URLSearchParams({
       player: selectedPlayer,
       metricName: activeMetricIdentity.name,
@@ -1035,6 +1033,8 @@ export default function ForcePlatesDashboard({
       testType: selectedTestType,
       mode: pointMode,
     });
+    if (startDate) params.set('startDate', startDate);
+    if (endDate) params.set('endDate', endDate);
     setPercentileLoading(true);
     setPercentileError('');
     void fetch(`/api/player/force-plate-percentiles?${params.toString()}`, { cache: 'no-store' })
@@ -1055,7 +1055,7 @@ export default function ForcePlatesDashboard({
     return () => {
       cancelled = true;
     };
-  }, [activeMetricIdentity.name, activeMetricIdentity.unit, loadingPlayer, percentileGroupId, pointMode, selectedPlayer, selectedTestType]);
+  }, [activeMetricIdentity.name, activeMetricIdentity.unit, endDate, loadingPlayer, percentileGroupId, pointMode, selectedPlayer, selectedTestType, startDate]);
 
   useEffect(() => {
     if (!selectedPlayer || loadingPlayer || legDisplay === 'selected' || displayedMetricKeys.length < 1) {
@@ -1075,6 +1075,8 @@ export default function ForcePlatesDashboard({
         testType: selectedTestType,
         mode: pointMode,
       });
+      if (startDate) params.set('startDate', startDate);
+      if (endDate) params.set('endDate', endDate);
       const response = await fetch(`/api/player/force-plate-percentiles?${params.toString()}`, { cache: 'no-store' });
       const payload = await response.json().catch(() => ({})) as PercentileResponse & { error?: string };
       return [key, response.ok ? payload.stats?.latest : undefined] as const;
@@ -1086,7 +1088,7 @@ export default function ForcePlatesDashboard({
     return () => {
       cancelled = true;
     };
-  }, [displayedMetricKeys, legDisplay, loadingPlayer, percentileGroupId, pointMode, selectedPlayer, selectedTestType]);
+  }, [displayedMetricKeys, endDate, legDisplay, loadingPlayer, percentileGroupId, pointMode, selectedPlayer, selectedTestType, startDate]);
 
   // Fixed athlete-summary panels (Jump Height, Peak Power/BM, RSI-Modified,
   // Eccentric Braking RFD/BM, Body Weight): each panel's percentile is fetched
@@ -1098,9 +1100,6 @@ export default function ForcePlatesDashboard({
     let cancelled = false;
     setPanelPercentilesLoading(true);
     Promise.all(FIXED_PANEL_METRICS.map((panelMetric) => {
-      // Deliberately no startDate/endDate: percentiles always compare against
-      // each athlete's and the cohort's full history, not the currently
-      // filtered date range -- a narrow filter shouldn't shrink the sample.
       const params = new URLSearchParams({
         player: selectedPlayer,
         metricName: panelMetric.name,
@@ -1109,6 +1108,8 @@ export default function ForcePlatesDashboard({
         testType: selectedTestType,
         mode: pointMode,
       });
+      if (startDate) params.set('startDate', startDate);
+      if (endDate) params.set('endDate', endDate);
       return fetch(`/api/player/force-plate-percentiles?${params.toString()}`, { cache: 'no-store' })
         .then((response) => response.json())
         .then((payload: PercentileResponse & { error?: string }) => [panelMetric.label, payload?.stats?.latest] as const)
@@ -1121,7 +1122,7 @@ export default function ForcePlatesDashboard({
     return () => {
       cancelled = true;
     };
-  }, [selectedPlayer, loadingPlayer, percentileGroupId, selectedTestType, pointMode]);
+  }, [selectedPlayer, loadingPlayer, percentileGroupId, selectedTestType, pointMode, startDate, endDate]);
 
   // Panel headline: average value on the athlete's most recent test date for
   // that metric (in range), converted to display units (e.g. kg -> lb for
@@ -1692,13 +1693,13 @@ export default function ForcePlatesDashboard({
           >
             Athlete Analysis
           </button>
-          <button
+          {canManageViews ? <button
             type="button"
             className={activeTab === 'leaderboard' ? styles.activeView : styles.inactiveView}
             onClick={() => setActiveTab('leaderboard')}
           >
             Leaderboard
-          </button>
+          </button> : null}
         </div>
       </section>
 
@@ -1719,7 +1720,12 @@ export default function ForcePlatesDashboard({
         <div className={styles.primaryFilters}>
           <div className={styles.playerField}>
             <span>Athlete</span>
-            <div className={styles.metricPicker}>
+            {!canManageViews ? (
+              <div className={styles.lockedPlayerField} aria-label={`Athlete: ${selectedPlayer}`}>
+                <span>{selectedPlayer || 'Your profile'}</span>
+                <small>My data</small>
+              </div>
+            ) : <div className={styles.metricPicker}>
               <button
                 type="button"
                 aria-expanded={athletePickerOpen}
@@ -1758,7 +1764,7 @@ export default function ForcePlatesDashboard({
                   </div>
                 </div>
               ) : null}
-            </div>
+            </div>}
           </div>
           <div className={styles.metricField}>
             <span>Metric</span>

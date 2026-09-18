@@ -6,7 +6,8 @@ import { canonicalFlagMetric } from '../../../../../lib/dashboard-metric-catalog
 export async function GET(request: Request) {
   const access = await requireAiAccess(request, true);
   if (!access.ok) return NextResponse.json({ error: access.error }, { status: access.status });
-  return NextResponse.json({ rules: await listFlagRules(access.organizationId) });
+  const viewer = { userId: access.userId, email: access.session.email ?? '' };
+  return NextResponse.json({ rules: await listFlagRules(access.organizationId, viewer) });
 }
 
 export async function POST(request: Request) {
@@ -28,6 +29,7 @@ export async function POST(request: Request) {
     id: Number(body.id ?? 0) || undefined,
     organizationId: access.organizationId,
     userId: access.userId,
+    userEmail: access.session.email ?? '',
     name: String(body.name).trim(),
     domain,
     metric: canonicalFlagMetric(String(body.metric)),
@@ -43,7 +45,9 @@ export async function POST(request: Request) {
     notificationsEnabled: Boolean(body.notificationsEnabled),
     cooldownHours: Math.min(720, Math.max(1, Number(body.cooldownHours ?? 24))),
     enabled: body.enabled !== false,
+    visibility: body.visibility === 'private' ? 'private' : 'organization',
   });
+  if (!id) return NextResponse.json({ error: 'Rule not found, or you do not have permission to edit it.' }, { status: 404 });
   return NextResponse.json({ id });
 }
 
@@ -52,14 +56,16 @@ export async function PATCH(request: Request) {
   if (!access.ok) return NextResponse.json({ error: access.error }, { status: access.status });
   const body = await request.json().catch(() => ({})) as { ruleIds?: unknown };
   if (!Array.isArray(body.ruleIds)) return NextResponse.json({ error: 'A complete rule order is required.' }, { status: 400 });
-  const saved = await reorderFlagRules(access.organizationId, body.ruleIds.map(Number));
-  if (!saved) return NextResponse.json({ error: 'Rule order did not match this organization.' }, { status: 400 });
+  const viewer = { userId: access.userId, email: access.session.email ?? '' };
+  const saved = await reorderFlagRules(access.organizationId, body.ruleIds.map(Number), viewer);
+  if (!saved) return NextResponse.json({ error: 'Rule order did not match your visible rules.' }, { status: 400 });
   return NextResponse.json({ ok: true });
 }
 
 export async function DELETE(request: Request) {
   const access = await requireAiAccess(request, true);
   if (!access.ok) return NextResponse.json({ error: access.error }, { status: access.status });
-  await deleteFlagRule(Number(new URL(request.url).searchParams.get('id') ?? 0), access.organizationId);
+  const viewer = { userId: access.userId, email: access.session.email ?? '' };
+  await deleteFlagRule(Number(new URL(request.url).searchParams.get('id') ?? 0), access.organizationId, viewer);
   return NextResponse.json({ ok: true });
 }

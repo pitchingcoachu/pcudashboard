@@ -5179,6 +5179,7 @@ function orgNameLikelyMatchesSchoolCode(orgName: string, schoolCode: string): bo
 const ORGANIZATION_NAME_ALIASES_BY_SCHOOL: Record<string, readonly string[]> = {
   ARIZONA: ['UNIVERSITY OF ARIZONA'],
   GUND: ['GUNDERSON BASEBALL'],
+  BC: ['BOULDER CREEK'],
 };
 
 export async function getLoginOrganizationIdForUser(userId: number): Promise<number> {
@@ -5885,9 +5886,15 @@ export async function createStaffUser(input: {
     ? String(existingAny.rows[0]?.password_hash ?? '').trim()
     : createPasswordHash(input.password);
   const canonicalName = existingNameRaw || name;
+  // `username` is auth_users' real primary key (despite the column name suggesting
+  // `id` is), but login and every lookup elsewhere key off `email`, not `username` --
+  // so it's safe to make this org-scoped when the bare email is already taken by
+  // another row for the same person (the cross-school-linking case above).
+  const baseUsername = deriveUsernameFromEmail(normalizedEmail);
+  const username = reusedExistingPassword ? `${baseUsername}#org${input.organizationId}` : baseUsername;
   const insertValues = [
     normalizedEmail,
-    deriveUsernameFromEmail(normalizedEmail),
+    username,
     canonicalName,
     (input.phone ?? '').trim() || null,
     passwordHash,

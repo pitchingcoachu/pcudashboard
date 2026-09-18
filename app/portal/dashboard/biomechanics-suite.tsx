@@ -93,6 +93,39 @@ type PitchPointsPayload = {
   error?: string;
 };
 
+type BiomechanicsPercentilePayload = {
+  groups?: Array<{ id: string; label: string }>;
+  selectedGroupId?: string;
+  selectedGroupLabel?: string;
+  rows?: Record<string, Record<string, {
+    value: number;
+    percentile: number | null;
+    sampleSize: number;
+    rankingDirection?: 'higher_is_higher' | 'lower_is_better' | 'handedness_normalized';
+  }>>;
+  signals?: Record<string, {
+    label: string;
+    column: string;
+    value: number | null;
+    date: string | null;
+    baseline30Day: number | null;
+    trendPct: number | null;
+    lowerIsBetter: boolean;
+    percentile: number | null;
+    sampleSize: number;
+  }>;
+  error?: string;
+};
+
+const BIOMECH_PERFORMANCE_SIGNALS = [
+  { key: 'backLegPeakZ', label: 'Back Leg Peak Z' },
+  { key: 'backLegPeakY', label: 'Back Leg Peak Y' },
+  { key: 'backLegImpulse', label: 'Back Leg Impulse' },
+  { key: 'backLegYzTransfer', label: 'Back Leg YZ Transfer' },
+  { key: 'leadLegPeakY', label: 'Lead Leg Peak Y' },
+  { key: 'leadLegClawback', label: 'Lead Leg Clawback' },
+] as const;
+
 const BIOMECH_TABLE_COLUMNS = [
   'Name',
   'Date',
@@ -332,6 +365,19 @@ function formatBiomechTableValue(column: string, value: string | number | null, 
     return parsed.toFixed(digits);
   }
   return String(value);
+}
+
+function percentileOrdinal(value: number): string {
+  const rounded = Math.round(value);
+  const mod100 = rounded % 100;
+  const suffix = mod100 >= 11 && mod100 <= 13 ? 'th' : rounded % 10 === 1 ? 'st' : rounded % 10 === 2 ? 'nd' : rounded % 10 === 3 ? 'rd' : 'th';
+  return `${rounded}${suffix}`;
+}
+
+function percentileBadgeStyle(value: number): CSSProperties {
+  if (value >= 67) return { color: '#6ee7b7', borderColor: 'rgba(16,185,129,.5)', background: 'rgba(16,185,129,.12)' };
+  if (value >= 34) return { color: '#fcd34d', borderColor: 'rgba(245,158,11,.5)', background: 'rgba(245,158,11,.12)' };
+  return { color: '#fda4af', borderColor: 'rgba(244,63,94,.5)', background: 'rgba(244,63,94,.12)' };
 }
 
 function formatPitchOptionLabel(option: PitchOption, allOptions: PitchOption[], velocityByKey?: Record<string, number | null>): string {
@@ -1343,6 +1389,11 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
   const [appliedPitchers, setAppliedPitchers] = useState<string[]>(['All']);
   const [appliedTags, setAppliedTags] = useState<string[]>(['All']);
   const [appliedPitchTypes, setAppliedPitchTypes] = useState<string[]>(['All']);
+  const [percentileGroupId, setPercentileGroupId] = useState<string>('all');
+  const [percentileGroups, setPercentileGroups] = useState<Array<{ id: string; label: string }>>([]);
+  const [biomechanicsPercentiles, setBiomechanicsPercentiles] = useState<BiomechanicsPercentilePayload | null>(null);
+  const [percentileLoading, setPercentileLoading] = useState<boolean>(false);
+  const [showTablePercentiles, setShowTablePercentiles] = useState<boolean>(true);
   const [hasAppliedFilters, setHasAppliedFilters] = useState<boolean>(false);
   const [selectedPitchTags, setSelectedPitchTags] = useState<string>('');
   const [selectedPitchType, setSelectedPitchType] = useState<string>('');
@@ -1437,6 +1488,21 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
 
   useEffect(() => {
     void loadCustomTables();
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void fetch('/api/dashboard/player-plans/players', { cache: 'no-store' })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({})) as { players?: Array<{ fullName?: string | null }> };
+        if (!response.ok || !active) return;
+        const rosterNames = (payload.players ?? [])
+          .map((player) => String(player.fullName ?? '').trim())
+          .filter(Boolean);
+        setPitcherOptions((current) => Array.from(new Set([...current, ...rosterNames])).sort((a, b) => a.localeCompare(b)));
+      })
+      .catch(() => {});
+    return () => { active = false; };
   }, []);
 
   const saveCustomTable = async () => {
@@ -1590,7 +1656,11 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
       setAllSessionsLeaderboardIndividualRows(Array.isArray(payload.all_sessions_leaderboard_individual_rows) ? payload.all_sessions_leaderboard_individual_rows : []);
       setPitchOptions(options);
       setSelectedPitchKey(pitchKey);
-      setPitcherOptions(uploadPitchers);
+      setPitcherOptions((current) => Array.from(new Set([...current, ...uploadPitchers])).sort((a, b) => a.localeCompare(b)));
+      if (role === 'player' && uploadPitchers[0]) {
+        setSelectedPitchers([uploadPitchers[0]]);
+        setAppliedPitchers([uploadPitchers[0]]);
+      }
       setTagsOptions(nextTags);
       setPitchTypeOptions(nextPitchTypes);
       setPitchVelocityByKey(payload.pitch_velocity_by_key && typeof payload.pitch_velocity_by_key === 'object' ? payload.pitch_velocity_by_key : {});
@@ -1617,13 +1687,6 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
       setSelectedPitchTypes((current) => {
         if (current.length === 1 && current[0] === 'All') return current;
         const filtered = current.filter((v) => nextPitchTypes.includes(v));
-        const next = normalizeMulti(filtered);
-        if (next.length === current.length && next.every((v, i) => v === current[i])) return current;
-        return next;
-      });
-      setSelectedPitchers((current) => {
-        if (current.length === 1 && current[0] === 'All') return current;
-        const filtered = current.filter((value) => uploadPitchers.includes(value));
         const next = normalizeMulti(filtered);
         if (next.length === current.length && next.every((v, i) => v === current[i])) return current;
         return next;
@@ -1768,6 +1831,47 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
     const selected = (appliedPitchers ?? []).filter((value) => String(value ?? '').trim().toUpperCase() !== 'ALL');
     return selected.length === 1;
   }, [appliedPitchers]);
+  useEffect(() => {
+    const selectedPlayer = (appliedPitchers ?? []).find((value) => String(value ?? '').trim().toUpperCase() !== 'ALL') ?? '';
+    if (!isSingleAppliedPlayer || !selectedPlayer || !hasAppliedFilters || isLoading) {
+      queueMicrotask(() => {
+        if (!isLoading) setBiomechanicsPercentiles(null);
+        setPercentileLoading(false);
+      });
+      return;
+    }
+    let active = true;
+    const params = new URLSearchParams({
+      player: selectedPlayer,
+      groupId: percentileGroupId,
+      forceMode: appliedForceMode,
+    });
+    if (appliedStartDate) params.set('startDate', appliedStartDate);
+    if (appliedEndDate) params.set('endDate', appliedEndDate);
+    const selectedTypes = appliedPitchTypes.filter((value) => value && value !== 'All');
+    if (selectedTypes.length) params.set('pitchTypes', JSON.stringify(selectedTypes));
+    const timer = window.setTimeout(() => {
+      setPercentileLoading(true);
+      void fetch(`/api/player/biomechanics-percentiles?${params.toString()}`, { cache: 'no-store' })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({})) as BiomechanicsPercentilePayload;
+        if (!response.ok) throw new Error(payload.error || 'Could not load AxioForce percentiles.');
+        if (!active) return;
+        setBiomechanicsPercentiles(payload);
+        if (Array.isArray(payload.groups)) setPercentileGroups(payload.groups);
+      })
+      .catch(() => {
+        if (active) setBiomechanicsPercentiles(null);
+      })
+      .finally(() => {
+        if (active) setPercentileLoading(false);
+      });
+    }, 350);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [appliedEndDate, appliedForceMode, appliedPitchTypes, appliedPitchers, appliedStartDate, hasAppliedFilters, isLoading, isSingleAppliedPlayer, percentileGroupId]);
   const summaryRowsByPitchType = useMemo(() => {
     if (!isSingleAppliedPlayer || pageTab !== 'summary') return sortedRows;
     const selectedPlayerRaw = (appliedPitchers ?? []).find((value) => String(value ?? '').trim().toUpperCase() !== 'ALL') ?? '';
@@ -2507,12 +2611,12 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
         <button type="button" className={pageTab === 'summary' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setPageTab('summary')}>
           Summary
         </button>
-        <button type="button" className={pageTab === 'leaderboard' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setPageTab('leaderboard')}>
+        {role !== 'player' ? <button type="button" className={pageTab === 'leaderboard' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setPageTab('leaderboard')}>
           Leaderboard
-        </button>
-        <button type="button" className={pageTab === 'compare' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setPageTab('compare')}>
+        </button> : null}
+        {role !== 'player' ? <button type="button" className={pageTab === 'compare' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setPageTab('compare')}>
           Compare
-        </button>
+        </button> : null}
       </div>
       <div style={{ display: 'flex', gap: 10, alignItems: 'end', flexWrap: 'wrap' }}>
         <label style={{ display: 'grid', gap: 4, minWidth: filterControlMinWidth }}>
@@ -2525,7 +2629,12 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
         </label>
         <label style={{ display: 'grid', gap: 4, minWidth: filterControlMinWidth }}>
           <span style={filterLabelStyle}>Player</span>
-          <SearchableMultiSelect options={playerSelectOptions} values={selectedPitchers} onChange={setSelectedPitchers} />
+          {role === 'player' ? (
+            <div className="biomechanics-player-lock" style={{ ...selectStyle, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+              <span>{toFirstLastName(pitcherOptions[0] ?? 'Your profile')}</span>
+              <small style={{ color: '#94a3b8', fontSize: 10, fontWeight: 800, letterSpacing: '.08em', textTransform: 'uppercase' }}>My data</small>
+            </div>
+          ) : <SearchableMultiSelect options={playerSelectOptions} values={selectedPitchers} onChange={setSelectedPitchers} />}
         </label>
         <label style={{ display: 'grid', gap: 4, minWidth: filterControlMinWidth }}>
           <span style={filterLabelStyle}>Tags</span>
@@ -2580,6 +2689,62 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
         Match Quality: {matchSummary.matchedAllPitchRows}/{matchSummary.totalAllPitchRows} pitches matched ({matchSummary.unmatchedAllPitchRows} unmatched all-pitch rows). Single-pitch files uploaded: {matchSummary.totalSinglePitchFiles} ({matchSummary.matchedSinglePitchFiles} currently paired).
       </p>
 
+      {pageTab === 'summary' && isSingleAppliedPlayer ? (
+        <section style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 12, padding: 12, display: 'grid', gap: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'end', flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ color: '#e11d48', fontSize: 11, fontWeight: 800, letterSpacing: '.16em' }}>PERFORMANCE SIGNAL</div>
+              <h3 style={{ margin: '0.2rem 0 0' }}>AxioForce Summary</h3>
+              <p style={{ margin: '0.2rem 0 0', color: '#94a3b8', fontSize: 12 }}>
+                Latest session in the selected range · change versus prior 30-day average
+              </p>
+            </div>
+            <label data-html2canvas-ignore="true" style={{ display: 'grid', gap: 4, minWidth: 220 }}>
+              <span style={{ fontSize: 12, color: '#94a3b8' }}>Compare Against</span>
+              <select
+                className="portal-select"
+                value={percentileGroupId}
+                style={selectStyle}
+                disabled={percentileLoading}
+                onChange={(event) => setPercentileGroupId(event.target.value || 'all')}
+              >
+                <option value="all">All PCU athletes</option>
+                {percentileGroups.map((group) => <option key={group.id} value={group.id}>{group.label}</option>)}
+              </select>
+            </label>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 10 }}>
+            {BIOMECH_PERFORMANCE_SIGNALS.map(({ key, label }) => {
+              const signal = biomechanicsPercentiles?.signals?.[key];
+              const favorable = signal?.trendPct == null || Math.abs(signal.trendPct) < 0.0001
+                ? null
+                : signal.lowerIsBetter ? signal.trendPct < 0 : signal.trendPct > 0;
+              return (
+                <div key={key} style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: '0.8rem', minHeight: 132, display: 'grid', alignContent: 'space-between', gap: 10, background: 'rgba(255,255,255,0.025)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'start' }}>
+                    <span style={{ color: '#cbd5e1', fontSize: 12, fontWeight: 800, letterSpacing: '.05em', textTransform: 'uppercase' }}>{signal?.label ?? label}</span>
+                    {signal?.percentile != null ? (
+                      <span
+                        title={`Compared with ${signal.sampleSize} athlete${signal.sampleSize === 1 ? '' : 's'} using their full available history`}
+                        style={{ ...percentileBadgeStyle(signal.percentile), borderWidth: 1, borderStyle: 'solid', borderRadius: 999, padding: '2px 7px', fontSize: 10, fontWeight: 800, whiteSpace: 'nowrap' }}
+                      >
+                        {percentileOrdinal(signal.percentile)} percentile
+                      </span>
+                    ) : <span style={{ color: '#64748b', fontSize: 10 }}>{percentileLoading ? 'Ranking…' : 'No rank'}</span>}
+                  </div>
+                  <strong style={{ fontSize: 'clamp(1.75rem, 3vw, 2.6rem)', lineHeight: 1 }}>
+                    {signal?.value == null ? '—' : formatBiomechTableValue(signal.column, signal.value, appliedForceMode)}
+                  </strong>
+                  <div style={{ color: signal?.trendPct == null ? '#94a3b8' : favorable ? '#34d399' : '#fb7185', fontSize: 12, fontWeight: 700 }}>
+                    {signal?.trendPct == null ? 'No prior 30-day baseline' : `${signal.trendPct >= 0 ? '▲' : '▼'} ${Math.abs(signal.trendPct).toFixed(1)}% vs. prior 30 days`}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'end' }}>
         {pageTab === 'leaderboard' ? (
           <label style={{ display: 'grid', gap: 4 }}>
@@ -2620,7 +2785,26 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
         </label>
         <label style={{ display: 'grid', gap: 4 }}>
           <span style={{ fontSize: 12, color: '#94a3b8' }}>Scale</span>
-          <select className="portal-select" value={forceMode} onChange={(e) => setForceMode(e.target.value as ForceMode)} style={selectStyle}>
+          <select
+            className="portal-select"
+            value={forceMode}
+            onChange={(e) => {
+              const nextForceMode = e.target.value as ForceMode;
+              setForceMode(nextForceMode);
+              if (!hasAppliedFilters) return;
+              setAppliedForceMode(nextForceMode);
+              void loadData(undefined, {
+                startDate: appliedStartDate,
+                endDate: appliedEndDate,
+                pitchers: appliedPitchers,
+                tags: appliedTags,
+                pitchTypes: appliedPitchTypes,
+                forceMode: nextForceMode,
+                velocityMin: appliedVelocityMin,
+                velocityMax: appliedVelocityMax,
+              });
+            }}
+            style={selectStyle}>
             <option value="force">Force</option>
             <option value="bw">BW%</option>
           </select>
@@ -2757,6 +2941,16 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
               </select>
             </label>
           ) : null}
+          {pageTab === 'summary' && isSingleAppliedPlayer ? (
+            <label data-html2canvas-ignore="true" style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 40, paddingTop: 17, color: '#cbd5e1', fontSize: 13, fontWeight: 700 }}>
+              <input
+                type="checkbox"
+                checked={showTablePercentiles}
+                onChange={(event) => setShowTablePercentiles(event.target.checked)}
+              />
+              Show table percentiles
+            </label>
+          ) : null}
           {pageTab === 'leaderboard' ? (
             <button type="button" className="btn btn-ghost" onClick={() => void openLeaderboardCorrelation()}>
               View Chart
@@ -2877,6 +3071,11 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
             </div>
           </div>
         ) : null}
+        {pageTab === 'summary' && isSingleAppliedPlayer && showTablePercentiles && biomechanicsPercentiles?.selectedGroupLabel ? (
+          <div style={{ margin: '0.55rem 0 0.25rem', color: '#94a3b8', fontSize: 12 }}>
+            Percentiles compare the selected date-range values with full-history data from {biomechanicsPercentiles.selectedGroupLabel}.
+          </div>
+        ) : null}
         <div
           className="portal-table-wrap"
           style={{ maxHeight: '52vh', overflowY: 'auto', overflowX: 'hidden', position: 'relative' }}
@@ -2985,7 +3184,25 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
                             : undefined,
                       }}
                     >
-                      {formatBiomechTableValue(column, row[column] as string | number | null, forceMode)}
+                      {(() => {
+                        const value = formatBiomechTableValue(column, row[column] as string | number | null, forceMode);
+                        const session = String(row.Session ?? '').trim();
+                        const rank = showTablePercentiles && pageTab === 'summary' && isSingleAppliedPlayer && session !== 'All Sessions' && column !== '#'
+                          ? biomechanicsPercentiles?.rows?.[pitchTypeCellValue || 'Unspecified']?.[column]
+                          : undefined;
+                        if (rank?.percentile == null) return value;
+                        return (
+                          <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                            <span>{value}</span>
+                            <span
+                              title={`Compared with ${rank.sampleSize} athlete${rank.sampleSize === 1 ? '' : 's'} using their full available history`}
+                              style={{ ...percentileBadgeStyle(rank.percentile), borderWidth: 1, borderStyle: 'solid', borderRadius: 999, padding: '1px 5px', fontSize: 10, fontWeight: 800, whiteSpace: 'nowrap' }}
+                            >
+                              {percentileOrdinal(rank.percentile)}
+                            </span>
+                          </span>
+                        );
+                      })()}
                     </td>
                       );
                     })()

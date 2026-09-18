@@ -50,10 +50,10 @@ export const PAGE_MANIFEST: PageManifestEntry[] = [
     roles: ['admin', 'coach', 'player'],
   },
   {
-    title: 'Biomechanics',
-    route: '/portal/dashboard?suite=biomechanics',
-    description: 'Biomechanics and force-plate data: impulse time, peak de-weighting, force vs. moments, PDF summary export.',
-    keywords: ['biomechanics', 'force plate', 'vald', 'impulse'],
+    title: 'Biomechanics and Performance Data',
+    route: '/portal/force-plates?tab=biomechanics',
+    description: 'Biomechanics, VALD, OVR Sprint, and VBT performance data, including AxioForce and motion capture.',
+    keywords: ['biomechanics', 'axioforce', 'motion capture', 'force plate', 'vald', 'ovr', 'sprint', 'vbt', 'impulse'],
     roles: ['admin', 'coach', 'player'],
   },
   {

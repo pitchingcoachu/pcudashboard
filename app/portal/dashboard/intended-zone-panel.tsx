@@ -279,6 +279,15 @@ export default function IntendedZonePanel({
   // the exact "2/3%" definition: don't count it twice for the same at-bat.
   const [twoThreeHits, setTwoThreeHits] = useState<Set<number>>(new Set());
   const [callingPitchId, setCallingPitchId] = useState<number | null>(null);
+  // A Ball/Strike click updates the UI optimistically, but the two-second
+  // pitch poll may already be in flight with the older isStrike:null row.
+  // Keep submitted calls here until a later poll actually observes the
+  // persisted value, so an older snapshot cannot briefly reopen the prompt.
+  const pendingCountCallsRef = useRef(new Map<number, {
+    isStrike: boolean;
+    countAtPitch: string;
+    atBatIndex: number;
+  }>());
   // FTP Sync mode only: the pitch id just confirmed via Confirm Target,
   // awaiting a Ball/Strike call. FTP mode has no real TrackMan location data
   // at confirm-time (it only arrives once the next sync ingests it, often
@@ -448,7 +457,19 @@ export default function IntendedZonePanel({
       // newest one.
       setPitches((current) => {
         const previousFlightById = new Map(current.map((p) => [p.id, p.flightData]));
-        return nextPitches.map((p) => ({ ...p, flightData: p.flightData ?? previousFlightById.get(p.id) ?? null }));
+        return nextPitches.map((p) => {
+          const pendingCall = pendingCountCallsRef.current.get(p.id);
+          if (pendingCall && p.isStrike !== null) {
+            // The server has caught up. From this point forward its persisted
+            // row is authoritative (also covers a correction from another tab).
+            pendingCountCallsRef.current.delete(p.id);
+          }
+          return {
+            ...p,
+            ...(pendingCall && p.isStrike === null ? pendingCall : {}),
+            flightData: p.flightData ?? previousFlightById.get(p.id) ?? null,
+          };
+        });
       });
       setPollWarning(null);
       // Only advance the cursor on a SUCCESSFUL poll -- if this one failed
@@ -522,6 +543,7 @@ export default function IntendedZonePanel({
       setAtBatIndex(0);
       setTwoThreeHits(new Set());
       setCallingPitchId(null);
+      pendingCountCallsRef.current.clear();
       setPendingFtpCountPitchId(null);
       setEditingPitchId(null);
       setEditDraft(null);
@@ -546,6 +568,7 @@ export default function IntendedZonePanel({
       setActiveSession(null);
       setPendingTarget(null);
       setSelectedFlightPitchId(null);
+      pendingCountCallsRef.current.clear();
       activeQueuedTargetIdRef.current = null;
       setEditingPitchId(null);
       setEditDraft(null);
@@ -590,6 +613,7 @@ export default function IntendedZonePanel({
         setPitches([]);
         setPendingTarget(null);
         setSelectedFlightPitchId(null);
+        pendingCountCallsRef.current.clear();
         activeQueuedTargetIdRef.current = null;
       }
       setHistory((prev) => prev.filter((s) => s.id !== sessionId));
@@ -626,6 +650,7 @@ export default function IntendedZonePanel({
       setLastManualPitchId(null);
       setSelectedFlightPitchId(null);
       lastSeenPitchId.current = null;
+      pendingCountCallsRef.current.clear();
       activeQueuedTargetIdRef.current = null;
       pollCountRef.current = 0;
       lastPollStartedAtRef.current = null;
@@ -745,6 +770,7 @@ export default function IntendedZonePanel({
     // Optimistic: reflect the call immediately rather than waiting up to one
     // poll interval, so the Ball/Strike prompt clears and the live stats
     // (In Zone%/Comp%/Strike%/2-3%) update right away.
+    pendingCountCallsRef.current.set(pitchId, { isStrike, countAtPitch, atBatIndex: thisAtBatIndex });
     setPitches((current) =>
       current.map((p) => (p.id === pitchId ? { ...p, isStrike, countAtPitch, atBatIndex: thisAtBatIndex } : p))
     );
@@ -760,6 +786,7 @@ export default function IntendedZonePanel({
         if (!response.ok) throw new Error(payload.error ?? 'Failed to record the call.');
       })
       .catch((callError) => {
+        pendingCountCallsRef.current.delete(pitchId);
         setError(callError instanceof Error ? callError.message : 'Failed to record the call.');
         // Roll back the optimistic call so the prompt reappears and the coach
         // can retry -- the server never persisted this one.

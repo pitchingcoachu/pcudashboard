@@ -1,12 +1,34 @@
 import type { FlagRuleRow } from './ai-workspace-db';
 import { getDbPool } from './auth-db';
-import { canonicalFlagMetric, metricSampleColumn, parseForcePlateFlagMetric } from './dashboard-metric-catalog';
+import { canonicalFlagMetric, metricSampleColumn, parseBiomechanicsFlagMetric, parseForcePlateFlagMetric, parseOvrSprintFlagMetric } from './dashboard-metric-catalog';
 import { resolveDashboardApiBaseUrl } from './dashboard-access';
 import { parseSortableNumber } from './table-sort';
+import { listOvrSprintResults } from './ovr-sprint';
+import { getBiomechanicsSnapshot } from './biomechanics-db';
 
-type FlagDomain = 'pitching' | 'hitting' | 'force_plates';
+type FlagDomain = 'pitching' | 'hitting' | 'force_plates' | 'ovr_sprint' | 'biomechanics';
 type DashboardFlagRule = FlagRuleRow & { domain: 'pitching' | 'hitting' };
 type Point = Record<string, unknown>;
+
+/** Converts yards/seconds to mph -- same formula used elsewhere for OVR
+ * Sprint speed derivation this session (distance * 3600 / (time * 1760)). */
+function yardsPerSecondToMph(distanceYards: number, timeSeconds: number): number | null {
+  if (!Number.isFinite(distanceYards) || !Number.isFinite(timeSeconds) || timeSeconds <= 0) return null;
+  return (distanceYards * 3600) / (timeSeconds * 1760);
+}
+
+/** Parses Biomechanics' display-formatted "M/D/YY" date (from
+ * formatDateKeyMddyy in lib/biomechanics-db.ts) back to ISO "YYYY-MM-DD" so
+ * it matches the session_date shape flag-evaluation.ts expects everywhere
+ * else. Assumes a post-2000 2-digit year, true for all data in this app. */
+function biomechDateLabelToIso(label: string): string | null {
+  const match = String(label ?? '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+  if (!match) return null;
+  const month = match[1].padStart(2, '0');
+  const day = match[2].padStart(2, '0');
+  const year = `20${match[3]}`;
+  return `${year}-${month}-${day}`;
+}
 
 function parseMetricValue(metric: string, value: unknown): number | null {
   const raw = String(value ?? '').trim();
@@ -60,7 +82,7 @@ export async function loadFlagMetricPoints(input: {
   domains: FlagDomain[];
   rules: FlagRuleRow[];
   allowedPlayerNames?: string[];
-}): Promise<{ pitching: Point[]; hitting: Point[]; force_plates: Point[] }> {
+}): Promise<{ pitching: Point[]; hitting: Point[]; force_plates: Point[]; ovr_sprint: Point[]; biomechanics: Point[] }> {
   const schoolCode = String(input.schoolCode ?? '').trim().toUpperCase();
   const playerKey = (value: unknown) => String(value ?? '')
     .trim()
@@ -141,7 +163,7 @@ export async function loadFlagMetricPoints(input: {
     return { domain, points };
   });
 
-  const output: { pitching: Point[]; hitting: Point[]; force_plates: Point[] } = { pitching: [], hitting: [], force_plates: [] };
+  const output: { pitching: Point[]; hitting: Point[]; force_plates: Point[]; ovr_sprint: Point[]; biomechanics: Point[] } = { pitching: [], hitting: [], force_plates: [], ovr_sprint: [], biomechanics: [] };
   for (const batch of batches) output[batch.domain].push(...batch.points);
   const forcePlateRules = input.rules.filter((rule) => rule.enabled && rule.domain === 'force_plates');
   if (forcePlateRules.length) {
@@ -198,5 +220,79 @@ export async function loadFlagMetricPoints(input: {
       }
     }
   }
+
+  const ovrSprintRules = input.rules.filter((rule) => rule.enabled && rule.domain === 'ovr_sprint');
+  if (ovrSprintRules.length) {
+    const results = await listOvrSprintResults({ organizationId: input.organizationId, schoolCode });
+    const allowedKeys = input.allowedPlayerNames ? new Set(input.allowedPlayerNames.map(playerKey).filter(Boolean)) : null;
+    // One attempt = one (player, exercise, date, sprintNumber) group. Every
+    // split row of an attempt shares the same total_time_seconds (confirmed
+    // live: OVR stores it duplicated per split, not once per attempt), so
+    // any row's totalTime is correct; speedMph, however, genuinely varies
+    // per split for multi-split exercises, so "total speed" is derived as
+    // distance-weighted (sum of that attempt's split distances / total
+    // time), which collapses to the single split's own speed for
+    // single-split exercises (10/40/60yd Sprint, 5-10-5) with no special-casing.
+    const attempts = new Map<string, { player: string; date: string; exercise: string; totalTime: number; distanceSum: number; hasDistance: boolean }>();
+    for (const row of results) {
+      if (row.date < input.startDate || row.date > input.endDate) continue;
+      if (allowedKeys && !allowedKeys.has(playerKey(row.athleteName))) continue;
+      const key = `${playerKey(row.athleteName)} ${row.date} ${row.exercise} ${row.sprintNumber}`;
+      const attempt = attempts.get(key) ?? { player: row.athleteName, date: row.date, exercise: row.exercise, totalTime: row.totalTime, distanceSum: 0, hasDistance: true };
+      if (row.distanceYards === null) attempt.hasDistance = false;
+      else attempt.distanceSum += row.distanceYards;
+      attempts.set(key, attempt);
+    }
+    for (const attempt of attempts.values()) {
+      const speedMph = attempt.hasDistance ? yardsPerSecondToMph(attempt.distanceSum, attempt.totalTime) : null;
+      for (const rule of ovrSprintRules) {
+        const parsed = parseOvrSprintFlagMetric(rule.metric);
+        if (!parsed || parsed.exercise !== attempt.exercise) continue;
+        const value = parsed.metric === 'speedMph' ? speedMph : attempt.totalTime;
+        if (value === null) continue;
+        output.ovr_sprint.push({
+          __rule_id: rule.id,
+          player_name: attempt.player,
+          session_date: attempt.date,
+          [rule.metric]: value,
+          [`${rule.metric}_n`]: 1,
+        });
+      }
+    }
+  }
+
+  const biomechanicsRules = input.rules.filter((rule) => rule.enabled && rule.domain === 'biomechanics');
+  if (biomechanicsRules.length) {
+    const snapshot = await getBiomechanicsSnapshot({
+      organizationId: input.organizationId,
+      schoolCode,
+      startDate: input.startDate,
+      endDate: input.endDate,
+      selectedPitcher: null,
+      forceMode: 'force',
+    });
+    const allowedKeys = input.allowedPlayerNames ? new Set(input.allowedPlayerNames.map(playerKey).filter(Boolean)) : null;
+    for (const row of snapshot.leaderboardIndividualRows) {
+      const player = String(row.Name ?? '').trim();
+      if (!player) continue;
+      if (allowedKeys && !allowedKeys.has(playerKey(player))) continue;
+      const sessionDate = biomechDateLabelToIso(String(row.Date ?? ''));
+      if (!sessionDate || sessionDate < input.startDate || sessionDate > input.endDate) continue;
+      for (const rule of biomechanicsRules) {
+        const parsed = parseBiomechanicsFlagMetric(rule.metric);
+        if (!parsed) continue;
+        const value = parseSortableNumber(row[parsed.column]);
+        if (value === null) continue;
+        output.biomechanics.push({
+          __rule_id: rule.id,
+          player_name: player,
+          session_date: sessionDate,
+          [rule.metric]: value,
+          [`${rule.metric}_n`]: 1,
+        });
+      }
+    }
+  }
+
   return output;
 }

@@ -21,7 +21,6 @@ import { SaveReportToProfileButton } from '../components/save-report-to-profile'
 import DashboardGroupFilter from './dashboard-group-filter';
 import { IntendedTargetLocationSvg } from './intended-target-location-graphic';
 import type { LiveFlightPitch } from './live-flight-replay';
-import { dashboardMetricLabel } from '../../../lib/dashboard-metric-catalog';
 
 const BallFlightPanel = dynamic(() => import('./ball-flight-panel'), {
   loading: () => <p className="portal-muted-text">Loading Flight Lab…</p>,
@@ -16306,7 +16305,7 @@ export default function PitchingSuite({
                       <label>
                         Add Column
                         <SearchableSingleSelect
-                          options={remainingCustomColumns.map((column) => ({ value: column, label: dashboardMetricLabel(column) }))}
+                          options={remainingCustomColumns.map((column) => ({ value: column, label: column }))}
                           value={customColumnToAdd}
                           clearQueryOnSelect={false}
                           onChange={(next) => {
@@ -16370,7 +16369,7 @@ export default function PitchingSuite({
                               style={{ minHeight: 'unset', padding: '0.3rem 0.5rem', display: 'inline-flex', alignItems: 'center', gap: 8 }}
                             >
                               <span style={{ opacity: 0.7 }}>::</span>
-                              <span>{dashboardMetricLabel(column)}</span>
+                              <span>{column}</span>
                               <span
                                 style={{ opacity: 0.8 }}
                                 onClick={(event) => {
@@ -16429,7 +16428,7 @@ export default function PitchingSuite({
                       {displayedTableColumns.map((column, colIndex) => {
                         const isSortable = true;
                         const activeSort = leaderboardSortColumn === column;
-                        const label = isLeaderboardPage && colIndex === 0 ? (leaderboardViewBy === 'Team' ? 'Team' : 'Player') : dashboardMetricLabel(column);
+                        const label = isLeaderboardPage && colIndex === 0 ? (leaderboardViewBy === 'Team' ? 'Team' : 'Player') : column;
                         const headerTooltip = COLUMN_HEADER_TOOLTIPS[column];
                         return (
                           <th

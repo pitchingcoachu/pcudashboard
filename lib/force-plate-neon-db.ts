@@ -1,5 +1,6 @@
 import { getDbPool, isDatabaseConfigured } from './auth-db';
 import type { ValdMetricRow, ValdPlayerSnapshot, ValdSnapshot } from './vald-forceplates';
+import { ensurePerformanceRollupSchema, refreshValdPerformanceRollups } from './performance-rollups';
 
 declare global {
   var __pcuForcePlateNeonReady: boolean | undefined;
@@ -107,6 +108,11 @@ async function ensureForcePlateNeonTables(): Promise<void> {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_force_plate_metric_rows_test
     ON force_plate_metric_rows (organization_id, school_code, test_id);
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_force_plate_metric_rows_daily_rollup
+    ON force_plate_metric_rows (organization_id, school_code, date_time_utc, player_name_norm, test_type, metric_name, metric_unit)
+    WHERE point_type = 'average';
   `);
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_force_plate_tests_semantic_lookup
@@ -346,6 +352,20 @@ export async function upsertForcePlateSnapshotToNeon(args: {
       }
     }
     await client.query('COMMIT');
+    const snapshotDates = args.snapshot.players.flatMap((player) => player.metricRows.flatMap((row) => {
+      const parsed = parseIso(row.dateTime);
+      return parsed ? [parsed.toISOString().slice(0, 10)] : [];
+    })).sort();
+    if (snapshotDates.length) {
+      await refreshValdPerformanceRollups({
+        organizationId: args.organizationId,
+        schoolCode: args.schoolCode,
+        startDate: snapshotDates[0],
+        endDate: snapshotDates[snapshotDates.length - 1],
+      }).catch((error) => {
+        console.error('VALD performance rollup refresh failed', error);
+      });
+    }
     client.release();
     return { ok: true, playerCount, testCount, metricRowCount };
   } catch (error) {
@@ -702,7 +722,7 @@ export async function loadForcePlateLeaderboardAggregates(args: {
   endDate?: string;
 }): Promise<{ rows: ForcePlateLeaderboardAggregate[]; minDate: string; maxDate: string }> {
   if (!isDatabaseConfigured()) return { rows: [], minDate: '', maxDate: '' };
-  await ensureForcePlateNeonTables();
+  await ensurePerformanceRollupSchema();
   const playerNorms = Array.from(new Set(args.allowedPlayerNames.map((name) => normalizeName(name)).filter(Boolean)));
   if (!playerNorms.length) return { rows: [], minDate: '', maxDate: '' };
   const result = await getDbPool().query<{
@@ -718,23 +738,23 @@ export async function loadForcePlateLeaderboardAggregates(args: {
   }>(
     `SELECT
        player_name,
-       test_type,
+       activity_type AS test_type,
        metric_name,
        metric_unit,
-       AVG(value)::double precision AS average_value,
-       MAX(value)::double precision AS maximum_value,
-       COUNT(*)::integer AS samples,
-       MIN(date_time_utc)::text AS min_date,
-       MAX(date_time_utc)::text AS max_date
-     FROM force_plate_metric_rows
+       (SUM(value_sum) / NULLIF(SUM(sample_count), 0))::double precision AS average_value,
+       MAX(value_max)::double precision AS maximum_value,
+       SUM(sample_count)::integer AS samples,
+       MIN(session_date)::text AS min_date,
+       MAX(session_date)::text AS max_date
+     FROM performance_metric_daily_rollups
      WHERE organization_id = $1
        AND school_code = $2
+       AND source = 'vald'
        AND player_name_norm = ANY($3::text[])
-       AND point_type = 'average'
-       AND ($4::date IS NULL OR date_time_utc >= $4::date)
-       AND ($5::date IS NULL OR date_time_utc < $5::date + INTERVAL '1 day')
-     GROUP BY player_name, test_type, metric_name, metric_unit
-     ORDER BY player_name, test_type, metric_name, metric_unit`,
+       AND ($4::date IS NULL OR session_date >= $4::date)
+       AND ($5::date IS NULL OR session_date <= $5::date)
+     GROUP BY player_name, activity_type, metric_name, metric_unit
+     ORDER BY player_name, activity_type, metric_name, metric_unit`,
     [args.organizationId, args.schoolCode, playerNorms, args.startDate || null, args.endDate || null]
   );
   const dates = result.rows.flatMap((row) => [row.min_date, row.max_date]).filter((value): value is string => Boolean(value)).sort();

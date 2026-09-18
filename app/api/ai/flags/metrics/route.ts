@@ -1,8 +1,34 @@
 import { NextResponse } from 'next/server';
 import { requireAiAccess } from '../../../../../lib/ai-access';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
-import { dashboardMetricOptions, forcePlateFlagMetric } from '../../../../../lib/dashboard-metric-catalog';
+import { biomechanicsFlagMetric, dashboardMetricOptions, forcePlateFlagMetric, ovrSprintFlagMetric } from '../../../../../lib/dashboard-metric-catalog';
 import { loadForcePlateMetricCatalog } from '../../../../../lib/force-plate-neon-db';
+import { listOvrSprintResults } from '../../../../../lib/ovr-sprint';
+
+// Mirrors lib/biomechanics-db.ts's tableColumnNames minus the identity
+// columns (Name/Date/#/Pitch Type/Tags) -- a fixed, data-independent list,
+// so this route doesn't need to run the (expensive) full snapshot query
+// just to discover it. Keep in sync if that list changes.
+const BIOMECHANICS_FLAGGABLE_COLUMNS = [
+  'Pitch Velocity (mph)',
+  'Back Leg Peak Fz (lb)',
+  'Peak De-Weighting (lb)',
+  'Z-Force Gain (lb)',
+  'Back Leg Peak Fy (lb)',
+  'Mound Connection (BW%)',
+  'Back Leg Impulse (lb·s)',
+  'Back Leg Impulse Time (s)',
+  'Back Leg YZ Transfer (s)',
+  'Lead Leg Peak Fz (lb)',
+  'Lead Leg Peak Fy (lb)',
+  'Lead Leg Clawback (s)',
+  'Lead Leg FFC to Peak Y (s)',
+  'Lead Leg YZ Transfer (s)',
+  'Y Transfer (s)',
+  'Z Transfer (s)',
+  'Stride Length (in)',
+  'Stride Direction (deg)',
+];
 
 type Domain = 'pitching' | 'hitting';
 
@@ -43,16 +69,19 @@ export async function GET(request: Request) {
       return dashboardMetricOptions(domain);
     }
   };
-  const [pitching, hitting, forcePlateCatalog] = await Promise.all([
+  const [pitching, hitting, forcePlateCatalog, ovrSprintExercises] = await Promise.all([
     load('pitching'),
     load('hitting'),
     loadForcePlateMetricCatalog({ organizationId: access.organizationId, schoolCode }).catch(() => ({ metrics: [], testTypes: [] })),
+    listOvrSprintResults({ organizationId: access.organizationId, schoolCode }).then((rows) => Array.from(new Set(rows.map((row) => row.exercise))).sort((a, b) => a.localeCompare(b))).catch(() => [] as string[]),
   ]);
   return NextResponse.json({
     metrics: {
       pitching,
       hitting,
       force_plates: forcePlateCatalog.metrics.map((metric) => forcePlateFlagMetric(metric.metricName, metric.metricUnit)),
+      ovr_sprint: ovrSprintExercises.flatMap((exercise) => [ovrSprintFlagMetric(exercise, 'totalTime'), ovrSprintFlagMetric(exercise, 'speedMph')]),
+      biomechanics: BIOMECHANICS_FLAGGABLE_COLUMNS.map((column) => biomechanicsFlagMetric(column)),
     },
     forcePlateTestTypes: forcePlateCatalog.testTypes,
     forcePlateTestTypesByMetric: Object.fromEntries(forcePlateCatalog.metrics.map((metric) => [

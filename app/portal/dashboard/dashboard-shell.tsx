@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import BiomechanicsHub from './biomechanics-hub';
 import CatchingSuite from './catching-suite';
 import ComparisonToolSuite from './comparison-tool-suite';
 import CustomReportsSuite from './custom-reports-suite';
@@ -49,7 +48,6 @@ type SuiteName =
   | 'Catching'
   | 'Custom Reports'
   | 'Comparison Tool'
-  | 'Biomechanics'
   | 'Player Plans'
   | 'Stuff+ Calculator'
   | 'Flags';
@@ -72,7 +70,6 @@ const ALL_SUITE_NAMES: SuiteName[] = [
   'Catching',
   'Custom Reports',
   'Comparison Tool',
-  'Biomechanics',
   'Player Plans',
   'Stuff+ Calculator',
   'Flags',
@@ -176,7 +173,6 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
     Catching: suite === 'Catching',
     'Custom Reports': suite === 'Custom Reports',
     'Comparison Tool': suite === 'Comparison Tool',
-    'Biomechanics': suite === 'Biomechanics',
     'Player Plans': suite === 'Player Plans',
     'Stuff+ Calculator': suite === 'Stuff+ Calculator',
     Flags: suite === 'Flags',
@@ -204,17 +200,15 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
       }
     : undefined;
   const suiteOptions: SuiteName[] = useMemo(() => {
-    const isPcu = String(selectedSchoolCode || '').trim().toUpperCase() === 'PCU';
     const base: SuiteName[] = ['Home'];
     base.push('Pitching', 'Hitting');
     if (!isPro) base.push('Catching');
     base.push('Custom Reports', 'Comparison Tool');
-    if (isPcu) base.push('Biomechanics');
     if (!isLeague) base.push('Player Plans');
     if (!isLeague) base.push('Stuff+ Calculator');
     if (role !== 'player') base.push('Flags');
     return base;
-  }, [isLeague, isPro, role, selectedSchoolCode]);
+  }, [isLeague, isPro, role]);
 
   const activeSuite: SuiteName = suiteOptions.includes(suite) ? suite : 'Home';
   const suitePickerOptions = isMobileDashboardView && activeSuite !== 'Flags'
@@ -555,7 +549,11 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
               onNavigate={handleHomeNavigate}
             />
           </div>
-          <MobileDashboardHome suiteOptions={suiteOptions} onOpenSuite={activateSuite} />
+          <MobileDashboardHome
+            suiteOptions={suiteOptions}
+            onOpenSuite={activateSuite}
+            selectedSchoolCode={selectedSchoolCode}
+          />
         </div>
       ) : null}
       {mountedSuites.Pitching ? (
@@ -573,11 +571,6 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
       {mountedSuites['Comparison Tool'] ? (
         <div style={{ display: showSuite('Comparison Tool') ? 'block' : 'none' }}>
           <ComparisonToolSuite />
-        </div>
-      ) : null}
-      {mountedSuites.Biomechanics ? (
-        <div style={{ display: showSuite('Biomechanics') ? 'block' : 'none' }}>
-          <BiomechanicsHub role={role} schoolCode={selectedSchoolCode} isActive={showSuite('Biomechanics')} />
         </div>
       ) : null}
       {!isLeague && mountedSuites['Player Plans'] ? (

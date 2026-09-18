@@ -1,10 +1,9 @@
 import Link from 'next/link';
-import Image from 'next/image';
 import { notFound } from 'next/navigation';
 import { requirePortalSession } from '../../../lib/portal-session';
 import { resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
 import { resolveSessionDashboardSchoolOptions } from '../../../lib/dashboard-school-options';
-import { canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../lib/programming-scope';
+import { canUseGameTracker, canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../lib/programming-scope';
 import { getPlayerForUser, listPlayerChoicesByOrganization } from '../../../lib/training-db';
 import { loadForcePlateSnapshot } from '../../../lib/force-plate-cache-db';
 import { loadForcePlateMetricCatalog, loadForcePlateSnapshotFromNeon } from '../../../lib/force-plate-neon-db';
@@ -19,7 +18,6 @@ import PortalThemeToggle from '../theme-toggle';
 import PortalMessagesNavButton from '../messages-nav-button';
 import { resolveStaffPrimaryNavigation } from '../../../lib/portal-primary-nav-server';
 import StaffPrimaryNav, { staffPrimaryMobileItems } from '../staff-primary-nav';
-import styles from './force-plates-dashboard.module.css';
 
 function normalizeName(value: string): string {
   return String(value ?? '')
@@ -75,6 +73,7 @@ export default async function ForcePlatesPage({
   const selectedSchoolCode = resolveProgrammingSchoolCode(session);
   if (String(selectedSchoolCode ?? '').trim().toUpperCase() === 'TRIAL') notFound();
   const canAccessProgramming = await canUseProgrammingData(session);
+  const canAccessGameTracker = await canUseGameTracker(session);
   const orgId = await resolveProgrammingOrganizationId(session);
   const isPcu = String(selectedSchoolCode ?? '').trim().toUpperCase() === 'PCU';
   const isStaff = session.role === 'admin' || session.role === 'coach';
@@ -82,6 +81,14 @@ export default async function ForcePlatesPage({
 
   const playerQueryRaw = Array.isArray(params.player) ? params.player[0] : params.player;
   const requestedPlayer = String(playerQueryRaw ?? '').trim();
+  const tabQueryRaw = Array.isArray(params.tab) ? params.tab[0] : params.tab;
+  const requestedTab = String(tabQueryRaw ?? '').trim().toLowerCase();
+  const allowedTabs = isStaff
+    ? ['vald', 'sprint', 'vbt', 'biomechanics', 'imports']
+    : ['vald', 'sprint', 'vbt', 'biomechanics'];
+  const initialTab = isPcu && allowedTabs.includes(requestedTab)
+    ? requestedTab as 'vald' | 'sprint' | 'vbt' | 'biomechanics' | 'imports'
+    : 'vald';
 
   let playerScopedName = '';
   if (session.role === 'player') {
@@ -184,6 +191,7 @@ export default async function ForcePlatesPage({
 
   return (
     <PortalChrome
+      extraShellClass="portal-performance-data-shell"
       left={<DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />}
       navLinks={
         isStaff && primaryNav ? (
@@ -234,16 +242,10 @@ export default async function ForcePlatesPage({
         </>
       }
       sectionClassName="portal-panel portal-admin-panel"
+      tabBarRole={session.role}
+      tabBarGameTrackerVisible={canAccessGameTracker}
     >
       <div className="portal-admin-stack">
-        <div className={`portal-admin-headline ${styles.pageHeadline}`}>
-          <div className={styles.pageTitleGroup}>
-            <h2 style={{ margin: 0 }}>{isPcu ? 'VALD and OVR Data' : 'VALD Force Plate Data'}</h2>
-          </div>
-          <div className={styles.valdLogo}>
-            <Image src="/vald.webp" alt="VALD" fill style={{ objectFit: 'cover', objectPosition: 'center' }} />
-          </div>
-        </div>
         <ValdOvrDataDashboard
           snapshot={snapshot}
           valdError={error}
@@ -251,6 +253,9 @@ export default async function ForcePlatesPage({
           canManageViews={isStaff}
           canImport={isStaff}
           showOvr={isPcu}
+          role={session.role}
+          schoolCode={selectedSchoolCode}
+          initialTab={initialTab}
           availableTestTypes={availableTestTypes}
         />
       </div>

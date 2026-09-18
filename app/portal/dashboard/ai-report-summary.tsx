@@ -7,7 +7,31 @@ import styles from './ai-report-summary.module.css';
 type ReportValue = string | number | null;
 type ReportRow = Record<string, ReportValue>;
 type ChartPoint = Record<string, unknown>;
-export type AiReportPanel = { id: string; title: string; panelType: string; requestUrl: string; tableColumns: string[]; tableRows: ReportRow[]; chartPoints: object[]; options?: { heatStat?: string; contact2dColorBy?: string; contact3dColorBy?: string; batSpeedColorBy?: string; sprayView?: string } };
+type BiomechanicsPercentiles = {
+  selectedGroupId: string;
+  selectedGroupLabel: string;
+  comparisonWindow?: string;
+  rows: Record<string, Record<string, {
+    value: number;
+    percentile: number | null;
+    sampleSize: number;
+    rankingDirection?: 'higher_is_higher' | 'lower_is_better' | 'handedness_normalized';
+  }>>;
+};
+type ForcePlatePercentileConfig = {
+  player: string;
+  groupId: string;
+  testType: string;
+  metrics: Array<{ value: string; label: string; metricName: string; metricUnit: string }>;
+};
+type BiomechanicsPercentileConfig = {
+  player: string;
+  groupId: string;
+  forceMode: 'force' | 'bw';
+  pitchType: string;
+  metrics: Array<{ value: string; label: string }>;
+};
+export type AiReportPanel = { id: string; title: string; panelType: string; requestUrl: string; tableColumns: string[]; tableRows: ReportRow[]; chartPoints: object[]; options?: { heatStat?: string; contact2dColorBy?: string; contact3dColorBy?: string; batSpeedColorBy?: string; sprayView?: string; biomechanicsPercentiles?: BiomechanicsPercentiles; forcePlatePercentileConfig?: ForcePlatePercentileConfig; biomechanicsPercentileConfig?: BiomechanicsPercentileConfig } };
 type AiReportSummaryProps = { reportType: string; title: string; playerName?: string; reportStart: string; reportEnd: string; panels: AiReportPanel[]; autoGenerate?:boolean; onReady?:(ready:boolean)=>void };
 type MetricField = { key: string; label: string };
 type MetricAggregate = { group: string; metric: string; average: number; minimum: number; maximum: number; sampleSize: number };
@@ -58,9 +82,9 @@ function aggregatePoints(points: object[], fields: MetricField[]): MetricAggrega
 
 function usageRows(points: object[]): Array<{ pitchType: string; count: number; share: number }> { const counts = new Map<string, number>(); for (const rawPoint of points) { const pitchType = String((rawPoint as ChartPoint).pitch_type ?? 'Unknown').trim() || 'Unknown'; counts.set(pitchType, (counts.get(pitchType) ?? 0) + 1); } const total = Array.from(counts.values()).reduce((sum, count) => sum + count, 0) || 1; return Array.from(counts, ([pitchType, count]) => ({ pitchType, count, share: Number(((count / total) * 100).toFixed(1)) })); }
 function sanitizeTable(columns: string[], rows: ReportRow[]) { const visibleColumns = columns.map(String).filter(Boolean); return { columns: visibleColumns, rows: rows.slice(0, 80).map((row) => Object.fromEntries(visibleColumns.map((column) => [column, row[column] ?? null]))) }; }
-function compareTables(current: ReturnType<typeof sanitizeTable>, reference: ReturnType<typeof sanitizeTable>) { const [groupColumn, ...metricColumns] = current.columns; if (!groupColumn) return []; const referenceRows = new Map(reference.rows.map((row) => [String(row[groupColumn] ?? '').trim().toLowerCase(), row])); return current.rows.flatMap((row) => { const group = String(row[groupColumn] ?? 'All'); const referenceRow = referenceRows.get(group.trim().toLowerCase()); if (!referenceRow) return []; const currentSampleSize = finiteNumber(row['#'] ?? row.P ?? row.Pitches ?? row.PA); const referenceSampleSize = finiteNumber(referenceRow['#'] ?? referenceRow.P ?? referenceRow.Pitches ?? referenceRow.PA); return metricColumns.flatMap((metric) => { const currentValue = finiteNumber(row[metric]); const referenceValue = finiteNumber(referenceRow[metric]); return currentValue === null || referenceValue === null ? [] : [{ group, metric, current: currentValue, referenceAverage: referenceValue, difference: Number((currentValue - referenceValue).toFixed(2)), currentSampleSize, referenceSampleSize }]; }); }); }
+function compareTables(current: ReturnType<typeof sanitizeTable>, reference: ReturnType<typeof sanitizeTable>) { const groupColumn = current.columns.includes('Pitch Type') ? 'Pitch Type' : current.columns[0]; const metadataColumns = new Set(['Name', 'Date', '#', 'Pitch Type', 'Tags', 'Session']); const metricColumns = current.columns.filter((column) => column !== groupColumn && !metadataColumns.has(column)); if (!groupColumn) return []; const referenceRows = new Map(reference.rows.map((row) => [String(row[groupColumn] ?? '').trim().toLowerCase(), row])); return current.rows.flatMap((row) => { const group = String(row[groupColumn] ?? 'All'); const referenceRow = referenceRows.get(group.trim().toLowerCase()); if (!referenceRow) return []; const currentSampleSize = finiteNumber(row['#'] ?? row.P ?? row.Pitches ?? row.PA); const referenceSampleSize = finiteNumber(referenceRow['#'] ?? referenceRow.P ?? referenceRow.Pitches ?? referenceRow.PA); return metricColumns.flatMap((metric) => { const currentValue = finiteNumber(row[metric]); const referenceValue = finiteNumber(referenceRow[metric]); return currentValue === null || referenceValue === null ? [] : [{ group, metric, current: currentValue, referenceAverage: referenceValue, difference: Number((currentValue - referenceValue).toFixed(2)), currentSampleSize, referenceSampleSize }]; }); }); }
 function compareAggregates(current: MetricAggregate[], reference: MetricAggregate[]) { const referenceMap = new Map(reference.map((item) => [`${item.group}\u0000${item.metric}`, item])); return current.flatMap((item) => { const prior = referenceMap.get(`${item.group}\u0000${item.metric}`); return prior ? [{ group: item.group, metric: item.metric, currentAverage: item.average, referenceAverage: prior.average, difference: Number((item.average - prior.average).toFixed(2)), currentSampleSize: item.sampleSize, referenceSampleSize: prior.sampleSize }] : []; }); }
-function requestForWindow(requestUrl: string, start: string, end: string): string { const url = new URL(requestUrl, window.location.origin); url.searchParams.set('start_date', start); url.searchParams.set('end_date', end); url.searchParams.set('recent_pa_ignore_dates', '0'); return `${url.pathname}?${url.searchParams.toString()}`; }
+function requestForWindow(requestUrl: string, start: string, end: string): string { const url = new URL(requestUrl, window.location.origin); const biomechanics = url.pathname.includes('/biomechanics'); url.searchParams.set(biomechanics ? 'startDate' : 'start_date', start); url.searchParams.set(biomechanics ? 'endDate' : 'end_date', end); url.searchParams.set('recent_pa_ignore_dates', '0'); return `${url.pathname}?${url.searchParams.toString()}`; }
 function mlbBenchmarkRequest(requestUrl: string): string { const url = new URL(requestUrl, window.location.origin); for (const key of ['start_date', 'end_date', 'pitcher', 'hitter', 'catcher', 'chart_only', 'chart_points_limit']) url.searchParams.delete(key); url.searchParams.set('percentile_baseline', '1'); url.searchParams.set('percentile_pool', 'mlb'); url.searchParams.set('include_chart_points', '0'); return `${url.pathname}?${url.searchParams.toString()}`; }
 function requestContext(requestUrl: string) { const url = new URL(requestUrl, window.location.origin); return { sessionType: url.searchParams.get('session_type') ?? 'All', tableMode: url.searchParams.get('table_mode') ?? '', pitchTypes: url.searchParams.get('pitch_types') ?? 'All', countFilter: url.searchParams.get('count_filter') ?? 'All', afterCountFilter: url.searchParams.get('after_count_filter') ?? 'All', batterSide: url.searchParams.get('batter_side') ?? 'All' }; }
 function playerFromPanelRequests(reportType: string, panels: AiReportPanel[]): string {
@@ -72,8 +96,133 @@ function playerFromPanelRequests(reportType: string, panels: AiReportPanel[]): s
   );
   return names.size === 1 ? (Array.from(names)[0] ?? '') : '';
 }
-function currentEvidence(panel: AiReportPanel) { if (panel.panelType === 'Summary Table') return { kind: 'table' as const, ...sanitizeTable(panel.tableColumns, panel.tableRows) }; if (panel.panelType === 'Pitch Usage Pie Chart' || panel.panelType === 'Pitch Usage Bar Chart') return { kind: 'usage' as const, rows: usageRows(panel.chartPoints) }; return { kind: 'chart' as const, aggregates: aggregatePoints(panel.chartPoints, panelMetricFields(panel)) }; }
-function allowedMetrics(panel: AiReportPanel): string[] { if (panel.panelType === 'Summary Table') return panel.tableColumns.slice(1).map(String).filter(Boolean); if (panel.panelType === 'Pitch Usage Pie Chart' || panel.panelType === 'Pitch Usage Bar Chart') return ['Pitch Usage']; const metrics = panelMetricFields(panel).map((field) => field.label); if (panel.panelType === 'Heatmap' && panel.options?.heatStat) metrics.push(panel.options.heatStat); if (panel.panelType === 'Spray Chart') metrics.push('Batted Ball Result'); return Array.from(new Set(metrics)); }
+function currentEvidence(panel: AiReportPanel) {
+  if (panel.panelType === 'Summary Table' || panel.panelType === 'Biomechanics Table') {
+    return {
+      kind: 'table' as const,
+      ...sanitizeTable(panel.tableColumns, panel.tableRows),
+      ...(panel.options?.biomechanicsPercentiles ? { percentiles: panel.options.biomechanicsPercentiles } : {}),
+    };
+  }
+  if (panel.panelType === 'Pitch Usage Pie Chart' || panel.panelType === 'Pitch Usage Bar Chart') return { kind: 'usage' as const, rows: usageRows(panel.chartPoints) };
+  return { kind: 'chart' as const, aggregates: aggregatePoints(panel.chartPoints, panelMetricFields(panel)) };
+}
+function allowedMetrics(panel: AiReportPanel): string[] {
+  if (panel.panelType === 'Summary Table' || panel.panelType === 'Biomechanics Table') {
+    const metadataColumns = new Set(['Name', 'Date', '#', 'Pitch Type', 'Pitch', 'Tags', 'Session']);
+    return panel.tableColumns.map(String).filter((column) => column && !metadataColumns.has(column));
+  }
+  if (panel.panelType === 'Percentile Summary') return Array.from(new Set([
+    ...(panel.options?.forcePlatePercentileConfig?.metrics.map((metric) => metric.label) ?? []),
+    ...(panel.options?.biomechanicsPercentileConfig?.metrics.map((metric) => metric.label) ?? []),
+  ]));
+  if (panel.panelType === 'Pitch Usage Pie Chart' || panel.panelType === 'Pitch Usage Bar Chart') return ['Pitch Usage'];
+  const metrics = panelMetricFields(panel).map((field) => field.label);
+  if (panel.panelType === 'Heatmap' && panel.options?.heatStat) metrics.push(panel.options.heatStat);
+  if (panel.panelType === 'Spray Chart') metrics.push('Batted Ball Result');
+  return Array.from(new Set(metrics));
+}
+
+async function loadForcePlatePercentileEvidence(panel: AiReportPanel, reportStart: string, reportEnd: string) {
+  const config = panel.options?.forcePlatePercentileConfig;
+  if (!config?.player || !config.metrics.length) return { kind: 'percentiles' as const, group: '', rows: [] };
+  const rows = await Promise.all(config.metrics.map(async (metric) => {
+    const rankParams = new URLSearchParams({
+      player: config.player,
+      metricName: metric.metricName,
+      metricUnit: metric.metricUnit,
+      groupId: config.groupId || 'all',
+      testType: config.testType || 'All',
+      mode: 'average',
+      startDate: reportStart,
+      endDate: reportEnd,
+    });
+    const overviewParams = new URLSearchParams({
+      player: config.player,
+      metrics: metric.value,
+      test_type: config.testType || 'All',
+      start_date: reportStart,
+      end_date: reportEnd,
+    });
+    const [rankResponse, overviewResponse] = await Promise.all([
+      fetch(`/api/player/force-plate-percentiles?${rankParams.toString()}`, { cache: 'no-store' }),
+      fetch(`/api/dashboard/force-plates/overview?${overviewParams.toString()}`, { cache: 'no-store' }),
+    ]);
+    const rankPayload = await rankResponse.json().catch(() => ({})) as { selectedGroupLabel?: string; comparisonWindow?: string; stats?: { latest?: { percentile: number | null; sampleSize: number } } };
+    const overviewPayload = await overviewResponse.json().catch(() => ({})) as { chart_points?: Array<Record<string, unknown>> };
+    if (!rankResponse.ok || !overviewResponse.ok) return null;
+    const points = (overviewPayload.chart_points ?? [])
+      .filter((point) => String(point.metric ?? '') === metric.value)
+      .flatMap((point) => {
+        const value = finiteNumber(point.value);
+        const date = String(point.session_date ?? '');
+        return value === null ? [] : [{ value, date }];
+      })
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const latest = points.at(-1);
+    return {
+      metric: metric.label,
+      value: latest?.value ?? null,
+      unit: metric.metricUnit,
+      testType: config.testType || 'All',
+      group: rankPayload.selectedGroupLabel ?? 'All PCU athletes',
+      comparisonWindow: rankPayload.comparisonWindow ?? 'full_history',
+      percentile: rankPayload.stats?.latest?.percentile ?? null,
+      sampleSize: rankPayload.stats?.latest?.sampleSize ?? 0,
+    };
+  }));
+  const visibleRows = rows.filter((row): row is NonNullable<typeof row> => row !== null && row.value !== null);
+  return { kind: 'percentiles' as const, group: visibleRows[0]?.group ?? '', rows: visibleRows };
+}
+
+async function loadPercentileSummaryEvidence(panel: AiReportPanel, reportStart: string, reportEnd: string) {
+  const forcePlate = await loadForcePlatePercentileEvidence(panel, reportStart, reportEnd);
+  const biomechanicsConfig = panel.options?.biomechanicsPercentileConfig;
+  if (!biomechanicsConfig?.player || !biomechanicsConfig.metrics.length) return forcePlate;
+  const params = new URLSearchParams({
+    player: biomechanicsConfig.player,
+    groupId: biomechanicsConfig.groupId || 'all',
+    forceMode: biomechanicsConfig.forceMode || 'force',
+    startDate: reportStart,
+    endDate: reportEnd,
+  });
+  if (biomechanicsConfig.pitchType && biomechanicsConfig.pitchType !== 'All') {
+    params.set('pitchTypes', JSON.stringify([biomechanicsConfig.pitchType]));
+  }
+  const response = await fetch(`/api/player/biomechanics-percentiles?${params.toString()}`, { cache: 'no-store' });
+  const payload = await response.json().catch(() => ({})) as {
+    selectedGroupLabel?: string;
+    comparisonWindow?: string;
+    rows?: Record<string, Record<string, {
+      value: number;
+      percentile: number | null;
+      sampleSize: number;
+      rankingDirection?: 'higher_is_higher' | 'lower_is_better' | 'handedness_normalized';
+    }>>;
+  };
+  if (!response.ok) return forcePlate;
+  const pitchType = biomechanicsConfig.pitchType && biomechanicsConfig.pitchType !== 'All' ? biomechanicsConfig.pitchType : 'All';
+  const rankRow = payload.rows?.[pitchType] ?? payload.rows?.All ?? {};
+  const biomechanicsRows = biomechanicsConfig.metrics.flatMap((metric) => {
+    const rank = rankRow[metric.value];
+    return rank ? [{
+      source: 'AxioForce',
+      metric: metric.label,
+      value: rank.value,
+      pitchType,
+      group: payload.selectedGroupLabel ?? 'All PCU athletes',
+      comparisonWindow: payload.comparisonWindow ?? 'full_history',
+      percentile: rank.percentile,
+      sampleSize: rank.sampleSize,
+      rankingDirection: rank.rankingDirection ?? 'higher_is_higher',
+    }] : [];
+  });
+  return {
+    kind: 'percentiles' as const,
+    group: biomechanicsRows[0]?.group ?? forcePlate.group,
+    rows: [...forcePlate.rows, ...biomechanicsRows],
+  };
+}
 
 function parseDate(value: string): Date { return new Date(`${value || '2000-01-01'}T12:00:00`); }
 function toDateValue(date: Date): string { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; }
@@ -99,7 +248,7 @@ function SummaryDatePicker({ label, value, onChange }: { label: string; value: s
 export default function AiReportSummary({ reportType, title, playerName = '', reportStart, reportEnd, panels, autoGenerate=false, onReady }: AiReportSummaryProps) {
   const duration = Math.max(1, Math.round((Date.parse(reportEnd) - Date.parse(reportStart)) / 86_400_000) + 1);
   const [comparisonStart, setComparisonStart] = useState(() => shiftDate(reportStart, -duration)); const [comparisonEnd, setComparisonEnd] = useState(() => shiftDate(reportStart, -1)); const [summary, setSummary] = useState(''); const [loading, setLoading] = useState(false); const [include, setInclude] = useState(true); const [error, setError] = useState('');
-  const reportPanels = useMemo(() => panels.filter((panel) => panel.panelType !== 'Note Section' && panel.requestUrl), [panels]);
+  const reportPanels = useMemo(() => panels.filter((panel) => panel.panelType !== 'Note Section' && (panel.requestUrl || panel.options?.forcePlatePercentileConfig || panel.options?.biomechanicsPercentileConfig)), [panels]);
   const autoGeneratedKeyRef = useRef('');
   useEffect(() => { setComparisonStart(shiftDate(reportStart, -duration)); setComparisonEnd(shiftDate(reportStart, -1)); setSummary(''); }, [duration, reportEnd, reportStart, reportType, title]);
 
@@ -107,10 +256,30 @@ export default function AiReportSummary({ reportType, title, playerName = '', re
     setLoading(true); setError('');
     try {
       const evidence = await Promise.all(reportPanels.map(async (panel) => {
+        if (panel.panelType === 'Percentile Summary') {
+          const current = await loadPercentileSummaryEvidence(panel, reportStart, reportEnd);
+          return {
+            title: panel.title,
+            panelType: panel.panelType,
+            context: panel.requestUrl ? requestContext(panel.requestUrl) : { sessionType: 'All', tableMode: '', pitchTypes: 'All', countFilter: 'All', afterCountFilter: 'All', batterSide: 'All' },
+            allowedMetrics: allowedMetrics(panel),
+            current,
+            reference: null,
+            comparisons: [],
+            mlbBenchmark: null,
+          };
+        }
         const response = await fetch(requestForWindow(panel.requestUrl, comparisonStart, comparisonEnd), { cache: 'no-store' });
         const referencePayload = await response.json() as { table_columns?: string[]; table_rows?: ReportRow[]; chart_points?: object[]; error?: string };
         if (!response.ok) throw new Error(referencePayload.error || `Could not load the comparison for ${panel.title}.`);
-        const current = currentEvidence(panel); const reference = currentEvidence({ ...panel, tableColumns: referencePayload.table_columns ?? [], tableRows: referencePayload.table_rows ?? [], chartPoints: referencePayload.chart_points ?? [] });
+        const current = currentEvidence(panel);
+        const reference = currentEvidence({
+          ...panel,
+          tableColumns: referencePayload.table_columns ?? [],
+          tableRows: referencePayload.table_rows ?? [],
+          chartPoints: referencePayload.chart_points ?? [],
+          options: panel.options ? { ...panel.options, biomechanicsPercentiles: undefined } : undefined,
+        });
         const comparisons = current.kind === 'table' && reference.kind === 'table' ? compareTables(current, reference) : current.kind === 'chart' && reference.kind === 'chart' ? compareAggregates(current.aggregates, reference.aggregates) : [];
                       let mlbBenchmark: ReturnType<typeof sanitizeTable> | null = null;
         if (panel.panelType === 'Summary Table' && /pitching|hitting/i.test(reportType)) {

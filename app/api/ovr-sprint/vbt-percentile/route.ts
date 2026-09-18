@@ -33,6 +33,8 @@ export async function GET(request: Request) {
     const loadLbs = loadRaw && loadRaw !== 'All' ? Number(loadRaw) : null;
     const groupRaw = String(url.searchParams.get('groupId') ?? 'all').trim();
     const groupId: number | 'all' = groupRaw === 'all' || !groupRaw ? 'all' : Number(groupRaw);
+    const startDate = String(url.searchParams.get('startDate') ?? '').trim() || null;
+    const endDate = String(url.searchParams.get('endDate') ?? '').trim() || null;
     if (!Number.isFinite(playerId) || playerId <= 0 || !exercise || exercise === 'All') {
       return NextResponse.json({ error: 'A valid player and VBT exercise are required.' }, { status: 400 });
     }
@@ -44,9 +46,15 @@ export async function GET(request: Request) {
     }
     const [groups, result] = await Promise.all([
       listOvrVbtGroups({ organizationId, schoolCode }),
-      getOvrVbtPercentiles({ organizationId, schoolCode, playerId, exercise, loadLbs, groupId }),
+      getOvrVbtPercentiles({ organizationId, schoolCode, playerId, exercise, loadLbs, groupId, startDate, endDate }),
     ]);
-    return NextResponse.json({ groups, selectedGroupId: groupId, result }, { headers: { 'cache-control': 'private, no-store' } });
+    return NextResponse.json({
+      groups,
+      selectedGroupId: groupId,
+      comparisonWindow: 'full_history',
+      selectedWindow: { startDate, endDate },
+      result,
+    }, { headers: { 'cache-control': 'private, no-store' } });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Unable to load VBT percentiles.' }, { status: 500 });
   }

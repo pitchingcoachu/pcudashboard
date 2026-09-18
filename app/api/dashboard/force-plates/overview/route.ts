@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { forcePlateFlagMetric, parseForcePlateFlagMetric } from '../../../../../lib/dashboard-metric-catalog';
 import { loadForcePlateMetricCatalog, loadForcePlateReportMetricRows } from '../../../../../lib/force-plate-neon-db';
+import { loadPerformanceDailyRollups } from '../../../../../lib/performance-rollups';
 import { canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../../lib/programming-scope';
 import { getPlayerForUser, listPlayerChoicesByOrganization } from '../../../../../lib/training-db';
 
@@ -49,16 +50,43 @@ export async function GET(request: Request) {
   const defaultMetric = catalog.metrics[0] ?? null;
   const parsedMetrics = encodedMetrics.map(parseForcePlateFlagMetric).filter((metric): metric is { metricName: string; metricUnit: string } => Boolean(metric));
   const metrics = parsedMetrics.length ? parsedMetrics : defaultMetric ? [defaultMetric] : [];
-  const rows = await loadForcePlateReportMetricRows({
+  const testType = String(url.searchParams.get('test_type') ?? 'All');
+  const startDate = String(url.searchParams.get('start_date') ?? '');
+  const endDate = String(url.searchParams.get('end_date') ?? '');
+  const selectedNames = requestedPlayers.length ? requestedPlayers : allowedNames;
+  const selectedNorms = new Set(selectedNames.map(normalizeName));
+  const permittedNames = allowedNames.filter((name) => selectedNorms.has(normalizeName(name)));
+  const rollups = await loadPerformanceDailyRollups({
     organizationId,
     schoolCode: 'PCU',
-    allowedPlayerNames: allowedNames,
-    selectedPlayerNames: requestedPlayers,
-    metrics,
-    testType: String(url.searchParams.get('test_type') ?? 'All'),
-    startDate: String(url.searchParams.get('start_date') ?? ''),
-    endDate: String(url.searchParams.get('end_date') ?? ''),
+    source: 'vald',
+    playerNames: permittedNames,
+    startDate: startDate || null,
+    endDate: endDate || null,
+    activityTypes: testType && testType !== 'All' ? [testType] : undefined,
+    metricKeys: metrics.map((metric) => `${metric.metricName}\u001f${metric.metricUnit}`),
   });
+  const rows = rollups.length
+    ? rollups.map((row) => ({
+        playerName: row.playerName,
+        date: row.sessionDate,
+        dateTime: `${row.sessionDate}T12:00:00.000Z`,
+        testType: row.activityType,
+        metricName: row.metricName,
+        metricUnit: row.metricUnit,
+        value: row.sampleCount > 0 ? row.valueSum / row.sampleCount : row.latestValue,
+        samples: row.sampleCount,
+      }))
+    : await loadForcePlateReportMetricRows({
+        organizationId,
+        schoolCode: 'PCU',
+        allowedPlayerNames: allowedNames,
+        selectedPlayerNames: requestedPlayers,
+        metrics,
+        testType,
+        startDate,
+        endDate,
+      });
 
   const metricKeys = metrics.map((metric) => forcePlateFlagMetric(metric.metricName, metric.metricUnit));
   const tableColumns = ['Date', ...(requestedPlayers.length === 1 ? [] : ['Player']), 'Test Type', ...metricKeys];

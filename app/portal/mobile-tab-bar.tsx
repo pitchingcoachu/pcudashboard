@@ -20,6 +20,7 @@ type TabDef = {
   label: string;
   icon: React.ReactNode;
   badge?: number;
+  activePaths?: string[];
 };
 
 function formatBadge(count: number): string {
@@ -71,7 +72,13 @@ export default function MobileTabBar({
       badge: isPlayer && unreadNotifications > 0 ? unreadNotifications : undefined,
     },
     { key: 'workouts', href: workoutsHref, label: 'Workouts', icon: <WorkoutsIcon locked={workoutsLocked} /> },
-    { key: 'dashboard', href: '/portal/dashboard', label: 'Dashboard', icon: <DashboardIcon /> },
+    {
+      key: 'dashboard',
+      href: '/portal/dashboard',
+      label: 'Data',
+      icon: <DashboardIcon />,
+      activePaths: ['/portal/dashboard', '/portal/force-plates'],
+    },
     ...(isStaff && gameTrackerVisible
       ? [{ key: 'game-tracker', href: '/portal/admin/game-tracker', label: 'Game Tracker', icon: <GameTrackerIcon /> }]
       : []),
@@ -84,8 +91,15 @@ export default function MobileTabBar({
     },
   ];
 
-  const sorted = [...tabs].sort((a, b) => b.href.length - a.href.length);
-  const activeKey = sorted.find((tab) => pathname === tab.href || pathname?.startsWith(`${tab.href}/`))?.key;
+  const sorted = [...tabs].sort((a, b) => {
+    const aLength = Math.max(a.href.length, ...(a.activePaths ?? []).map((path) => path.length));
+    const bLength = Math.max(b.href.length, ...(b.activePaths ?? []).map((path) => path.length));
+    return bLength - aLength;
+  });
+  const activeKey = sorted.find((tab) => {
+    const paths = tab.activePaths?.length ? tab.activePaths : [tab.href];
+    return paths.some((path) => pathname === path || pathname?.startsWith(`${path}/`));
+  })?.key;
 
   return (
     <nav className="portal-tabbar" aria-label="Primary Navigation">

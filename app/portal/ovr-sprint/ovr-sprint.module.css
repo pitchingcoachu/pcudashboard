@@ -11,7 +11,7 @@
 }
 
 .pageHeadline { display:flex; align-items:center; justify-content:space-between; gap:20px; }
-.dataTabs { display:flex; width:min(100%,760px); gap:6px; padding:5px; overflow-x:auto; border:1px solid rgba(255,255,255,.1); border-radius:16px; background:rgba(0,0,0,.36); }
+.dataTabs { display:flex; width:min(100%,920px); gap:6px; padding:5px; overflow-x:auto; border:1px solid rgba(255,255,255,.1); border-radius:16px; background:rgba(0,0,0,.36); }
 .dataTabs button { flex:1; min-width:132px; min-height:48px; padding:0 16px; border:0; border-radius:12px; color:rgba(230,223,220,.62); background:transparent; font:inherit; font-size:.82rem; font-weight:950; letter-spacing:.08em; text-transform:uppercase; white-space:nowrap; cursor:pointer; }
 .dataTabs .active { color:#fff; background:rgb(var(--portal-accent-rgb,205,18,57)); box-shadow:0 10px 30px rgba(var(--portal-accent-rgb,205,18,57),.18); }
 .loadingPanel { min-height:260px; display:grid; place-items:center; border:1px solid rgba(255,255,255,.1); border-radius:22px; color:rgba(230,223,220,.62); background:rgba(8,8,10,.86); }
@@ -52,6 +52,9 @@
 .primaryFilters label,.secondaryFilters label,.leaderFilters label { display:grid; min-width:0; gap:7px; }
 .playerField { display:grid; min-width:0; gap:7px; }
 .playerField > span { color:var(--ovr-muted); font-size:.68rem; font-weight:850; letter-spacing:.11em; text-transform:uppercase; }
+.lockedPlayerField { display:flex; min-height:48px; padding:0 14px; align-items:center; justify-content:space-between; gap:12px; border:1px solid var(--ovr-line); border-radius:12px; color:var(--ovr-ink); background:rgba(255,255,255,.035); }
+.lockedPlayerField > span { overflow:hidden; color:var(--ovr-ink); font-size:.9rem; text-overflow:ellipsis; white-space:nowrap; }
+.lockedPlayerField small { flex:0 0 auto; color:var(--ovr-muted); font-size:.62rem; font-weight:850; letter-spacing:.08em; text-transform:uppercase; }
 .athletePicker { position:relative; min-width:0; }
 .athletePicker > button { display:flex; align-items:center; justify-content:space-between; gap:16px; width:100%; min-height:48px; padding:0 14px; border:1px solid var(--ovr-line); border-radius:12px; color:var(--ovr-ink); background:rgba(255,255,255,.035); font:inherit; font-size:.9rem; text-align:left; cursor:pointer; }
 .athletePicker > button span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.athletePicker > button b { color:var(--ovr-muted); font-size:1.15rem; }

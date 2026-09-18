@@ -9,6 +9,7 @@ type Props = {
   initialUploads: OvrSprintUpload[];
   canImport: boolean;
   viewMode?: 'sprint' | 'imports';
+  playerOnly?: boolean;
 };
 type Metric = 'totalTime' | 'splitTime' | 'speedMph';
 type Tab = 'athlete' | 'leaderboard' | 'imports';
@@ -35,13 +36,23 @@ type PercentileResponse = {
   results?: Record<string, PercentileEntry>;
   error?: string;
 };
+type CustomTableConfig = {
+  id: number;
+  name: string;
+  columns: string[];
+  createdByEmail?: string | null;
+  visibility?: 'private' | 'organization' | 'global';
+  createdAt: string;
+  updatedAt: string;
+};
+type LeaderboardTableMode = 'Fixed' | 'Custom';
 
 const METRICS: Array<{ key: Metric; label: string; shortLabel: string; unit: string; lowerIsBetter: boolean }> = [
   { key: 'totalTime', label: 'Total Time', shortLabel: 'Time', unit: 's', lowerIsBetter: true },
   { key: 'splitTime', label: 'Split Time', shortLabel: 'Split', unit: 's', lowerIsBetter: true },
   { key: 'speedMph', label: 'Speed', shortLabel: 'Speed', unit: 'mph', lowerIsBetter: false },
 ];
-const SPRINT_PANEL_EXERCISES = ['10yd Sprint', '40yd Sprint', '60yd Sprint'] as const;
+const SPRINT_PANEL_EXERCISES = ['10yd Sprint', '40yd Sprint', '60yd Sprint', '300yd Sprint', '5-10-5 (Pro Agility)'] as const;
 
 function metricValue(row: OvrSprintResult, metric: Metric): number | null {
   const value = row[metric];
@@ -63,6 +74,17 @@ function startMethod(row: OvrSprintResult): string {
   return row.triggerStart ? 'Trigger' : row.inBeamStart ? 'In-beam' : 'Flying';
 }
 
+// Display-only rename: OVR's export (and everything stored/matched against
+// in the DB) still calls this exercise "300yd Sprint" -- only the on-screen
+// label changes, so imports/percentile lookups/custom-table column IDs all
+// keep working against the real name.
+const EXERCISE_DISPLAY_NAMES: Record<string, string> = {
+  '300yd Sprint': '300yd Shuttle',
+};
+function exerciseDisplayLabel(name: string): string {
+  return EXERCISE_DISPLAY_NAMES[name] ?? name;
+}
+
 function csvCell(value: unknown): string {
   const raw = String(value ?? '');
   const protectedValue = /^[=+@]/.test(raw) || (/^-/.test(raw) && !/^-[\d.]+$/.test(raw)) ? `'${raw}` : raw;
@@ -71,7 +93,7 @@ function csvCell(value: unknown): string {
 
 function downloadCsv(rows: OvrSprintResult[]) {
   const headers = ['Athlete', 'Date', 'Exercise', 'Sprint #', 'Total Time (s)', 'Start', 'Split #', 'Split Time (s)', 'Distance (yd)', 'Speed (mph)', 'Note'];
-  const body = rows.map((row) => [row.athleteName, row.date, row.exercise, row.sprintNumber, row.totalTime,
+  const body = rows.map((row) => [row.athleteName, row.date, exerciseDisplayLabel(row.exercise), row.sprintNumber, row.totalTime,
     startMethod(row), row.splitNumber, row.splitTime,
     row.distanceYards ?? '', row.speedMph ?? '', row.note]);
   const csv = `\uFEFF${[headers, ...body].map((row) => row.map(csvCell).join(',')).join('\r\n')}`;
@@ -89,13 +111,40 @@ function downloadLeaderboardCsv(rows: LeaderboardRow[], tests: string[], valueTy
   const timesByTest = valueType === 'best' ? 'bestTimes' : 'averages';
   const speedsByTest = valueType === 'best' ? 'bestSpeeds' : 'speeds';
   const csv = `\uFEFF${[
-    ['Player', ...tests.flatMap((test) => [`${test} ${timeLabel}`, `${test} ${speedLabel}`, `${test} Trials`])],
+    ['Player', ...tests.flatMap((test) => [`${exerciseDisplayLabel(test)} ${timeLabel}`, `${exerciseDisplayLabel(test)} ${speedLabel}`, `${exerciseDisplayLabel(test)} Trials`])],
     ...rows.map((row) => [row.name, ...tests.flatMap((test) => [row[timesByTest][test]?.toFixed(3) ?? '', row[speedsByTest][test]?.toFixed(2) ?? '', String(row.counts[test] ?? 0)])]),
   ].map((row) => row.map(csvCell).join(',')).join('\r\n')}`;
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
   const anchor = document.createElement('a');
   anchor.href = url;
   anchor.download = `ovr-sprint-leaderboard-${new Date().toISOString().slice(0, 10)}.csv`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function downloadCustomLeaderboardCsv(
+  rows: LeaderboardRow[],
+  columnIds: string[],
+  labelFor: (id: string) => string,
+  valueFor: (id: string, row: LeaderboardRow) => number | null,
+  countFor: (id: string, row: LeaderboardRow) => number
+) {
+  const csv = `\uFEFF${[
+    ['Player', ...columnIds.map((id) => labelFor(id))],
+    ...rows.map((row) => [
+      row.name,
+      ...columnIds.map((id) => {
+        if (id.endsWith('::trials')) return String(countFor(id, row));
+        const value = valueFor(id, row);
+        if (value === null) return '';
+        return id.includes('::speed') ? value.toFixed(2) : value.toFixed(3);
+      }),
+    ]),
+  ].map((row) => row.map(csvCell).join(',')).join('\r\n')}`;
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `ovr-sprint-leaderboard-custom-${new Date().toISOString().slice(0, 10)}.csv`;
   anchor.click();
   URL.revokeObjectURL(url);
 }
@@ -148,6 +197,48 @@ function percentileTierClass(percentile: number): string {
   if (percentile < 34) return styles.percentileLow;
   if (percentile < 67) return styles.percentileMid;
   return styles.percentileHigh;
+}
+
+// Ported from biomechanics-suite.tsx's / pitching-suite.tsx's custom-table
+// system -- same generic /api/dashboard/pitching/custom-tables backend, just
+// a different column-ID vocabulary (see leaderboardColumnLabel/Value below).
+function customTableOptionLabel(item: CustomTableConfig): string {
+  const name = String(item.name ?? '').trim();
+  const creator = String(item.createdByEmail ?? '').trim();
+  return creator ? `${name} (${creator})` : name;
+}
+
+function reorderColumns(columns: string[], fromIndex: number, toIndex: number): string[] {
+  if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return columns;
+  if (fromIndex >= columns.length || toIndex >= columns.length) return columns;
+  const next = [...columns];
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  return next;
+}
+
+// Column ID scheme for custom leaderboard tables: `${exercise}::total::time`
+// / `::total::speed` / `::total::trials` for the aggregate columns (same
+// data the fixed table already shows), and `${exercise}::split:${n}::time`
+// / `::split:${n}::speed` for split-level columns (no trials variant --
+// split count always equals the exercise's trial count).
+function parseLeaderboardColumnId(id: string): { exercise: string; kind: 'total' | 'split'; splitNumber: number | null; field: 'time' | 'speed' | 'trials' } | null {
+  const parts = id.split('::');
+  if (parts.length !== 3) return null;
+  const [exercise, kindPart, field] = parts;
+  if (field !== 'time' && field !== 'speed' && field !== 'trials') return null;
+  if (kindPart === 'total') return { exercise, kind: 'total', splitNumber: null, field };
+  const splitMatch = kindPart.match(/^split:(\d+)$/);
+  if (!splitMatch) return null;
+  return { exercise, kind: 'split', splitNumber: Number(splitMatch[1]), field };
+}
+
+function cumulativeSplitYards(splitDistancesByNumber: Map<number, number>, splitNumber: number): number {
+  let sum = 0;
+  for (const [number, yards] of splitDistancesByNumber.entries()) {
+    if (number <= splitNumber) sum += yards;
+  }
+  return sum;
 }
 
 function chartPointsForRows(rows: OvrSprintResult[], metric: Metric, displayMode: DisplayMode, lowerIsBetter: boolean): ChartPoint[] {
@@ -217,7 +308,7 @@ function SprintChart({ points, metric, mode, athlete, reduceLabel }: { points: C
           const pointX = x(point);
           const pointY = y(point.value);
           const color = SERIES_COLORS[seriesIndex % SERIES_COLORS.length];
-          const title = `${point.exercise} · ${formatDate(point.date)} · ${formatValue(point.value, metric)} ${metric === 'speedMph' ? 'mph' : 's'}${point.count > 1 ? ` · ${point.count} trials` : ''}`;
+          const title = `${exerciseDisplayLabel(point.exercise)} · ${formatDate(point.date)} · ${formatValue(point.value, metric)} ${metric === 'speedMph' ? 'mph' : 's'}${point.count > 1 ? ` · ${point.count} trials` : ''}`;
           if (mode === 'bar') {
             const slotWidth = Math.min(38, (plotRight - plotLeft) / Math.max(1, dates.length));
             const barWidth = Math.max(3, (slotWidth - 4) / Math.max(1, series.length));
@@ -229,19 +320,19 @@ function SprintChart({ points, metric, mode, athlete, reduceLabel }: { points: C
         {hoveredPoint ? <g role="tooltip" pointerEvents="none">
           <rect x={tooltipX} y={tooltipY} width="194" height="64" rx="8" fill="rgba(15,23,42,.97)" stroke="rgba(230,30,73,.8)" strokeWidth="1" />
           <text x={tooltipX + 10} y={tooltipY + 15} fill="#fff" fontSize="10" fontWeight="800">{athlete}</text>
-          <text x={tooltipX + 10} y={tooltipY + 29} fill="#cbd5e1" fontSize="9">{hoveredPoint.exercise} · {formatDate(hoveredPoint.date)}</text>
+          <text x={tooltipX + 10} y={tooltipY + 29} fill="#cbd5e1" fontSize="9">{exerciseDisplayLabel(hoveredPoint.exercise)} · {formatDate(hoveredPoint.date)}</text>
           <text x={tooltipX + 10} y={tooltipY + 46} fill="#fff" fontSize="13" fontWeight="800">{formatValue(hoveredPoint.value, metric)} {metric === 'speedMph' ? 'mph' : 's'}</text>
           <text x={tooltipX + 10} y={tooltipY + 58} fill="#94a3b8" fontSize="8">{hoveredPoint.count > 1 ? `${reduceLabel} of ${hoveredPoint.count} trials` : 'Individual trial'}</text>
         </g> : null}
         {dates.map((date, index) => index % labelEvery === 0 || index === dates.length - 1 ? <text key={date} x={dateX(date)} y="211" textAnchor="middle" className={styles.axisText}>{formatDate(date)}</text> : null)}
         <text x="295" y="227" textAnchor="middle" className={styles.axisText}>Date</text>
       </svg>
-      {series.length > 1 ? <div className={styles.chartLegend}>{series.map((exercise, index) => <span key={exercise}><i style={{ background: SERIES_COLORS[index % SERIES_COLORS.length] }} />{exercise}</span>)}</div> : null}
+      {series.length > 1 ? <div className={styles.chartLegend}>{series.map((exercise, index) => <span key={exercise}><i style={{ background: SERIES_COLORS[index % SERIES_COLORS.length] }} />{exerciseDisplayLabel(exercise)}</span>)}</div> : null}
     </div>
   );
 }
 
-export default function OvrSprintDashboard({ initialResults, initialUploads, canImport, viewMode = 'sprint' }: Props) {
+export default function OvrSprintDashboard({ initialResults, initialUploads, canImport, viewMode = 'sprint', playerOnly = false }: Props) {
   const [results, setResults] = useState(initialResults);
   const [uploads, setUploads] = useState(initialUploads);
   const [tab, setTab] = useState<Tab>(viewMode === 'imports' ? 'imports' : 'athlete');
@@ -256,6 +347,17 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
   const [leaderSort, setLeaderSort] = useState<{ key: string; direction: 'asc' | 'desc' }>({ key: 'Player', direction: 'asc' });
   const [leaderDisplay, setLeaderDisplay] = useState<'values' | 'percentiles' | 'both'>('values');
   const [leaderValueType, setLeaderValueType] = useState<LeaderValueType>('average');
+  const [leaderboardTableMode, setLeaderboardTableMode] = useState<LeaderboardTableMode>('Fixed');
+  const [customTables, setCustomTables] = useState<CustomTableConfig[]>([]);
+  const [loadingCustomTables, setLoadingCustomTables] = useState(false);
+  const [selectedCustomTableId, setSelectedCustomTableId] = useState<number | null>(null);
+  const [customTableName, setCustomTableName] = useState('');
+  const [customTableColumns, setCustomTableColumns] = useState<string[]>([]);
+  const [customTableVisibility, setCustomTableVisibility] = useState<'private' | 'organization' | 'global'>('organization');
+  const [customSaveState, setCustomSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [customSaveMessage, setCustomSaveMessage] = useState('');
+  const [customColumnToAdd, setCustomColumnToAdd] = useState('');
+  const [dragColumnIndex, setDragColumnIndex] = useState<number | null>(null);
   const [startDate, setStartDate] = useState(() => initialResults.map((row) => row.date).sort()[0] ?? '');
   const [endDate, setEndDate] = useState(() => initialResults.map((row) => row.date).sort().at(-1) ?? '');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -309,9 +411,8 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
       groupId: String(percentileGroupId),
     });
     for (const entry of SPRINT_PANEL_EXERCISES) params.append('exercise', entry);
-    // Deliberately no startDate/endDate: percentiles always compare against
-    // each athlete's and the cohort's full history, not the currently
-    // filtered date range -- a narrow filter shouldn't shrink the sample.
+    if (startDate) params.set('startDate', startDate);
+    if (endDate) params.set('endDate', endDate);
     fetch(`/api/ovr-sprint/percentile?${params.toString()}`, { cache: 'no-store' })
       .then((response) => response.json())
       .then((payload: PercentileResponse) => {
@@ -323,7 +424,7 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
       .catch(() => { if (active) { setPercentileError('Unable to load percentile data.'); setPanelPercentiles({}); } })
       .finally(() => { if (active) setPercentileLoading(false); });
     return () => { active = false; };
-  }, [tab, athletePlayerId, percentileGroupId]);
+  }, [tab, athletePlayerId, percentileGroupId, startDate, endDate]);
 
   // Each card shows the average time from the latest session and compares it
   // with the average of the athlete's prior sessions in the preceding 30 days.
@@ -355,6 +456,7 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
       }
       const favorable = trendPct === null || Math.abs(trendPct) < .0001 ? null : trendPct < 0;
       const percentileEntry = panelPercentiles[exerciseName];
+
       return {
         exercise: exerciseName,
         unit: 's',
@@ -436,6 +538,220 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
       : { key, direction: key.startsWith('speed:') ? 'desc' : 'asc' });
   }
 
+  // Split-level leaderboard aggregation, mirroring `leaderboard` above but
+  // grouped one level deeper (athlete -> exercise -> splitNumber) since the
+  // fixed leaderboard only ever tracks whole-attempt totals. Only needed for
+  // custom-table split columns; the fixed table and aggregate custom columns
+  // both keep using `leaderboard` unchanged.
+  const splitLeaderboard = useMemo(() => {
+    const grouped = new Map<string, Map<string, Map<number, { times: number[]; speeds: number[] }>>>();
+    for (const row of filtered) {
+      const byExercise = grouped.get(row.athleteName) ?? new Map<string, Map<number, { times: number[]; speeds: number[] }>>();
+      const bySplit = byExercise.get(row.exercise) ?? new Map<number, { times: number[]; speeds: number[] }>();
+      const entry = bySplit.get(row.splitNumber) ?? { times: [], speeds: [] };
+      entry.times.push(row.splitTime);
+      if (row.speedMph !== null) entry.speeds.push(row.speedMph);
+      bySplit.set(row.splitNumber, entry);
+      byExercise.set(row.exercise, bySplit);
+      grouped.set(row.athleteName, byExercise);
+    }
+    const result = new Map<string, { averageTime: number | null; bestTime: number | null; averageSpeed: number | null; bestSpeed: number | null; count: number }>();
+    for (const [name, byExercise] of grouped.entries()) {
+      for (const [exerciseName, bySplit] of byExercise.entries()) {
+        for (const [splitNumber, values] of bySplit.entries()) {
+          result.set(`${name}|${exerciseName}|${splitNumber}`, {
+            averageTime: average(values.times),
+            bestTime: values.times.length ? Math.min(...values.times) : null,
+            averageSpeed: average(values.speeds),
+            bestSpeed: values.speeds.length ? Math.max(...values.speeds) : null,
+            count: values.times.length,
+          });
+        }
+      }
+    }
+    return result;
+  }, [filtered]);
+
+  const splitLeaderboardPercentiles = useMemo(() => {
+    const timesByKey = new Map<string, Array<number | null>>();
+    const speedsByKey = new Map<string, Array<number | null>>();
+    for (const [key, stat] of splitLeaderboard.entries()) {
+      const exerciseSplitKey = key.slice(key.indexOf('|') + 1);
+      const time = leaderValueType === 'best' ? stat.bestTime : stat.averageTime;
+      const speed = leaderValueType === 'best' ? stat.bestSpeed : stat.averageSpeed;
+      timesByKey.set(exerciseSplitKey, [...(timesByKey.get(exerciseSplitKey) ?? []), time]);
+      speedsByKey.set(exerciseSplitKey, [...(speedsByKey.get(exerciseSplitKey) ?? []), speed]);
+    }
+    const result = new Map<string, { time: number | null; speed: number | null }>();
+    for (const [key, stat] of splitLeaderboard.entries()) {
+      const exerciseSplitKey = key.slice(key.indexOf('|') + 1);
+      const time = leaderValueType === 'best' ? stat.bestTime : stat.averageTime;
+      const speed = leaderValueType === 'best' ? stat.bestSpeed : stat.averageSpeed;
+      result.set(key, {
+        time: clientPercentile(time, timesByKey.get(exerciseSplitKey) ?? [], true),
+        speed: clientPercentile(speed, speedsByKey.get(exerciseSplitKey) ?? [], false),
+      });
+    }
+    return result;
+  }, [splitLeaderboard, leaderValueType]);
+
+  // Distinct split numbers per exercise, used to build the "Add Column"
+  // picker for split columns -- an exercise with only a single split (10/40/
+  // 60yd Sprint, split 1 == the whole attempt) doesn't get split columns
+  // since they'd be redundant with its total columns.
+  const splitNumbersByExercise = useMemo(() => {
+    const map = new Map<string, Set<number>>();
+    for (const row of results) {
+      const set = map.get(row.exercise) ?? new Set<number>();
+      set.add(row.splitNumber);
+      map.set(row.exercise, set);
+    }
+    return map;
+  }, [results]);
+
+  const splitDistancesByExercise = useMemo(() => {
+    const map = new Map<string, Map<number, number>>();
+    for (const row of results) {
+      if (row.distanceYards === null) continue;
+      const bySplit = map.get(row.exercise) ?? new Map<number, number>();
+      if (!bySplit.has(row.splitNumber)) bySplit.set(row.splitNumber, row.distanceYards);
+      map.set(row.exercise, bySplit);
+    }
+    return map;
+  }, [results]);
+
+  const availableLeaderboardColumns = useMemo(() => {
+    const ids: string[] = [];
+    for (const exerciseName of exercises) {
+      ids.push(`${exerciseName}::total::time`, `${exerciseName}::total::speed`, `${exerciseName}::total::trials`);
+      const splitNumbers = [...(splitNumbersByExercise.get(exerciseName) ?? [])].sort((a, b) => a - b);
+      if (splitNumbers.length > 1) {
+        for (const splitNumber of splitNumbers) {
+          ids.push(`${exerciseName}::split:${splitNumber}::time`, `${exerciseName}::split:${splitNumber}::speed`);
+        }
+      }
+    }
+    return ids;
+  }, [exercises, splitNumbersByExercise]);
+
+  function leaderboardColumnLabel(id: string): string {
+    const parsed = parseLeaderboardColumnId(id);
+    if (!parsed) return id;
+    const exerciseLabel = exerciseDisplayLabel(parsed.exercise);
+    const fieldLabel = parsed.field === 'time' ? 'Time' : parsed.field === 'speed' ? 'Speed' : 'Trials';
+    if (parsed.kind === 'total') return `${exerciseLabel} · Total ${fieldLabel}`;
+    const distances = splitDistancesByExercise.get(parsed.exercise) ?? new Map<number, number>();
+    const cumulative = cumulativeSplitYards(distances, parsed.splitNumber ?? 0);
+    return `${exerciseLabel} · Split ${parsed.splitNumber}${cumulative ? ` (${cumulative}yd)` : ''} ${fieldLabel}`;
+  }
+
+  function leaderboardColumnValue(id: string, row: LeaderboardRow): number | null {
+    const parsed = parseLeaderboardColumnId(id);
+    if (!parsed) return null;
+    if (parsed.kind === 'total') {
+      if (parsed.field === 'time') return (leaderValueType === 'best' ? row.bestTimes : row.averages)[parsed.exercise] ?? null;
+      if (parsed.field === 'speed') return (leaderValueType === 'best' ? row.bestSpeeds : row.speeds)[parsed.exercise] ?? null;
+      return row.counts[parsed.exercise] ?? null;
+    }
+    const stat = splitLeaderboard.get(`${row.name}|${parsed.exercise}|${parsed.splitNumber}`);
+    if (!stat) return null;
+    if (parsed.field === 'time') return leaderValueType === 'best' ? stat.bestTime : stat.averageTime;
+    return leaderValueType === 'best' ? stat.bestSpeed : stat.averageSpeed;
+  }
+
+  function leaderboardColumnCount(id: string, row: LeaderboardRow): number {
+    const parsed = parseLeaderboardColumnId(id);
+    if (!parsed) return 0;
+    if (parsed.kind === 'total') return row.counts[parsed.exercise] ?? 0;
+    return splitLeaderboard.get(`${row.name}|${parsed.exercise}|${parsed.splitNumber}`)?.count ?? 0;
+  }
+
+  function leaderboardColumnPercentile(id: string, row: LeaderboardRow): { time: number | null; speed: number | null } {
+    const parsed = parseLeaderboardColumnId(id);
+    if (!parsed) return { time: null, speed: null };
+    if (parsed.kind === 'total') return leaderboardPercentiles.get(`${row.name}|${parsed.exercise}`) ?? { time: null, speed: null };
+    return splitLeaderboardPercentiles.get(`${row.name}|${parsed.exercise}|${parsed.splitNumber}`) ?? { time: null, speed: null };
+  }
+
+  const loadCustomTables = async () => {
+    setLoadingCustomTables(true);
+    setCustomSaveState('idle');
+    setCustomSaveMessage('');
+    try {
+      const response = await fetch('/api/dashboard/pitching/custom-tables', { cache: 'no-store' });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string; items?: CustomTableConfig[] };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to load custom tables.');
+      setCustomTables(Array.isArray(payload.items) ? payload.items : []);
+    } catch (requestError) {
+      setCustomSaveState('error');
+      setCustomSaveMessage(requestError instanceof Error ? requestError.message : 'Failed to load custom tables.');
+    } finally {
+      setLoadingCustomTables(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadCustomTables();
+  }, []);
+
+  const saveCustomTable = async () => {
+    const name = customTableName.trim();
+    if (!name) {
+      setCustomSaveState('error');
+      setCustomSaveMessage('Enter a table name first.');
+      return;
+    }
+    setCustomSaveState('saving');
+    setCustomSaveMessage('');
+    try {
+      const response = await fetch('/api/dashboard/pitching/custom-tables', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: selectedCustomTableId ?? undefined,
+          name,
+          columns: customTableColumns,
+          visibility: customTableVisibility,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string; item?: CustomTableConfig };
+      if (!response.ok || !payload.item) throw new Error(payload.error ?? 'Failed to save custom table.');
+      const saved = payload.item;
+      setCustomSaveState('saved');
+      setCustomSaveMessage('Custom table saved.');
+      setSelectedCustomTableId(saved.id);
+      setCustomTableName(saved.name);
+      setCustomTableColumns(saved.columns ?? []);
+      setCustomTableVisibility(saved.visibility ?? 'organization');
+      setCustomTables((current) => [saved, ...current.filter((row) => row.id !== saved.id)]);
+    } catch (requestError) {
+      setCustomSaveState('error');
+      setCustomSaveMessage(requestError instanceof Error ? requestError.message : 'Failed to save custom table.');
+    }
+  };
+
+  const deleteCustomTable = async () => {
+    if (!selectedCustomTableId) return;
+    setCustomSaveState('saving');
+    setCustomSaveMessage('');
+    try {
+      const response = await fetch(`/api/dashboard/pitching/custom-tables?id=${selectedCustomTableId}`, { method: 'DELETE' });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string; ok?: boolean };
+      if (!response.ok || !payload.ok) throw new Error(payload.error ?? 'Failed to delete custom table.');
+      setCustomTables((current) => current.filter((row) => row.id !== selectedCustomTableId));
+      setSelectedCustomTableId(null);
+      setCustomTableName('');
+      setCustomTableColumns([]);
+      setCustomSaveState('saved');
+      setCustomSaveMessage('Custom table deleted.');
+    } catch (requestError) {
+      setCustomSaveState('error');
+      setCustomSaveMessage(requestError instanceof Error ? requestError.message : 'Failed to delete custom table.');
+    }
+  };
+
+  const remainingCustomColumns = availableLeaderboardColumns.filter((id) => !customTableColumns.includes(id));
+
   async function refreshData() {
     const response = await fetch('/api/ovr-sprint', { cache: 'no-store' });
     const payload = await response.json();
@@ -469,7 +785,7 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
     <div className={styles.workspace}>
       <section className={styles.commandBar}>
         <div><p className={styles.eyebrow}>SPEED LAB</p><h3>{tab === 'athlete' ? athlete || 'Athlete analysis' : tab === 'leaderboard' ? 'Organization leaderboard' : 'Data intake'}</h3></div>
-        {viewMode === 'sprint' ? <div className={styles.tabs} role="tablist">
+        {viewMode === 'sprint' && !playerOnly ? <div className={styles.tabs} role="tablist">
           <button className={tab === 'athlete' ? styles.active : ''} onClick={() => setTab('athlete')}>Athlete</button>
           <button className={tab === 'leaderboard' ? styles.active : ''} onClick={() => setTab('leaderboard')}>Leaderboard</button>
         </div> : null}
@@ -479,11 +795,11 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
         {tab === 'athlete' ? <section className={styles.filterPanel}>
           <div className={styles.sectionHeading}><div><p className={styles.eyebrow}>01 · BUILD THE VIEW</p><h3>Analysis controls</h3></div><div className={styles.presets} aria-label="Date range presets"><button onClick={() => setStartDate(new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10))}>30D</button><button onClick={() => setStartDate(new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10))}>90D</button><button onClick={() => setStartDate(results.map((row) => row.date).sort()[0] ?? '')}>ALL</button></div></div>
           <div className={styles.primaryFilters}>
-            <div className={styles.playerField}><span>Athlete</span><div className={styles.athletePicker}><button type="button" aria-expanded={athletePickerOpen} onClick={() => setAthletePickerOpen((open) => !open)}><span>{athlete || 'Select an athlete'}</span><b aria-hidden="true">⌄</b></button>{athletePickerOpen ? <div className={styles.athleteMenu}><input type="search" autoFocus value={athleteSearch} onChange={(event) => setAthleteSearch(event.target.value)} placeholder="Search athletes…" /><div className={styles.athleteMenuList}>{athletes.filter((name) => name.toLowerCase().includes(athleteSearch.toLowerCase())).map((name) => <button type="button" key={name} className={name === athlete ? styles.athleteSelected : ''} onClick={() => { setAthlete(name); setAthleteSearch(''); setAthletePickerOpen(false); }}>{name}</button>)}{!athletes.some((name) => name.toLowerCase().includes(athleteSearch.toLowerCase())) ? <p>No athletes match that search.</p> : null}</div></div> : null}</div></div>
+            <div className={styles.playerField}><span>Athlete</span>{playerOnly ? <div className={styles.lockedPlayerField}><span>{athlete || 'Your profile'}</span><small>My data</small></div> : <div className={styles.athletePicker}><button type="button" aria-expanded={athletePickerOpen} onClick={() => setAthletePickerOpen((open) => !open)}><span>{athlete || 'Select an athlete'}</span><b aria-hidden="true">⌄</b></button>{athletePickerOpen ? <div className={styles.athleteMenu}><input type="search" autoFocus value={athleteSearch} onChange={(event) => setAthleteSearch(event.target.value)} placeholder="Search athletes…" /><div className={styles.athleteMenuList}>{athletes.filter((name) => name.toLowerCase().includes(athleteSearch.toLowerCase())).map((name) => <button type="button" key={name} className={name === athlete ? styles.athleteSelected : ''} onClick={() => { setAthlete(name); setAthleteSearch(''); setAthletePickerOpen(false); }}>{name}</button>)}{!athletes.some((name) => name.toLowerCase().includes(athleteSearch.toLowerCase())) ? <p>No athletes match that search.</p> : null}</div></div> : null}</div>}</div>
             <label><span>Metric</span><select value={metric} onChange={(event) => setMetric(event.target.value as Metric)}>{METRICS.map((entry) => <option key={entry.key} value={entry.key}>{entry.label} ({entry.unit})</option>)}</select></label>
           </div>
           <div className={styles.secondaryFilters}>
-            <label><span>Sprint test</span><select value={exercise} onChange={(event) => setExercise(event.target.value)}><option>All</option>{exercises.map((entry) => <option key={entry}>{entry}</option>)}</select></label>
+            <label><span>Sprint test</span><select value={exercise} onChange={(event) => setExercise(event.target.value)}><option>All</option>{exercises.map((entry) => <option key={entry} value={entry}>{exerciseDisplayLabel(entry)}</option>)}</select></label>
             <label><span>Distance</span><select value={distance} onChange={(event) => setDistance(event.target.value)}><option>All</option>{distances.map((entry) => <option key={entry} value={entry}>{entry} yd</option>)}</select></label>
             <label><span>Show</span><select value={displayMode} onChange={(event) => setDisplayMode(event.target.value as DisplayMode)}><option value="individual">Individual trials</option><option value="dailyAverage">Average per date</option><option value="dailyBest">Best per date</option></select></label>
             <label><span>From</span><input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label>
@@ -504,7 +820,7 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
               {exercisePanels.map((panel) => (
                 <article key={panel.exercise} className={styles.exercisePanel}>
                   <div className={styles.kpiLabelRow}>
-                    <span>{panel.exercise}</span>
+                    <span>{exerciseDisplayLabel(panel.exercise)}</span>
                     {percentileLoading ? <span className={styles.percentileBadge}>Ranking…</span>
                       : panel.headlinePercentile?.percentile != null ? <span className={`${styles.percentileBadge} ${percentileTierClass(panel.headlinePercentile.percentile)}`} title={`Compared with ${panel.headlinePercentile.sampleSize} athlete${panel.headlinePercentile.sampleSize === 1 ? '' : 's'} with qualifying data`}>{ordinal(panel.headlinePercentile.percentile)} percentile</span>
                       : <span className={`${styles.percentileBadge} ${styles.percentileUnavailable}`}>No rank</span>}
@@ -521,12 +837,64 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
                 </article>
               ))}
             </div> : <p className={styles.emptyChart}>No qualifying results for this athlete in this date range.</p>}
-            <div className={styles.sectionHeading}><div><p className={styles.eyebrow}>03 · TREND</p><h3>{metricConfig.label}</h3><p>{exercise === 'All' ? 'All sprint tests' : exercise} · {displayMode === 'dailyAverage' ? 'Average per date' : displayMode === 'dailyBest' ? 'Best per date' : 'Individual trials'} · {startDate || 'First result'} to {endDate || 'Latest result'}</p></div><span className={styles.liveBadge}><i /> {chartPoints.length} {displayMode === 'individual' ? 'results' : 'dates / tests'}</span></div>
+            <div className={styles.sectionHeading}><div><p className={styles.eyebrow}>03 · TREND</p><h3>{metricConfig.label}</h3><p>{exercise === 'All' ? 'All sprint tests' : exerciseDisplayLabel(exercise)} · {displayMode === 'dailyAverage' ? 'Average per date' : displayMode === 'dailyBest' ? 'Best per date' : 'Individual trials'} · {startDate || 'First result'} to {endDate || 'Latest result'}</p></div><span className={styles.liveBadge}><i /> {chartPoints.length} {displayMode === 'individual' ? 'results' : 'dates / tests'}</span></div>
             <div className={styles.chartActions}><span>{metricConfig.unit} · Lower time is faster</span><div className={styles.segmented}><button className={chartMode === 'line' ? styles.active : ''} onClick={() => setChartMode('line')}>Line</button><button className={chartMode === 'bar' ? styles.active : ''} onClick={() => setChartMode('bar')}>Bars</button></div></div>
             <SprintChart points={chartPoints} metric={metric} mode={chartMode} athlete={athlete} reduceLabel={displayMode === 'dailyBest' ? 'Best' : 'Average'} />
           </section>
         </> : <section className={styles.leaderboardPanel}>
-          <div className={styles.sectionHeading}><div><p className={styles.eyebrow}>ORGANIZATION VIEW</p><h3>Sprint leaderboard</h3><p>{leaderValueType === 'best' ? 'Best' : 'Average'} time and recorded speed by sprint distance, with trial counts. Click a measure to sort.</p></div><button className={styles.exportButton} onClick={() => downloadLeaderboardCsv(leaderboard, exercises, leaderValueType)}>Export CSV</button></div>
+          <div className={styles.sectionHeading}>
+            <div><p className={styles.eyebrow}>ORGANIZATION VIEW</p><h3>Sprint leaderboard</h3><p>{leaderValueType === 'best' ? 'Best' : 'Average'} time and recorded speed by sprint distance, with trial counts. Click a measure to sort.</p></div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'end', flexWrap: 'wrap' }}>
+              <label style={{ display: 'grid', gap: 4, minWidth: 200 }}>
+                <span style={{ fontSize: 12, color: '#94a3b8' }}>Table</span>
+                <select
+                  className="portal-select"
+                  value={leaderboardTableMode === 'Custom' && selectedCustomTableId ? `custom_saved:${selectedCustomTableId}` : leaderboardTableMode}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    if (next === 'Fixed') {
+                      setLeaderboardTableMode('Fixed');
+                      return;
+                    }
+                    if (next === 'Custom') {
+                      setLeaderboardTableMode('Custom');
+                      setSelectedCustomTableId(null);
+                      setCustomTableName('');
+                      setCustomTableColumns([]);
+                      setCustomTableVisibility('organization');
+                      setCustomSaveState('idle');
+                      setCustomSaveMessage('');
+                      return;
+                    }
+                    const id = Number(next.replace('custom_saved:', ''));
+                    const found = customTables.find((row) => row.id === id);
+                    if (!found) return;
+                    setLeaderboardTableMode('Custom');
+                    setSelectedCustomTableId(found.id);
+                    setCustomTableName(found.name);
+                    setCustomTableColumns(found.columns ?? []);
+                    setCustomTableVisibility(found.visibility ?? 'organization');
+                    setCustomSaveState('idle');
+                    setCustomSaveMessage('');
+                  }}
+                >
+                  <option value="Fixed">Fixed (all exercises)</option>
+                  {customTables.map((item) => (
+                    <option key={item.id} value={`custom_saved:${item.id}`}>{customTableOptionLabel(item)}</option>
+                  ))}
+                  <option value="Custom">+ New Custom Table</option>
+                </select>
+              </label>
+              <button
+                className={styles.exportButton}
+                onClick={() => leaderboardTableMode === 'Custom'
+                  ? downloadCustomLeaderboardCsv(leaderboard, customTableColumns, leaderboardColumnLabel, leaderboardColumnValue, leaderboardColumnCount)
+                  : downloadLeaderboardCsv(leaderboard, exercises, leaderValueType)}
+              >
+                Export CSV
+              </button>
+            </div>
+          </div>
           <div className={styles.leaderFilters}>
             <label><span>Distance</span><select value={distance} onChange={(event) => setDistance(event.target.value)}><option>All</option>{distances.map((entry) => <option key={entry} value={entry}>{entry} yd</option>)}</select></label>
             <label><span>Start date</span><input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label>
@@ -547,8 +915,146 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
               </div>
             </div>
           </div>
+          {leaderboardTableMode === 'Custom' ? (
+            <div className="portal-day-card" style={{ margin: '0 0 0.9rem' }}>
+              <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(2, minmax(220px, 1fr))', gap: '0.75rem 0.9rem' }}>
+                <label>
+                  Table Name
+                  <input
+                    value={customTableName}
+                    onChange={(event) => setCustomTableName(event.target.value)}
+                    placeholder="Example: 300yd Splits"
+                  />
+                </label>
+                <label>
+                  Visibility
+                  <select
+                    className="portal-select"
+                    value={customTableVisibility}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      setCustomTableVisibility(next === 'private' ? 'private' : 'organization');
+                    }}
+                  >
+                    <option value="private">Only Me</option>
+                    <option value="organization">My Organization</option>
+                  </select>
+                </label>
+                <label>
+                  Add Column
+                  <select
+                    className="portal-select"
+                    value={customColumnToAdd}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      setCustomColumnToAdd('');
+                      if (!next || customTableColumns.includes(next)) return;
+                      setCustomTableColumns((current) => [...current, next]);
+                    }}
+                  >
+                    <option value="">Choose column</option>
+                    {remainingCustomColumns.map((id) => (
+                      <option key={id} value={id}>{leaderboardColumnLabel(id)}</option>
+                    ))}
+                  </select>
+                </label>
+                <div style={{ display: 'grid', alignContent: 'end' }}>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button type="button" className="btn btn-primary" onClick={() => void saveCustomTable()} disabled={customSaveState === 'saving'}>
+                      {customSaveState === 'saving' ? 'Saving...' : 'Save Table'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={() => void deleteCustomTable()}
+                      disabled={!selectedCustomTableId || customSaveState === 'saving'}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </div>
+              {customSaveMessage ? <p style={{ margin: '0.4rem 0 0', fontSize: 13, color: customSaveState === 'error' ? '#fca5a5' : '#94a3b8' }}>{customSaveMessage}</p> : null}
+              <div style={{ marginTop: '0.6rem' }}>
+                <div style={{ fontSize: '0.82rem', color: '#94a3b8', marginBottom: 6 }}>
+                  Drag to reorder columns. Table starts blank; add the columns you want.
+                </div>
+                <div
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: '0.45rem',
+                    minHeight: 40,
+                    padding: '0.45rem',
+                    borderRadius: 10,
+                    border: '1px solid rgba(255,255,255,0.16)',
+                    background: 'rgba(255,255,255,0.02)',
+                  }}
+                >
+                  {customTableColumns.length ? customTableColumns.map((id, index) => (
+                    <button
+                      key={`${id}-${index}`}
+                      type="button"
+                      draggable
+                      onDragStart={() => setDragColumnIndex(index)}
+                      onDragOver={(event) => event.preventDefault()}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        if (dragColumnIndex === null) return;
+                        setCustomTableColumns((current) => reorderColumns(current, dragColumnIndex, index));
+                        setDragColumnIndex(null);
+                      }}
+                      className="btn btn-ghost"
+                      style={{ minHeight: 'unset', padding: '0.3rem 0.5rem', display: 'inline-flex', alignItems: 'center', gap: 8 }}
+                    >
+                      <span style={{ opacity: 0.7 }}>::</span>
+                      <span>{leaderboardColumnLabel(id)}</span>
+                      <span
+                        style={{ opacity: 0.8 }}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setCustomTableColumns((current) => current.filter((_, i) => i !== index));
+                        }}
+                      >
+                        ×
+                      </span>
+                    </button>
+                  )) : <span style={{ color: '#64748b', fontSize: 13 }}>No columns yet.</span>}
+                </div>
+              </div>
+            </div>
+          ) : null}
+          {leaderboardTableMode === 'Custom' ? (
+            <div className={styles.tableScroll}><table className={styles.leaderTable} style={{ minWidth: `${Math.max(640, 180 + customTableColumns.length * 170)}px` }}><thead>
+              <tr>
+                <th className={leaderSort.key === 'Player' ? styles.sortedColumn : ''}><button type="button" onClick={() => sortLeaderboard('Player')}>Player {leaderSort.key === 'Player' ? (leaderSort.direction === 'asc' ? '↑' : '↓') : ''}</button></th>
+                {customTableColumns.map((id) => <th key={id}>{leaderboardColumnLabel(id)}</th>)}
+              </tr>
+            </thead><tbody>
+              {leaderboard.map((row) => (
+                <tr key={row.name}>
+                  <td>{row.name}</td>
+                  {customTableColumns.map((id) => {
+                    const parsed = parseLeaderboardColumnId(id);
+                    const value = leaderboardColumnValue(id, row);
+                    if (parsed?.field === 'trials') return <td key={id} className={styles.trialsCell}>{value || '—'}</td>;
+                    const pct = leaderboardColumnPercentile(id, row);
+                    const isSpeed = parsed?.field === 'speed';
+                    const valueText = value === null ? '—' : isSpeed ? `${value.toFixed(2)} mph` : `${value.toFixed(3)} s`;
+                    const pctValue = isSpeed ? pct.speed : pct.time;
+                    const pctText = pctValue != null ? `${pctValue}th` : '—';
+                    return (
+                      <td key={id}>
+                        {leaderDisplay === 'values' ? valueText : leaderDisplay === 'percentiles' ? pctText : `${valueText} (${pctText})`}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody></table></div>
+          ) : (
           <div className={styles.tableScroll}><table className={styles.leaderTable} style={{ minWidth: `${Math.max(640, 180 + exercises.length * 340)}px` }}><thead>
-            <tr><th rowSpan={2} className={leaderSort.key === 'Player' ? styles.sortedColumn : ''}><button type="button" onClick={() => sortLeaderboard('Player')}>Player {leaderSort.key === 'Player' ? (leaderSort.direction === 'asc' ? '↑' : '↓') : ''}</button></th>{exercises.map((test) => <th key={test} colSpan={3} className={styles.testGroup}>{test}</th>)}</tr>
+            <tr><th rowSpan={2} className={leaderSort.key === 'Player' ? styles.sortedColumn : ''}><button type="button" onClick={() => sortLeaderboard('Player')}>Player {leaderSort.key === 'Player' ? (leaderSort.direction === 'asc' ? '↑' : '↓') : ''}</button></th>{exercises.map((test) => <th key={test} colSpan={3} className={styles.testGroup}>{exerciseDisplayLabel(test)}</th>)}</tr>
             <tr>{exercises.flatMap((test) => [
               <th key={`${test}-time`} className={leaderSort.key === `time:${test}` ? styles.sortedColumn : ''}><button type="button" onClick={() => sortLeaderboard(`time:${test}`)}>{leaderValueType === 'best' ? 'Best' : 'Avg'} time (s) {leaderSort.key === `time:${test}` ? (leaderSort.direction === 'asc' ? '↑' : '↓') : ''}</button></th>,
               <th key={`${test}-speed`} className={leaderSort.key === `speed:${test}` ? styles.sortedColumn : ''}><button type="button" onClick={() => sortLeaderboard(`speed:${test}`)}>{leaderValueType === 'best' ? 'Best' : 'Avg'} speed (mph) {leaderSort.key === `speed:${test}` ? (leaderSort.direction === 'asc' ? '↑' : '↓') : ''}</button></th>,
@@ -573,12 +1079,33 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
               <td key={`${test}-trials`} className={styles.trialsCell}>{count || '—'}</td>,
             ];
           })}</tr>)}</tbody></table></div>
+          )}
         </section>}
 
         {tab === 'athlete' ? <section className={styles.tablePanel}>
           <div className={styles.sectionHeading}><div><p className={styles.eyebrow}>03 · RESULT LOG</p><h3>{displayMode !== 'individual' ? `${chartPoints.length} date / test ${displayMode === 'dailyBest' ? 'bests' : 'averages'}` : `${filtered.length} qualifying trials`}</h3></div><button className={styles.exportButton} onClick={() => downloadCsv(filtered)}>Export CSV</button></div>
-          {displayMode !== 'individual' ? <div className={styles.tableScroll}><table><thead><tr><th>Date</th><th>Test</th><th>Trials</th><th>{displayMode === 'dailyBest' ? 'Best' : 'Average'} {metricConfig.label}</th></tr></thead><tbody>{[...chartPoints].reverse().map((point) => <tr key={point.id}><td>{formatDate(point.date)}</td><td>{point.exercise}</td><td>{point.count}</td><td>{formatValue(point.value, metric)} {metricConfig.unit}</td></tr>)}</tbody></table></div> :
-          <div className={styles.tableScroll}><table><thead><tr><th>Date</th><th>Test</th><th>Sprint</th><th>Total</th><th>Split</th><th>Distance</th><th>Speed</th><th>Start</th></tr></thead><tbody>{filtered.map((row) => <tr key={row.id}><td>{formatDate(row.date)}</td><td>{row.exercise}</td><td>#{row.sprintNumber}</td><td>{row.totalTime.toFixed(3)} s</td><td>#{row.splitNumber} · {row.splitTime.toFixed(3)} s</td><td>{row.distanceYards === null ? '—' : `${row.distanceYards} yd`}</td><td>{row.speedMph === null ? '—' : `${row.speedMph.toFixed(2)} mph`}</td><td>{startMethod(row)}</td></tr>)}</tbody></table></div>
+          {displayMode !== 'individual' ? <div className={styles.tableScroll}><table><thead><tr><th>Date</th><th>Test</th><th>Trials</th><th>{displayMode === 'dailyBest' ? 'Best' : 'Average'} {metricConfig.label}</th></tr></thead><tbody>{[...chartPoints].reverse().map((point) => <tr key={point.id}><td>{formatDate(point.date)}</td><td>{exerciseDisplayLabel(point.exercise)}</td><td>{point.count}</td><td>{formatValue(point.value, metric)} {metricConfig.unit}</td></tr>)}</tbody></table></div> :
+          <div className={styles.tableScroll}><table><thead><tr><th>Date</th><th>Test</th><th>Sprint</th><th>Total</th><th>Split</th><th>Distance</th><th>Speed</th><th>Start</th></tr></thead><tbody>{chronological.map((row, index) => {
+            // Every split of the same sprint attempt shares the same Total
+            // Time (that's how the schema stores it -- one row per split,
+            // not one row per attempt), so show it only on that run's first
+            // split row to avoid it looking like the time was logged once
+            // per split.
+            const previous = chronological[index - 1];
+            const sameRun = previous && previous.athleteName === row.athleteName && previous.date === row.date && previous.exercise === row.exercise && previous.sprintNumber === row.sprintNumber;
+            return (
+              <tr key={row.id}>
+                <td>{formatDate(row.date)}</td>
+                <td>{exerciseDisplayLabel(row.exercise)}</td>
+                <td>#{row.sprintNumber}</td>
+                <td>{sameRun ? '' : `${row.totalTime.toFixed(3)} s`}</td>
+                <td>#{row.splitNumber} · {row.splitTime.toFixed(3)} s</td>
+                <td>{row.distanceYards === null ? '—' : `${row.distanceYards} yd`}</td>
+                <td>{row.speedMph === null ? '—' : `${row.speedMph.toFixed(2)} mph`}</td>
+                <td>{startMethod(row)}</td>
+              </tr>
+            );
+          })}</tbody></table></div>
           }
         </section> : null}
       </> : <section className={styles.importPanel}>

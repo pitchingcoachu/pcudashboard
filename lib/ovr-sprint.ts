@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import JSZip from 'jszip';
 import { getDbPool, isDatabaseConfigured } from './auth-db';
+import { refreshOvrPerformanceRollups } from './performance-rollups';
 
 const MAX_FILE_BYTES = 12 * 1024 * 1024;
 const REQUIRED_HEADERS = [
@@ -434,6 +435,9 @@ export async function importOvrSprintExport(input: {
       parsed.preview.minDate, parsed.preview.maxDate, parsed.rows.length, parsed.vbtRows.length,
       insertedRows, insertedVbtRows, uploadId]);
     await client.query('COMMIT');
+    await refreshOvrPerformanceRollups({ organizationId: input.organizationId, schoolCode }).catch((error) => {
+      console.error('OVR performance rollup refresh failed', error);
+    });
     const upload = (await listOvrSprintUploads(input.organizationId, schoolCode)).find((entry) => entry.id === uploadId);
     if (!upload) throw new Error('The completed import could not be loaded.');
     const newRows = insertedRows + insertedVbtRows;
@@ -590,6 +594,8 @@ export async function getOvrVbtPercentiles(input: {
   exercise: string;
   loadLbs?: number | null;
   groupId: number | 'all';
+  startDate?: string | null;
+  endDate?: string | null;
 }): Promise<OvrVbtPercentileResult> {
   await ensureSchema();
   const params: unknown[] = [input.organizationId, clean(input.schoolCode).toUpperCase(), clean(input.exercise)];
@@ -624,23 +630,29 @@ export async function getOvrVbtPercentiles(input: {
     peakPower: 'peak_power', avgPower: 'avg_power', tpvSeconds: 'tpv_seconds',
     peakVelocity: 'peak_velocity', avgVelocity: 'avg_velocity',
   };
-  const summaries = new Map<number, Record<OvrVbtMetricKey, number | null>>();
-  for (const [playerId, rows] of byPlayer) {
+  const summarizeLatest = (rows: typeof result.rows): Record<OvrVbtMetricKey, number | null> => {
     const latestDate = rows.map((row) => row.result_date).sort().at(-1);
-    const latestRows = rows.filter((row) => row.result_date === latestDate);
+    const latestRows = latestDate ? rows.filter((row) => row.result_date === latestDate) : [];
     const summary = {} as Record<OvrVbtMetricKey, number | null>;
     for (const [metric, column] of Object.entries(metricColumns) as Array<[OvrVbtMetricKey, keyof (typeof result.rows)[number]]>) {
       const values = latestRows.flatMap((row) => row[column] === null ? [] : [Number(row[column])]).filter(Number.isFinite);
       summary[metric] = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
     }
-    summaries.set(playerId, summary);
+    return summary;
+  };
+  const summaries = new Map<number, Record<OvrVbtMetricKey, number | null>>();
+  for (const [playerId, rows] of byPlayer) {
+    summaries.set(playerId, summarizeLatest(rows));
   }
   let groupLabel = 'All PCU athletes';
   if (input.groupId !== 'all') {
     const group = await getDbPool().query<{ name: string }>('SELECT name FROM player_groups WHERE id=$1 AND organization_id=$2', [input.groupId, input.organizationId]);
     groupLabel = group.rows[0]?.name ?? 'Group';
   }
-  const target = summaries.get(input.playerId);
+  const targetRows = (byPlayer.get(input.playerId) ?? []).filter((row) =>
+    (!input.startDate || row.result_date >= input.startDate) && (!input.endDate || row.result_date <= input.endDate)
+  );
+  const target = summarizeLatest(targetRows);
   const stats = {} as Record<OvrVbtMetricKey, OvrSprintPercentileStat>;
   for (const metric of Object.keys(metricColumns) as OvrVbtMetricKey[]) {
     const value = target?.[metric] ?? null;
@@ -708,22 +720,12 @@ export async function getOvrSprintPercentile(input: {
     params.push(input.groupId);
     cohortJoin = `JOIN player_group_members gm ON gm.player_id = r.player_id AND gm.group_id = $${params.length}`;
   }
-  let dateFilter = '';
-  if (input.startDate) {
-    params.push(input.startDate);
-    dateFilter += ` AND r.result_date >= $${params.length}::date`;
-  }
-  if (input.endDate) {
-    params.push(input.endDate);
-    dateFilter += ` AND r.result_date <= $${params.length}::date`;
-  }
-
   const result = await getDbPool().query<{ exercise: string; player_id: number; result_date: string; sprint_number: number; value: number | null }>(`
     SELECT r.exercise, r.player_id, r.result_date::text AS result_date, r.sprint_number, r.${valueColumn} AS value
     FROM ovr_sprint_results r
     ${cohortJoin}
     WHERE r.organization_id = $1 AND r.school_code = $2 AND r.exercise = ANY($3)
-      AND r.player_id IS NOT NULL AND r.${valueColumn} IS NOT NULL${dateFilter}
+      AND r.player_id IS NOT NULL AND r.${valueColumn} IS NOT NULL
   `, params);
 
   const byExercise = new Map<string, Map<number, Array<{ date: string; sprintNumber: number; value: number }>>>();
@@ -747,7 +749,10 @@ export async function getOvrSprintPercentile(input: {
     const byPlayer = byExercise.get(exercise) ?? new Map<number, Array<{ date: string; sprintNumber: number; value: number }>>();
     const summaries = new Map<number, PlayerSummary>();
     for (const [playerId, rows] of byPlayer) summaries.set(playerId, summarizePlayer(rows, invert));
-    const targetSummary = summaries.get(input.playerId) ?? { latest: null, previous: null, change: null, average: null, peak: null };
+    const targetRows = (byPlayer.get(input.playerId) ?? []).filter((row) =>
+      (!input.startDate || row.date >= input.startDate) && (!input.endDate || row.date <= input.endDate)
+    );
+    const targetSummary = summarizePlayer(targetRows, invert);
     const population = Array.from(summaries.values());
     const statOf = (key: keyof PlayerSummary): OvrSprintPercentileStat => {
       const { percentile, sampleSize } = ovrPercentile(targetSummary[key], population.map((entry) => entry[key]), invert);

@@ -3,9 +3,10 @@ import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../../lib/auth';
 import { resolveDashboardSchoolCode } from '../../../../../../lib/dashboard-access';
 import type { PortalSession } from '../../../../../../lib/portal-session';
-import { getBiomechanicsPitchVideo } from '../../../../../../lib/biomechanics-db';
+import { getBiomechanicsPitchOwnerName, getBiomechanicsPitchVideo } from '../../../../../../lib/biomechanics-db';
 import { getObjectFromR2 } from '../../../../../../lib/biomechanics-storage';
-import { resolveSchoolScopedOrganizationId } from '../../../../../../lib/programming-scope';
+import { resolveProgrammingOrganizationId, resolveSchoolScopedOrganizationId } from '../../../../../../lib/programming-scope';
+import { getPlayerForUser } from '../../../../../../lib/training-db';
 
 function asyncIterableToStream(iterable: AsyncIterable<Uint8Array>): ReadableStream<Uint8Array> {
   const iterator = iterable[Symbol.asyncIterator]();
@@ -43,6 +44,17 @@ async function getSession() {
   return getSessionFromCookies(cookieStore);
 }
 
+function normalizeName(value: string): string {
+  const raw = String(value ?? '').trim();
+  const firstLast = raw.includes(',')
+    ? (() => {
+        const [last, ...rest] = raw.split(',').map((part) => part.trim());
+        return `${rest.join(' ')} ${last}`.trim();
+      })()
+    : raw;
+  return firstLast.toLowerCase().replace(/\./g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ pitchKey: string }> }
@@ -66,14 +78,21 @@ export async function GET(
     )
   );
 
-  let video = await getBiomechanicsPitchVideo({ organizationId, schoolCode, pitchKey });
-  if (!video) {
-    for (const orgId of candidateOrgIds) {
-      if (orgId === organizationId) continue;
-      video = await getBiomechanicsPitchVideo({ organizationId: orgId, schoolCode, pitchKey });
-      if (video) break;
+  const ownPlayer = session.role === 'player'
+    ? await getPlayerForUser({ organizationId: await resolveProgrammingOrganizationId(scopedSession), userId: session.userId ?? 0 })
+    : null;
+  if (session.role === 'player' && !ownPlayer) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
+  let video = null as Awaited<ReturnType<typeof getBiomechanicsPitchVideo>>;
+  for (const orgId of candidateOrgIds) {
+    if (session.role === 'player') {
+      const ownerName = await getBiomechanicsPitchOwnerName({ organizationId: orgId, schoolCode, pitchKey });
+      if (!ownerName || normalizeName(ownerName) !== normalizeName(ownPlayer?.fullName ?? '')) continue;
     }
+    video = await getBiomechanicsPitchVideo({ organizationId: orgId, schoolCode, pitchKey });
+    if (video) break;
   }
+  if (session.role === 'player' && !video) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   if (!video) return NextResponse.json({ error: 'Video not found.' }, { status: 404 });
 
   const object = await getObjectFromR2(video.r2Key);

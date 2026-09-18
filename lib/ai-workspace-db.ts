@@ -22,7 +22,7 @@ export type AiSessionRow = {
 export type FlagRuleRow = {
   id: number;
   name: string;
-  domain: 'pitching' | 'hitting' | 'force_plates';
+  domain: 'pitching' | 'hitting' | 'force_plates' | 'ovr_sprint' | 'biomechanics';
   metric: string;
   pitchType: string;
   pitchTypes: string[];
@@ -38,8 +38,22 @@ export type FlagRuleRow = {
   cooldownHours: number;
   enabled: boolean;
   displayOrder: number;
+  visibility: 'private' | 'organization';
   createdAt: string;
   createdByUserId: number | null;
+  createdByEmail: string | null;
+};
+
+export type FlagViewRow = {
+  id: number;
+  name: string;
+  ruleIds: number[];
+  visibility: 'private' | 'organization';
+  createdAt: string;
+  updatedAt: string;
+  createdByUserId: number | null;
+  createdByEmail: string | null;
+  isOwn: boolean;
 };
 
 declare global {
@@ -48,7 +62,7 @@ declare global {
   var __pcuAiWorkspaceReadyPromise: Promise<void> | undefined;
 }
 
-const AI_WORKSPACE_SCHEMA_VERSION = 6;
+const AI_WORKSPACE_SCHEMA_VERSION = 9;
 
 export const AI_SESSION_FIXED_TYPES = ['Assessment', 'Meeting', 'Bullpen', 'Training', 'Other'] as const;
 
@@ -127,9 +141,41 @@ export async function ensureAiWorkspaceReady(): Promise<void> {
         notified_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         PRIMARY KEY (rule_id, player_name, session_date)
       );
+      CREATE TABLE IF NOT EXISTS metric_flag_views (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id BIGINT NOT NULL,
+        name TEXT NOT NULL,
+        rule_ids BIGINT[] NOT NULL DEFAULT '{}',
+        visibility TEXT NOT NULL DEFAULT 'organization' CHECK (visibility IN ('private', 'organization')),
+        created_by_user_id BIGINT,
+        created_by_email TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_metric_flag_views_org ON metric_flag_views (organization_id, updated_at DESC);
       ALTER TABLE metric_flag_rules ADD COLUMN IF NOT EXISTS pitch_types TEXT[] NOT NULL DEFAULT ARRAY['All']::TEXT[];
       ALTER TABLE metric_flag_rules ADD COLUMN IF NOT EXISTS test_type TEXT NOT NULL DEFAULT 'All';
       ALTER TABLE metric_flag_rules ADD COLUMN IF NOT EXISTS display_order INTEGER;
+      ALTER TABLE metric_flag_rules ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'organization';
+      ALTER TABLE metric_flag_rules ADD COLUMN IF NOT EXISTS created_by_email TEXT;
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'metric_flag_rules'::regclass
+            AND conname = 'metric_flag_rules_visibility_check'
+        ) THEN
+          ALTER TABLE metric_flag_rules ADD CONSTRAINT metric_flag_rules_visibility_check
+            CHECK (visibility IN ('private', 'organization'));
+        END IF;
+      END $$;
+      UPDATE metric_flag_rules AS rule
+      SET created_by_email = LOWER(BTRIM(u.email))
+      FROM auth_users AS u
+      WHERE rule.created_by_user_id = u.id
+        AND (rule.created_by_email IS NULL OR BTRIM(rule.created_by_email) = '')
+        AND u.email IS NOT NULL
+        AND BTRIM(u.email) <> '';
       DO $$
       DECLARE domain_constraint TEXT;
       BEGIN
@@ -137,10 +183,10 @@ export async function ensureAiWorkspaceReady(): Promise<void> {
         FROM pg_constraint
         WHERE conrelid = 'metric_flag_rules'::regclass
           AND conname = 'metric_flag_rules_domain_check';
-        IF domain_constraint IS NULL OR POSITION('force_plates' IN domain_constraint) = 0 THEN
+        IF domain_constraint IS NULL OR POSITION('ovr_sprint' IN domain_constraint) = 0 THEN
           ALTER TABLE metric_flag_rules DROP CONSTRAINT IF EXISTS metric_flag_rules_domain_check;
           ALTER TABLE metric_flag_rules ADD CONSTRAINT metric_flag_rules_domain_check
-            CHECK (domain IN ('pitching', 'hitting', 'force_plates'));
+            CHECK (domain IN ('pitching', 'hitting', 'force_plates', 'ovr_sprint', 'biomechanics'));
         END IF;
       END $$;
       UPDATE metric_flag_rules
@@ -334,38 +380,163 @@ export async function deleteAiSession(id: number, organizationId: number): Promi
 }
 export async function editAiSession(input:{id:number;organizationId:number;title:string;sessionType:string;summaryBullets:string[];transcriptText:string;playerVisible:boolean;keepAudio:boolean}):Promise<void>{await ensureAiWorkspaceReady();await getDbPool().query(`UPDATE ai_sessions SET title=$3,session_type=$4,summary_json=$5::jsonb,transcript_text=$6,player_visible=$7,keep_audio=$8,audio_expires_at=CASE WHEN $8 THEN NULL WHEN audio_r2_key IS NOT NULL THEN COALESCE(audio_expires_at,NOW()+INTERVAL '30 days') ELSE NULL END,updated_at=NOW() WHERE id=$1 AND organization_id=$2`,[input.id,input.organizationId,input.title,input.sessionType,JSON.stringify(input.summaryBullets),input.transcriptText,input.playerVisible,input.keepAudio]);await syncAiSessionPlayerNotes(input.id,input.organizationId);}
 
+export type FlagRuleViewer = { userId: number; email: string };
+
 function mapFlagRule(row: Record<string, unknown>): FlagRuleRow {
   const pitchTypes=Array.isArray(row.pitch_types)?row.pitch_types.map(String).map((value)=>value.trim()).filter(Boolean):[];
   const normalizedPitchTypes=pitchTypes.length?pitchTypes:[String(row.pitch_type??'All')];
   return { id:Number(row.id),name:String(row.name),domain:row.domain as FlagRuleRow['domain'],metric:String(row.metric),pitchType:normalizedPitchTypes.length===1?normalizedPitchTypes[0]:normalizedPitchTypes.join(', '),pitchTypes:normalizedPitchTypes,
     direction:row.direction as FlagRuleRow['direction'],threshold:Number(row.threshold),thresholdType:row.threshold_type as FlagRuleRow['thresholdType'],
     baselineDays:Number(row.baseline_days),minimumSample:Number(row.minimum_sample),targetPlayer:String(row.target_player),sessionType:String(row.session_type),testType:String(row.test_type??'All'),
-    notificationsEnabled:Boolean(row.notifications_enabled),cooldownHours:Number(row.cooldown_hours),enabled:Boolean(row.enabled),displayOrder:Number(row.display_order??0),createdAt:String(row.created_at),createdByUserId:row.created_by_user_id?Number(row.created_by_user_id):null };
+    notificationsEnabled:Boolean(row.notifications_enabled),cooldownHours:Number(row.cooldown_hours),enabled:Boolean(row.enabled),displayOrder:Number(row.display_order??0),
+    visibility:row.visibility==='private'?'private':'organization',createdAt:String(row.created_at),createdByUserId:row.created_by_user_id?Number(row.created_by_user_id):null,createdByEmail:row.created_by_email?String(row.created_by_email):null };
 }
 
-export async function listFlagRules(organizationId:number):Promise<FlagRuleRow[]> { await ensureAiWorkspaceReady(); const r=await getDbPool().query<Record<string,unknown>>(`SELECT * FROM metric_flag_rules WHERE organization_id=$1 ORDER BY display_order ASC, created_at DESC`,[organizationId]);return r.rows.map(mapFlagRule); }
-export async function saveFlagRule(input:Omit<FlagRuleRow,'id'|'createdAt'|'createdByUserId'|'pitchType'|'displayOrder'> & {organizationId:number;userId:number;id?:number}):Promise<number> {
-  await ensureAiWorkspaceReady(); const pitchTypes=input.pitchTypes.length?input.pitchTypes:['All'];const legacyPitchType=pitchTypes.length===1?pitchTypes[0]:'All';const values=[input.organizationId,input.name,input.domain,input.metric,legacyPitchType,pitchTypes,input.direction,input.threshold,input.thresholdType,input.baselineDays,input.minimumSample,input.targetPlayer,input.sessionType,input.testType,input.notificationsEnabled,input.cooldownHours,input.enabled,input.userId];
-  if(input.id){const r=await getDbPool().query<{id:number}>(`UPDATE metric_flag_rules SET name=$2,domain=$3,metric=$4,pitch_type=$5,pitch_types=$6::text[],direction=$7,threshold=$8,threshold_type=$9,baseline_days=$10,minimum_sample=$11,target_player=$12,session_type=$13,test_type=$14,notifications_enabled=$15,cooldown_hours=$16,enabled=$17,updated_at=NOW() WHERE organization_id=$1 AND id=$19 RETURNING id`,[...values,input.id]);return Number(r.rows[0]?.id||0);}
-  const r=await getDbPool().query<{id:number}>(`INSERT INTO metric_flag_rules (organization_id,name,domain,metric,pitch_type,pitch_types,direction,threshold,threshold_type,baseline_days,minimum_sample,target_player,session_type,test_type,notifications_enabled,cooldown_hours,enabled,display_order,created_by_user_id) SELECT $1,$2,$3,$4,$5,$6::text[],$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,COALESCE(MAX(display_order)+1,0),$18 FROM metric_flag_rules WHERE organization_id=$1 RETURNING id`,values);return Number(r.rows[0].id);
+// A rule is visible to a viewer if it's shared org-wide, or if it's private
+// AND owned by that viewer (matched by user id, falling back to email so
+// ownership survives a user-id change) -- same ownership-OR-visibility shape
+// as dashboard_custom_tables, just without the global/cross-school tier.
+function flagRuleVisibleToViewer(row:{visibility:string;created_by_user_id:unknown;created_by_email:unknown},viewer:FlagRuleViewer):boolean{
+  if(row.visibility!=='private')return true;
+  const ownerUserId=row.created_by_user_id?Number(row.created_by_user_id):null;
+  if(ownerUserId&&viewer.userId&&ownerUserId===viewer.userId)return true;
+  const ownerEmail=row.created_by_email?String(row.created_by_email).trim().toLowerCase():'';
+  const viewerEmail=String(viewer.email??'').trim().toLowerCase();
+  return Boolean(ownerEmail&&viewerEmail&&ownerEmail===viewerEmail);
 }
-export async function deleteFlagRule(id:number,organizationId:number):Promise<void>{await ensureAiWorkspaceReady();await getDbPool().query(`DELETE FROM metric_flag_rules WHERE id=$1 AND organization_id=$2`,[id,organizationId]);}
-export async function reorderFlagRules(organizationId:number,ruleIds:number[]):Promise<boolean>{
+
+export async function listFlagRules(organizationId:number,viewer:FlagRuleViewer):Promise<FlagRuleRow[]> {
+  await ensureAiWorkspaceReady();
+  const r=await getDbPool().query<Record<string,unknown>>(`SELECT * FROM metric_flag_rules WHERE organization_id=$1 ORDER BY display_order ASC, created_at DESC`,[organizationId]);
+  return r.rows.filter((row)=>flagRuleVisibleToViewer(row as {visibility:string;created_by_user_id:unknown;created_by_email:unknown},viewer)).map(mapFlagRule);
+}
+export async function saveFlagRule(input:Omit<FlagRuleRow,'id'|'createdAt'|'createdByUserId'|'createdByEmail'|'pitchType'|'displayOrder'> & {organizationId:number;userId:number;userEmail:string;id?:number}):Promise<number> {
+  await ensureAiWorkspaceReady(); const pitchTypes=input.pitchTypes.length?input.pitchTypes:['All'];const legacyPitchType=pitchTypes.length===1?pitchTypes[0]:'All';const normalizedEmail=String(input.userEmail??'').trim().toLowerCase();
+  const values=[input.organizationId,input.name,input.domain,input.metric,legacyPitchType,pitchTypes,input.direction,input.threshold,input.thresholdType,input.baselineDays,input.minimumSample,input.targetPlayer,input.sessionType,input.testType,input.notificationsEnabled,input.cooldownHours,input.enabled,input.visibility,input.userId];
+  if(input.id){
+    // Only the owner (by user id or email) may edit a private rule; a
+    // shared ('organization') rule stays editable by any staff member, same
+    // as today's pre-existing behavior.
+    const r=await getDbPool().query<{id:number}>(
+      `UPDATE metric_flag_rules SET name=$2,domain=$3,metric=$4,pitch_type=$5,pitch_types=$6::text[],direction=$7,threshold=$8,threshold_type=$9,baseline_days=$10,minimum_sample=$11,target_player=$12,session_type=$13,test_type=$14,notifications_enabled=$15,cooldown_hours=$16,enabled=$17,visibility=$18,updated_at=NOW()
+       WHERE organization_id=$1 AND id=$20
+         AND (visibility<>'private' OR created_by_user_id=$19 OR ($21::text<>'' AND LOWER(COALESCE(created_by_email,''))=$21))
+       RETURNING id`,
+      [...values,input.id,normalizedEmail]
+    );
+    return Number(r.rows[0]?.id||0);
+  }
+  const r=await getDbPool().query<{id:number}>(`INSERT INTO metric_flag_rules (organization_id,name,domain,metric,pitch_type,pitch_types,direction,threshold,threshold_type,baseline_days,minimum_sample,target_player,session_type,test_type,notifications_enabled,cooldown_hours,enabled,visibility,display_order,created_by_user_id,created_by_email) SELECT $1,$2,$3,$4,$5,$6::text[],$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,COALESCE(MAX(display_order)+1,0),$19,$20 FROM metric_flag_rules WHERE organization_id=$1 RETURNING id`,[...values,normalizedEmail||null]);return Number(r.rows[0].id);
+}
+export async function deleteFlagRule(id:number,organizationId:number,viewer:FlagRuleViewer):Promise<void>{
+  await ensureAiWorkspaceReady();
+  const normalizedEmail=String(viewer.email??'').trim().toLowerCase();
+  await getDbPool().query(
+    `DELETE FROM metric_flag_rules WHERE id=$1 AND organization_id=$2
+       AND (visibility<>'private' OR created_by_user_id=$3 OR ($4::text<>'' AND LOWER(COALESCE(created_by_email,''))=$4))`,
+    [id,organizationId,viewer.userId,normalizedEmail]
+  );
+}
+export async function reorderFlagRules(organizationId:number,ruleIds:number[],viewer:FlagRuleViewer):Promise<boolean>{
   await ensureAiWorkspaceReady();
   const ids=Array.from(new Set(ruleIds.map(Number).filter((id)=>Number.isInteger(id)&&id>0)));
   if(ids.length!==ruleIds.length)return false;
   const client=await getDbPool().connect();
   try{
     await client.query('BEGIN');
-    const existing=await client.query<{id:number}>(`SELECT id FROM metric_flag_rules WHERE organization_id=$1 FOR UPDATE`,[organizationId]);
-    const existingIds=new Set(existing.rows.map((row)=>Number(row.id)));
-    if(existingIds.size!==ids.length||ids.some((id)=>!existingIds.has(id))){await client.query('ROLLBACK');return false;}
+    const existing=await client.query<{id:number;visibility:string;created_by_user_id:number|null;created_by_email:string|null}>(`SELECT id,visibility,created_by_user_id,created_by_email FROM metric_flag_rules WHERE organization_id=$1 FOR UPDATE`,[organizationId]);
+    // Reorder is validated against the rules THIS VIEWER can see, not every
+    // rule in the org -- once private rules exist, a viewer's list is a
+    // subset, and requiring the full org set would make reordering
+    // impossible for anyone whenever another coach has a private rule.
+    const visibleIds=new Set(existing.rows.filter((row)=>flagRuleVisibleToViewer(row,viewer)).map((row)=>Number(row.id)));
+    if(visibleIds.size!==ids.length||ids.some((id)=>!visibleIds.has(id))){await client.query('ROLLBACK');return false;}
     await client.query(`UPDATE metric_flag_rules AS rule SET display_order=ordered.position::integer-1,updated_at=NOW() FROM unnest($2::bigint[]) WITH ORDINALITY AS ordered(id,position) WHERE rule.organization_id=$1 AND rule.id=ordered.id`,[organizationId,ids]);
     await client.query('COMMIT');
     return true;
   }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
 }
 export async function claimFlagNotification(ruleId:number,playerName:string,sessionDate:string):Promise<boolean>{await ensureAiWorkspaceReady();const r=await getDbPool().query(`INSERT INTO metric_flag_notifications (rule_id,player_name,session_date) VALUES ($1,$2,$3::date) ON CONFLICT DO NOTHING RETURNING rule_id`,[ruleId,playerName,sessionDate]);return (r.rowCount??0)>0;}
+
+// True ownership check (ignores visibility, unlike flagRuleVisibleToViewer)
+// -- used to flag which rows in a viewer's own list they actually created,
+// e.g. so the client can auto-select "my most-recently-updated view."
+function isOwnedByViewer(row: { created_by_user_id: unknown; created_by_email: unknown }, viewer: FlagRuleViewer): boolean {
+  const ownerUserId = row.created_by_user_id ? Number(row.created_by_user_id) : null;
+  if (ownerUserId && viewer.userId && ownerUserId === viewer.userId) return true;
+  const ownerEmail = row.created_by_email ? String(row.created_by_email).trim().toLowerCase() : '';
+  const viewerEmail = String(viewer.email ?? '').trim().toLowerCase();
+  return Boolean(ownerEmail && viewerEmail && ownerEmail === viewerEmail);
+}
+
+function mapFlagView(row: Record<string, unknown>, viewer: FlagRuleViewer): FlagViewRow {
+  const ruleIds = Array.isArray(row.rule_ids) ? row.rule_ids.map((value) => Number(value)).filter((value) => Number.isFinite(value)) : [];
+  return {
+    id: Number(row.id),
+    name: String(row.name),
+    ruleIds,
+    visibility: row.visibility === 'private' ? 'private' : 'organization',
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    createdByUserId: row.created_by_user_id ? Number(row.created_by_user_id) : null,
+    createdByEmail: row.created_by_email ? String(row.created_by_email) : null,
+    isOwn: isOwnedByViewer(row as { created_by_user_id: unknown; created_by_email: unknown }, viewer),
+  };
+}
+
+export async function listFlagViews(organizationId: number, viewer: FlagRuleViewer): Promise<FlagViewRow[]> {
+  await ensureAiWorkspaceReady();
+  const r = await getDbPool().query<Record<string, unknown>>(
+    `SELECT * FROM metric_flag_views WHERE organization_id=$1 ORDER BY updated_at DESC`,
+    [organizationId]
+  );
+  return r.rows
+    .filter((row) => flagRuleVisibleToViewer(row as { visibility: string; created_by_user_id: unknown; created_by_email: unknown }, viewer))
+    .map((row) => mapFlagView(row, viewer));
+}
+
+export async function saveFlagView(input: {
+  organizationId: number;
+  userId: number;
+  userEmail: string;
+  id?: number;
+  name: string;
+  ruleIds: number[];
+  visibility: 'private' | 'organization';
+}): Promise<number> {
+  await ensureAiWorkspaceReady();
+  const normalizedEmail = String(input.userEmail ?? '').trim().toLowerCase();
+  const ruleIds = Array.from(new Set(input.ruleIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)));
+  if (input.id) {
+    // Only the owner (by user id or email) may edit a private view; a
+    // shared ('organization') view stays editable by any staff member, same
+    // as metric_flag_rules' saveFlagRule.
+    const r = await getDbPool().query<{ id: number }>(
+      `UPDATE metric_flag_views SET name=$2, rule_ids=$3::bigint[], visibility=$4, updated_at=NOW()
+       WHERE organization_id=$1 AND id=$5
+         AND (visibility<>'private' OR created_by_user_id=$6 OR ($7::text<>'' AND LOWER(COALESCE(created_by_email,''))=$7))
+       RETURNING id`,
+      [input.organizationId, input.name, ruleIds, input.visibility, input.id, input.userId, normalizedEmail]
+    );
+    return Number(r.rows[0]?.id || 0);
+  }
+  const r = await getDbPool().query<{ id: number }>(
+    `INSERT INTO metric_flag_views (organization_id, name, rule_ids, visibility, created_by_user_id, created_by_email)
+     VALUES ($1, $2, $3::bigint[], $4, $5, $6) RETURNING id`,
+    [input.organizationId, input.name, ruleIds, input.visibility, input.userId, normalizedEmail || null]
+  );
+  return Number(r.rows[0].id);
+}
+
+export async function deleteFlagView(id: number, organizationId: number, viewer: FlagRuleViewer): Promise<void> {
+  await ensureAiWorkspaceReady();
+  const normalizedEmail = String(viewer.email ?? '').trim().toLowerCase();
+  await getDbPool().query(
+    `DELETE FROM metric_flag_views WHERE id=$1 AND organization_id=$2
+       AND (visibility<>'private' OR created_by_user_id=$3 OR ($4::text<>'' AND LOWER(COALESCE(created_by_email,''))=$4))`,
+    [id, organizationId, viewer.userId, normalizedEmail]
+  );
+}
 
 export async function listExpiredAiAudio():Promise<Array<{id:number;organizationId:number;r2Key:string}>>{await ensureAiWorkspaceReady();const r=await getDbPool().query<{id:number;organization_id:number;audio_r2_key:string}>(`SELECT id,organization_id,audio_r2_key FROM ai_sessions WHERE keep_audio=FALSE AND audio_r2_key IS NOT NULL AND audio_expires_at<=NOW() LIMIT 500`);return r.rows.map(x=>({id:Number(x.id),organizationId:Number(x.organization_id),r2Key:x.audio_r2_key}));}
 export async function clearAiAudio(id:number,organizationId:number):Promise<void>{await getDbPool().query(`UPDATE ai_sessions SET audio_r2_key=NULL,audio_content_type=NULL,audio_expires_at=NULL,updated_at=NOW() WHERE id=$1 AND organization_id=$2`,[id,organizationId]);}

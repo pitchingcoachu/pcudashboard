@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { OvrVbtResult } from '../../../lib/ovr-sprint';
 import styles from './ovr-sprint.module.css';
 
-type Props = { initialResults: OvrVbtResult[] };
+type Props = { initialResults: OvrVbtResult[]; playerOnly?: boolean };
 type ViewTab = 'athlete' | 'leaderboard';
 type DisplayMode = 'individual' | 'dailyAverage' | 'dailyBest';
 type MetricKey = 'loadLbs' | 'targetMin' | 'targetMax' | 'avgVelocity' | 'peakVelocity' | 'avgPower' | 'peakPower' | 'romInches' | 'durationSeconds' | 'tpvSeconds' | 'eaIndex';
@@ -158,7 +158,7 @@ function VbtChart({ points, config, mode, athlete }: { points: Point[]; config: 
   </div>;
 }
 
-export default function OvrVbtDashboard({ initialResults }: Props) {
+export default function OvrVbtDashboard({ initialResults, playerOnly = false }: Props) {
   const initialAthlete = initialResults[0]?.athleteName ?? '';
   const [tab, setTab] = useState<ViewTab>('athlete');
   const [athlete, setAthlete] = useState(initialAthlete);
@@ -230,6 +230,8 @@ export default function OvrVbtDashboard({ initialResults }: Props) {
     queueMicrotask(() => { if (active) { setPercentileLoading(true); setPercentileError(''); } });
     const params = new URLSearchParams({ playerId: String(athletePlayerId), exercise, groupId: String(percentileGroupId) });
     if (load !== 'All') params.set('load', load);
+    if (startDate) params.set('startDate', startDate);
+    if (endDate) params.set('endDate', endDate);
     fetch(`/api/ovr-sprint/vbt-percentile?${params.toString()}`, { cache: 'no-store' })
       .then((response) => response.json())
       .then((payload: VbtPercentileResponse) => {
@@ -241,7 +243,7 @@ export default function OvrVbtDashboard({ initialResults }: Props) {
       .catch(() => { if (active) { setPercentileError('Unable to load VBT percentile data.'); setPercentiles({}); } })
       .finally(() => { if (active) setPercentileLoading(false); });
     return () => { active = false; };
-  }, [athletePlayerId, exercise, load, percentileGroupId, tab]);
+  }, [athletePlayerId, endDate, exercise, load, percentileGroupId, startDate, tab]);
   const leaderboard = useMemo(() => {
     const groups = new Map<string, Map<string, number[]>>();
     for (const row of initialResults) {
@@ -260,13 +262,13 @@ export default function OvrVbtDashboard({ initialResults }: Props) {
   return <div className={styles.workspace}>
     <section className={styles.commandBar}>
       <div><p className={styles.eyebrow}>VELOCITY BASED TRAINING</p><h3>{tab === 'athlete' ? athlete || 'Athlete analysis' : 'Organization leaderboard'}</h3></div>
-      <div className={styles.tabs}><button className={tab === 'athlete' ? styles.active : ''} onClick={() => setTab('athlete')}>Athlete</button><button className={tab === 'leaderboard' ? styles.active : ''} onClick={() => setTab('leaderboard')}>Leaderboard</button></div>
+      {!playerOnly ? <div className={styles.tabs}><button className={tab === 'athlete' ? styles.active : ''} onClick={() => setTab('athlete')}>Athlete</button><button className={tab === 'leaderboard' ? styles.active : ''} onClick={() => setTab('leaderboard')}>Leaderboard</button></div> : null}
     </section>
 
     <section className={styles.filterPanel}>
       <div className={styles.sectionHeading}><div><p className={styles.eyebrow}>01 · BUILD THE VIEW</p><h3>VBT analysis controls</h3></div><div className={styles.presets}><button onClick={() => setStartDate(new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10))}>30D</button><button onClick={() => setStartDate(new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10))}>90D</button><button onClick={() => setStartDate(allDates[0] ?? '')}>ALL</button></div></div>
       <div className={styles.primaryFilters}>
-        {tab === 'athlete' ? <label><span>Athlete</span><select value={athlete} onChange={(event) => { const nextAthlete = event.target.value; setAthlete(nextAthlete); setExercise(defaultExerciseForAthlete(initialResults, nextAthlete)); setLoad('All'); }}>{athletes.map((name) => <option key={name}>{name}</option>)}</select></label> : <label><span>Leaderboard scope</span><select value="all" disabled><option value="all">All VBT exercises</option></select></label>}
+        {tab === 'athlete' ? (playerOnly ? <div className={styles.playerField}><span>Athlete</span><div className={styles.lockedPlayerField}><span>{athlete || 'Your profile'}</span><small>My data</small></div></div> : <label><span>Athlete</span><select value={athlete} onChange={(event) => { const nextAthlete = event.target.value; setAthlete(nextAthlete); setExercise(defaultExerciseForAthlete(initialResults, nextAthlete)); setLoad('All'); }}>{athletes.map((name) => <option key={name}>{name}</option>)}</select></label>) : <label><span>Leaderboard scope</span><select value="all" disabled><option value="all">All VBT exercises</option></select></label>}
         <label><span>Metric</span><select value={metric} onChange={(event) => setMetric(event.target.value as MetricKey)}>{METRICS.map((entry) => <option key={entry.key} value={entry.key}>{entry.label}{entry.unit ? ` (${entry.unit})` : ''}</option>)}</select></label>
       </div>
       <div className={styles.secondaryFilters}>

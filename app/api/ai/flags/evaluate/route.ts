@@ -19,7 +19,7 @@ export async function GET(request: Request) {
   const access = await requireAiAccess(request, true);
   if (!access.ok) return NextResponse.json({ error: access.error }, { status: access.status });
 
-  const rules = await listFlagRules(access.organizationId);
+  const rules = await listFlagRules(access.organizationId, { userId: access.userId, email: access.session.email ?? '' });
   const enabledRules = rules.filter((rule) => rule.enabled);
   if (!enabledRules.length) return NextResponse.json({ results: [], rules });
 

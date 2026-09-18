@@ -29,7 +29,6 @@ type DashboardSuiteName =
   | 'Catching'
   | 'Custom Reports'
   | 'Comparison Tool'
-  | 'Biomechanics'
   | 'Player Plans'
   | 'Stuff+ Calculator'
   | 'Flags';
@@ -48,7 +47,6 @@ const SUITE_SLUG_MAP: Record<string, DashboardSuiteName> = {
   'comparison-tool': 'Comparison Tool',
   'comparison_tool': 'Comparison Tool',
   'comparison tool': 'Comparison Tool',
-  biomechanics: 'Biomechanics',
   'player-plans': 'Player Plans',
   player_plans: 'Player Plans',
   'player plans': 'Player Plans',
@@ -79,6 +77,9 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
   const suiteParamRaw = Array.isArray(resolvedSearchParams.suite) ? resolvedSearchParams.suite[0] : resolvedSearchParams.suite;
   if (['player-notes', 'player_notes', 'player notes'].includes(String(suiteParamRaw ?? '').trim().toLowerCase())) {
     redirect('/portal/admin/player-notes');
+  }
+  if (String(suiteParamRaw ?? '').trim().toLowerCase() === 'biomechanics') {
+    redirect('/portal/force-plates?tab=biomechanics');
   }
   const requestedInitialSuite = readSuiteParam(resolvedSearchParams.suite);
   const session = await requirePortalSession();

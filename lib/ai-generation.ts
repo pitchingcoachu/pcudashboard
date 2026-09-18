@@ -40,6 +40,17 @@ const REPORT_METRIC_CONCEPTS = [
   { name: 'Run Value', pattern: /\b(?:run value|rv\/100)\b/i }, { name: 'Pitch Value', pattern: /\b(?:pitch value|pv\/100)\b/i },
   { name: 'ERA', pattern: /\bera\b/i }, { name: 'FIP', pattern: /\b(?:x?fip)\b/i },
   { name: 'SIERA', pattern: /\bsiera\b/i }, { name: 'WHIP', pattern: /\bwhip\b/i },
+  { name: 'Jump Height', pattern: /\bjump height\b/i }, { name: 'Peak Power', pattern: /\bpeak power\b/i },
+  { name: 'RSI Modified', pattern: /\b(?:rsi[ -]?modified|rsimodified)\b/i },
+  { name: 'Eccentric Braking RFD', pattern: /\b(?:ecc\.?|eccentric) braking rfd\b/i },
+  { name: 'Back Leg Peak Force', pattern: /\bback leg peak f[yz]\b/i },
+  { name: 'Lead Leg Peak Force', pattern: /\blead leg peak f[yz]\b/i },
+  { name: 'Peak De-Weighting', pattern: /\bpeak de-?weighting\b/i },
+  { name: 'Mound Connection', pattern: /\bmound connection\b/i },
+  { name: 'Back Leg Impulse', pattern: /\bback leg impulse\b/i },
+  { name: 'Force Transfer', pattern: /\b(?:back leg|lead leg|y|z) transfer\b/i },
+  { name: 'Lead Leg Clawback', pattern: /\blead leg clawback\b/i },
+  { name: 'Stride Length', pattern: /\bstride length\b/i }, { name: 'Stride Direction', pattern: /\bstride direction\b/i },
 ];
 
 function forbiddenReportMetrics(text: string, allowedMetrics: string[]): string[] {
@@ -58,6 +69,17 @@ const UNSUPPORTED_SHAPE_JUDGMENTS = [
 
 function hasUnsupportedShapeJudgment(text: string): boolean {
   return UNSUPPORTED_SHAPE_JUDGMENTS.some((pattern) => pattern.test(text));
+}
+
+function missingReportDomains(text: string, data: unknown): string[] {
+  if (!data || typeof data !== 'object') return [];
+  const panels = (data as { panels?: unknown }).panels;
+  if (!Array.isArray(panels)) return [];
+  const panelTypes = panels.map((panel) => String((panel as { panelType?: unknown })?.panelType ?? ''));
+  const missing: string[] = [];
+  if (panelTypes.includes('Percentile Summary') && !/\b(?:jump height|peak power|rsi|braking rfd|force plate|vald)\b/i.test(text)) missing.push('VALD force-plate');
+  if (panelTypes.includes('Biomechanics Table') && !/\b(?:back leg|lead leg|de-?weighting|mound connection|impulse|clawback|stride|axioforce)\b/i.test(text)) missing.push('AxioForce');
+  return missing;
 }
 
 function reportGoalEvidence(data: unknown): PlayerGoalReportEvidence[] {
@@ -119,6 +141,8 @@ export async function generateReportNarrative(input: { reportType: string; title
 
 When precomputed comparisons are supplied, identify the two or three most meaningful changes from the player's reference average. When no comparison is supplied, interpret only the current results and do not claim a change or trend. Explain what the evidence means together instead of listing every number. Distinguish a real direction from normal stability only when comparison evidence supports it, and mention limited samples when the supplied sample sizes make a conclusion weak. Give one practical coaching implication grounded in the shown data, such as what to preserve, monitor, or investigate next. Do not invent a cause, mechanical explanation, intent, target, or recommendation that the evidence does not support. MLB context may appear in one sentence only when an MLB benchmark is supplied for that exact whitelisted metric.
 
+Cover every visible evidence family in the report. If pitching, VALD force-plate, and AxioForce evidence are all present, synthesize all three rather than focusing only on pitching. Percentiles describe standing within the explicitly supplied comparison group; include the group and sample size when discussing a percentile. Treat AxioForce force, timing, transfer, stride, and direction percentiles as descriptive context, not an automatic grade: a higher percentile is not inherently better unless the evidence provides an explicit direction or target. Use low or high AxioForce rankings to identify what to monitor or investigate, never to diagnose a physical limitation or claim a mechanical cause.
+
 The evidence may contain playerGoalEvidence. Those entries are the only player-plan goals relevant to this report: they have a numeric target, a visible matching metric, applicable report context, and a same-metric comparison. When entries are supplied, briefly address each relevant goal using its current value, reference value, target, comparator, and supplied trend. Say whether the player improved, regressed, or remained stable toward that goal, and say the target was met only when targetMet is true. Do not mention goals at all when playerGoalEvidence is absent or empty. Never infer or discuss subjective, mechanical, physical, or otherwise unmeasured goals. Never apply a goal to a different metric, pitch type, count, batter side, or session context. In a bullpen context, do not introduce competition-result goals such as Whiff%, chase, batted-ball outcomes, K%, or BB%.
 
 Treat pitch-shape metrics carefully. More or less IVB, HB, spin efficiency, or tilt is a shape change, not automatically an improvement or decline. Lower IVB may represent more depth, and lower spin efficiency may be intentional or normal for a cutter or other pitch type. Spin efficiency is not a pitch-quality score. Tilt describes orientation, not quality. Never call a pitch worse, say it lost its shape, or label it flatter or steeper from those metrics alone. Use neutral language such as "showed less IVB," "had more depth," or "the shape shifted from the reference." Only grade a shape change when the evidence includes an explicit target, outcome metric, or directly applicable benchmark that supports the judgment. Do not infer approach angle or trajectory from IVB alone.
@@ -130,21 +154,25 @@ Write 2-3 short paragraphs in plain language. Lead immediately with the main tak
   let text = extractText(response.content);
   let forbidden = forbiddenReportMetrics(text, input.allowedMetrics);
   let unsupportedShapeJudgment = hasUnsupportedShapeJudgment(text);
-  if (forbidden.length || unsupportedShapeJudgment) {
+  let missingDomains = missingReportDomains(text, input.data);
+  if (forbidden.length || unsupportedShapeJudgment || missingDomains.length) {
     const reasons = [
       forbidden.length ? `used forbidden metrics (${forbidden.join(', ')})` : '',
       unsupportedShapeJudgment ? 'made an unsupported pitch-shape quality judgment' : '',
+      missingDomains.length ? `failed to address visible evidence (${missingDomains.join(', ')})` : '',
     ].filter(Boolean).join(' and ');
-    response = await create(`Your previous response ${reasons}. Rewrite from scratch. Use only the visible metric whitelist, keep movement and spin-efficiency changes neutral unless direct evidence supports a quality judgment, and omit any conclusion that depends on unsupported assumptions.`);
+    response = await create(`Your previous response ${reasons}. Rewrite from scratch. Address every visible evidence family, use only the visible metric whitelist, keep movement, spin-efficiency, and AxioForce distribution rankings neutral unless direct evidence supports a quality judgment, and omit any conclusion that depends on unsupported assumptions.`);
     text = extractText(response.content);
     forbidden = forbiddenReportMetrics(text, input.allowedMetrics);
     unsupportedShapeJudgment = hasUnsupportedShapeJudgment(text);
+    missingDomains = missingReportDomains(text, input.data);
   }
   text = appendMissingGoalCoverage(text, input.data);
   forbidden = forbiddenReportMetrics(text, input.allowedMetrics);
   unsupportedShapeJudgment = hasUnsupportedShapeJudgment(text);
   if (forbidden.length) throw new Error(`The summary included metrics outside this report (${forbidden.join(', ')}). Please generate it again.`);
   if (unsupportedShapeJudgment) throw new Error('The summary made an unsupported pitch-shape judgment. Please generate it again.');
+  if (missingDomains.length) throw new Error(`The summary did not address all visible report data (${missingDomains.join(', ')}). Please generate it again.`);
   return text;
 }
 

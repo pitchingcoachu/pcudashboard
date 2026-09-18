@@ -71,6 +71,8 @@ export async function GET(request: Request) {
     return NextResponse.json({
       groups,
       selectedGroupId: groupId,
+      comparisonWindow: 'full_history',
+      selectedWindow: { startDate: startDate || null, endDate: endDate || null },
       results: Object.fromEntries(resultByExercise),
     }, { headers: { 'cache-control': 'private, no-store' } });
   } catch (error) {

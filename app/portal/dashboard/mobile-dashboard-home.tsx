@@ -17,12 +17,15 @@ const SUITE_DESCRIPTIONS: Record<string, string> = {
 export default function MobileDashboardHome({
   suiteOptions,
   onOpenSuite,
+  selectedSchoolCode,
 }: {
   suiteOptions: string[];
   onOpenSuite: (suite: string) => void;
+  selectedSchoolCode: string;
 }) {
   const router = useRouter();
-  const visibleSuites = suiteOptions.filter((name) => name !== 'Home' && name !== 'Biomechanics' && name !== 'Flags');
+  const visibleSuites = suiteOptions.filter((name) => name !== 'Home' && name !== 'Flags');
+  const showPerformanceData = String(selectedSchoolCode ?? '').trim().toUpperCase() === 'PCU';
 
   function openFullDashboard() {
     document.cookie = `${VIEW_MODE_COOKIE}=desktop; path=/; max-age=31536000; samesite=lax`;
@@ -31,6 +34,20 @@ export default function MobileDashboardHome({
 
   return (
     <div className="portal-mobile-dashboard-home">
+      {showPerformanceData ? (
+        <button
+          type="button"
+          className="portal-admin-card portal-mobile-dashboard-home-card portal-mobile-performance-data-card"
+          onClick={() => router.push('/portal/force-plates')}
+        >
+          <span className="portal-mobile-performance-data-eyebrow">Performance lab</span>
+          <h2>Biomechanics &amp; Performance Data</h2>
+          <p className="portal-muted-text">Force plates, sprint timing, VBT, and AxioForce biomechanics.</p>
+          <span className="portal-mobile-performance-data-chips" aria-hidden="true">
+            <i>VALD</i><i>Sprint</i><i>VBT</i><i>Biomechanics</i>
+          </span>
+        </button>
+      ) : null}
       {visibleSuites.map((name) => (
         <button
           key={name}

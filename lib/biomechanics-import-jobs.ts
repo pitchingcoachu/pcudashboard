@@ -1,4 +1,5 @@
 import { saveSinglePitchPoints } from './biomechanics-db';
+import { biomechanicsDateRangeFromRows, refreshBiomechanicsPerformanceRollups } from './biomechanics-rollups';
 
 export type SinglePitchImportFile = {
   sourceFileName: string;
@@ -104,6 +105,16 @@ export async function runSinglePitchImportJob(jobId: string): Promise<void> {
       job.filesProcessed += 1;
       job.updatedAt = nowIso();
     }
+    const dateRange = biomechanicsDateRangeFromRows(job.files.flatMap((file) => file.rows));
+    if (dateRange) {
+      await refreshBiomechanicsPerformanceRollups({
+        organizationId: job.organizationId,
+        schoolCode: job.schoolCode,
+        ...dateRange,
+      }).catch((error) => {
+        console.error('AxioForce performance rollup refresh failed', error);
+      });
+    }
     job.status = 'completed';
     job.processedRows = job.totalRows;
     job.updatedAt = nowIso();
@@ -115,4 +126,3 @@ export async function runSinglePitchImportJob(jobId: string): Promise<void> {
     running.delete(id);
   }
 }
-

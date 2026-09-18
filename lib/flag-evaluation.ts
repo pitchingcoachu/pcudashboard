@@ -1,7 +1,7 @@
 import type { FlagRuleRow } from './ai-workspace-db';
 import { canonicalFlagMetric } from './dashboard-metric-catalog';
 
-export type FlagResult = { ruleId:number; ruleName:string; domain:'pitching'|'hitting'|'force_plates'; player:string; sessionDate:string; metric:string; pitchType:string; testType:string; sessionAverage:number; baselineAverage:number|null; change:number|null; changePercent:number|null; sample:number; triggered:boolean };
+export type FlagResult = { ruleId:number; ruleName:string; domain:'pitching'|'hitting'|'force_plates'|'ovr_sprint'|'biomechanics'; player:string; sessionDate:string; metric:string; pitchType:string; testType:string; sessionAverage:number; baselineAverage:number|null; change:number|null; changePercent:number|null; sample:number; triggered:boolean };
 
 const METRIC_KEYS:Record<string,string[]>={
   velocity:['rel_speed','velo','velocity'],ivb:['ivb','induced_vert_break','inducedverticalbreak'],hb:['hb','horizontal_break','horzbreak'],
@@ -16,7 +16,7 @@ const firstLast=(value:string)=>{const raw=value.replace(/\s+/g,' ').trim();if(!
 const personKey=(value:string)=>firstLast(value).toLowerCase().replace(/[^a-z0-9]+/g,'');
 const pitchTypeKey=(value:string)=>{const token=value.toLowerCase().replace(/[^a-z0-9]+/g,'');if(['fastball','fourseamfastball','fourseam','ff','fa'].includes(token))return'fastball';if(['sinker','oneseamfastball','twoseamfastball','twoseamfasball','twoseam','si','ft'].includes(token))return'sinker';if(['changeup','ch'].includes(token))return'changeup';if(['sweeper','st'].includes(token))return'sweeper';if(['splitter','splitfinger','splitfingerfastball','sp','fs'].includes(token))return'splitter';if(['curveball','cu','knucklecurve','kc'].includes(token))return'curveball';if(['cutter','fc'].includes(token))return'cutter';if(['slider','sl'].includes(token))return'slider';if(['knuckleball','kn'].includes(token))return'knuckleball';return token;};
 
-export function evaluateFlagRules(rules:FlagRuleRow[],pointsByDomain:{pitching:Array<Record<string,unknown>>;hitting:Array<Record<string,unknown>>;force_plates:Array<Record<string,unknown>>}):FlagResult[]{
+export function evaluateFlagRules(rules:FlagRuleRow[],pointsByDomain:{pitching:Array<Record<string,unknown>>;hitting:Array<Record<string,unknown>>;force_plates:Array<Record<string,unknown>>;ovr_sprint:Array<Record<string,unknown>>;biomechanics:Array<Record<string,unknown>>}):FlagResult[]{
   const results:FlagResult[]=[];
   for(const rule of rules.filter((r)=>r.enabled)){
     const rows=pointsByDomain[rule.domain]??[];const canonicalMetric=canonicalFlagMetric(rule.metric);const keys=[canonicalMetric,...(METRIC_KEYS[rule.metric]??[rule.metric])];const countKeys=[`${canonicalMetric}_n`,...(METRIC_COUNT_KEYS[rule.metric]??[])];

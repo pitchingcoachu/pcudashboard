@@ -189,6 +189,14 @@ const SCHOOL_BRANDS: Record<string, SchoolBrand> = {
     accentRgb: '196, 0, 47',
     accentRgbSecondary: '6, 38, 96',
   },
+  BC: {
+    schoolCode: 'BC',
+    logoSrc: '/boulder-creek-logo.png',
+    logoAlt: 'Boulder Creek logo',
+    accent: '#d31e2b',
+    accentSoft: '#9c161f',
+    accentRgb: '211, 30, 43',
+  },
 };
 
 export const SCHOOL_BRAND_CODES = Object.freeze(Object.keys(SCHOOL_BRANDS));

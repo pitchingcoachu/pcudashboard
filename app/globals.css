@@ -15255,6 +15255,7 @@ body:not(.theme-light) .portal-shell--arizona .portal-social-row .social-link:is
 .flags-rule-item:has(.flags-rule-drag-handle:focus-visible) { border-color: rgba(var(--portal-accent-rgb, 200, 16, 46), .42); background: rgba(var(--portal-accent-rgb, 200, 16, 46), .07); }
 .flags-rule-item.is-dragging { opacity: .48; border-color: rgb(var(--portal-accent-rgb, 200, 16, 46)); }
 .flags-rule-item-main { display: flex; min-width: 0; align-items: center; gap: 11px; }
+.flags-rule-private-badge { display: inline-block; margin-left: 8px; padding: 2px 7px; border: 1px solid rgba(148,163,184,.4); border-radius: 999px; color: var(--text-muted); font-size: .68rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; vertical-align: middle; }
 .flags-rule-drag-handle { display: grid; width: 34px; height: 38px; flex: 0 0 auto; place-items: center; border: 1px solid rgba(148,163,184,.35); border-radius: 9px; color: var(--text-muted); font-size: 1.45rem; line-height: 1; cursor: grab; user-select: none; }
 .flags-rule-drag-handle:hover { color: var(--text-main); }
 .flags-rule-drag-handle:focus-visible { outline: 2px solid rgb(var(--portal-accent-rgb, 200, 16, 46)); outline-offset: 2px; color: var(--text-main); }

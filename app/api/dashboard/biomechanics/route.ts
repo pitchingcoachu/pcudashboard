@@ -6,13 +6,17 @@ import { getDbPool, isDatabaseConfigured } from '../../../../lib/auth-db';
 import type { PortalSession } from '../../../../lib/portal-session';
 import {
   deleteBiomechanicsPitch,
+  getBiomechanicsDateRange,
+  getBiomechanicsPitchersWithMoundData,
   getBiomechanicsSnapshot,
   getLatestBiomechanicsDate,
   saveAllPitchRows,
   saveSinglePitchPoints,
   type BiomechanicsUploadKind,
 } from '../../../../lib/biomechanics-db';
-import { resolveSchoolScopedOrganizationId } from '../../../../lib/programming-scope';
+import { biomechanicsDateRangeFromRows, refreshBiomechanicsPerformanceRollups } from '../../../../lib/biomechanics-rollups';
+import { resolveProgrammingOrganizationId, resolveSchoolScopedOrganizationId } from '../../../../lib/programming-scope';
+import { getPlayerForUser } from '../../../../lib/training-db';
 
 export const maxDuration = 300;
 const BIOMECH_RESPONSE_CACHE_TTL_MS = 60_000;
@@ -322,10 +326,48 @@ export async function GET(request: Request) {
   const forceMode = String(searchParams.get('forceMode') ?? '').trim().toLowerCase() === 'bw' ? 'bw' : 'force';
   const includeAllPitchValues = String(searchParams.get('includeAllPitchValues') ?? '').trim() === '1';
   const includeAllSessions = String(searchParams.get('includeAllSessions') ?? '').trim() === '1';
-  const playerScopedName = session.role === 'player' ? String(session.name ?? '').trim() : '';
+  const linkedPlayer = session.role === 'player'
+    ? await getPlayerForUser({ organizationId: await resolveProgrammingOrganizationId(scopedSession), userId: session.userId ?? 0 })
+    : null;
+  if (session.role === 'player' && !linkedPlayer) {
+    return NextResponse.json({ error: 'Your login is not linked to a player profile.' }, { status: 403 });
+  }
+  const playerScopedName = session.role === 'player' ? String(linkedPlayer?.fullName ?? '').trim() : '';
   const selectedPitcher = session.role === 'player'
     ? (playerScopedName ? JSON.stringify([playerScopedName]) : null)
     : selectedPitcherRaw;
+  const metadataOnly = String(searchParams.get('metadataOnly') ?? '').trim() === '1';
+  const playersOnly = String(searchParams.get('playersOnly') ?? '').trim() === '1';
+  const metadataOrgIds = Array.from(new Set([
+    Number(scopedOrgId),
+    Number(session.organizationId ?? 0),
+    ...(schoolCode === 'PCU' ? [1] : []),
+  ].filter((value) => Number.isFinite(value) && value > 0)));
+  if (playersOnly) {
+    const pitcherLists = await Promise.all(metadataOrgIds.map((orgId) =>
+      getBiomechanicsPitchersWithMoundData({ organizationId: orgId, schoolCode }).catch(() => [])
+    ));
+    let pitcherOptions = Array.from(new Set(pitcherLists.flat())).sort((a, b) => a.localeCompare(b));
+    if (session.role === 'player') {
+      const ownNameKey = canonicalNameToken(playerScopedName);
+      pitcherOptions = pitcherOptions.filter((name) => canonicalNameToken(name) === ownNameKey);
+    }
+    return NextResponse.json(
+      { pitcher_options: pitcherOptions },
+      { headers: { 'cache-control': 'private, max-age=60, stale-while-revalidate=300' } }
+    );
+  }
+  if (metadataOnly) {
+    const pitcherName = parseSelectedValues(selectedPitcher)[0] ?? '';
+    if (!pitcherName) return NextResponse.json({ startDate: null, endDate: null });
+    for (const orgId of metadataOrgIds) {
+      const range = await getBiomechanicsDateRange({ organizationId: orgId, schoolCode, pitcherName }).catch(() => ({ startDate: null, endDate: null }));
+      if (range.startDate || range.endDate) {
+        return NextResponse.json(range, { headers: { 'cache-control': 'private, max-age=60, stale-while-revalidate=300' } });
+      }
+    }
+    return NextResponse.json({ startDate: null, endDate: null });
+  }
   const cacheKey = [
     'biomech:v12',
     Number(organizationId),
@@ -634,11 +676,13 @@ export async function POST(request: Request) {
     const pitcherOptions = await fetchPcuPitchers();
 
     let totalInserted = 0;
+    const importedRowsForRollup: Array<Record<string, unknown>> = [];
     for (const file of files) {
       const fileText = await file.text();
       const rawRows = parseCsv(fileText).map((row) => Object.fromEntries(Object.entries(row).map(([k, v]) => [k, v])));
       const rows = uploadKind === 'all_pitches' ? applyPcuNameMatching(rawRows, pitcherOptions) : rawRows;
       if (!rows.length) continue;
+      importedRowsForRollup.push(...rows);
       if (uploadKind === 'all_pitches') {
         const result = await saveAllPitchRows({
           organizationId,
@@ -664,6 +708,16 @@ export async function POST(request: Request) {
 
     biomechanicsResponseCache.clear();
     await clearBiomechRollupCache({ organizationId, schoolCode }).catch(() => {});
+    const importedDateRange = biomechanicsDateRangeFromRows(importedRowsForRollup);
+    if (importedDateRange) {
+      await refreshBiomechanicsPerformanceRollups({
+        organizationId,
+        schoolCode,
+        ...importedDateRange,
+      }).catch((rollupError) => {
+        console.error('AxioForce performance rollup refresh failed', rollupError);
+      });
+    }
     return NextResponse.json({ ok: true, filesProcessed: files.length, rowsInserted: totalInserted });
   } catch (error) {
     return NextResponse.json(

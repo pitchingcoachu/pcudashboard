@@ -21,6 +21,41 @@ export function parseForcePlateFlagMetric(metric: string): { metricName: string;
   }
 }
 
+const OVR_SPRINT_METRIC_PREFIX = 'ovr_sprint:';
+
+export function ovrSprintFlagMetric(exercise: string, metric: 'totalTime' | 'speedMph'): string {
+  return `${OVR_SPRINT_METRIC_PREFIX}${encodeURIComponent(exercise)}:${metric}`;
+}
+
+export function parseOvrSprintFlagMetric(metric: string): { exercise: string; metric: 'totalTime' | 'speedMph' } | null {
+  if (!metric.startsWith(OVR_SPRINT_METRIC_PREFIX)) return null;
+  const encoded = metric.slice(OVR_SPRINT_METRIC_PREFIX.length);
+  const separator = encoded.lastIndexOf(':');
+  if (separator < 0) return null;
+  const metricPart = encoded.slice(separator + 1);
+  if (metricPart !== 'totalTime' && metricPart !== 'speedMph') return null;
+  try {
+    return { exercise: decodeURIComponent(encoded.slice(0, separator)), metric: metricPart };
+  } catch {
+    return null;
+  }
+}
+
+const BIOMECHANICS_METRIC_PREFIX = 'biomechanics:';
+
+export function biomechanicsFlagMetric(column: string): string {
+  return `${BIOMECHANICS_METRIC_PREFIX}${encodeURIComponent(column)}`;
+}
+
+export function parseBiomechanicsFlagMetric(metric: string): { column: string } | null {
+  if (!metric.startsWith(BIOMECHANICS_METRIC_PREFIX)) return null;
+  try {
+    return { column: decodeURIComponent(metric.slice(BIOMECHANICS_METRIC_PREFIX.length)) };
+  } catch {
+    return null;
+  }
+}
+
 const SEPARATION_COLUMNS = ['fb', 'si'].flatMap((base) =>
   ['CH', 'SP', 'CT', 'SL', 'CB', 'SW'].flatMap((pitch) => [
     `${base}${pitch}ivbSEP`,
@@ -77,6 +112,10 @@ export function dashboardMetricLabel(metricInput: string): string {
   const metric = canonicalFlagMetric(metricInput);
   const forcePlateMetric = parseForcePlateFlagMetric(metric);
   if (forcePlateMetric) return `${forcePlateMetric.metricName}${forcePlateMetric.metricUnit ? ` (${forcePlateMetric.metricUnit})` : ''}`;
+  const ovrSprintMetric = parseOvrSprintFlagMetric(metric);
+  if (ovrSprintMetric) return `${ovrSprintMetric.exercise} — ${ovrSprintMetric.metric === 'speedMph' ? 'Total Speed' : 'Total Time'}`;
+  const biomechanicsMetric = parseBiomechanicsFlagMetric(metric);
+  if (biomechanicsMetric) return biomechanicsMetric.column;
   if (['Velo', 'Max', 'EV', 'Exit Velocity', 'BatSpeed'].includes(metric)) return `${metric} (mph)`;
   if (['IVB', 'xIVB', 'dIVB', 'HB', 'xHB', 'dHB'].includes(metric) || /(?:ivb|hb|tot)SEP$/i.test(metric)) return `${metric} (in)`;
   if (['Height', 'Side', 'Ext'].includes(metric)) return `${metric} (ft)`;

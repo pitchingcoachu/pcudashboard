@@ -1,7 +1,8 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
-import { loadForcePlatePercentileRows, type ForcePlatePercentileRow } from '../../../../lib/force-plate-neon-db';
+import type { ForcePlatePercentileRow } from '../../../../lib/force-plate-neon-db';
+import { loadPerformanceDailyRollups } from '../../../../lib/performance-rollups';
 import { canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
 import { getPlayerForUser, listPlayerChoicesByOrganization } from '../../../../lib/training-db';
 import { fetchValdProfileGroupDirectory, fetchValdProfileNamesForGroup } from '../../../../lib/vald-forceplates';
@@ -127,24 +128,36 @@ export async function GET(request: Request) {
     cohortNames = rosterNames.filter((name) => groupNorms.has(normalizeName(name)));
   }
   const queryNames = Array.from(new Set([...cohortNames, canonicalPlayer]));
-  const rows = await loadForcePlatePercentileRows({
+  const startDate = String(url.searchParams.get('startDate') ?? '').trim();
+  const endDate = String(url.searchParams.get('endDate') ?? '').trim();
+  const rollups = await loadPerformanceDailyRollups({
     organizationId,
     schoolCode: 'PCU',
-    allowedPlayerNames: queryNames,
-    metricName,
-    metricUnit,
-    testType,
-    startDate: String(url.searchParams.get('startDate') ?? '').trim(),
-    endDate: String(url.searchParams.get('endDate') ?? '').trim(),
+    source: 'vald',
+    playerNames: queryNames,
+    activityTypes: testType !== 'All' ? [testType] : undefined,
+    metricKeys: [`${metricName}\u001f${metricUnit}`],
   });
+  const populationRows: ForcePlatePercentileRow[] = rollups.map((row) => ({
+    playerName: row.playerName,
+    testId: `${row.sessionDate}:${row.activityType}`,
+    dateTime: `${row.sessionDate}T12:00:00.000Z`,
+    dateShort: row.sessionDate,
+    testType: row.activityType,
+    value: mode === 'max' ? row.valueMax : row.sampleCount > 0 ? row.valueSum / row.sampleCount : row.latestValue,
+  }));
+  const filteredSelectedRows = startDate || endDate
+    ? populationRows.filter((row) => normalizeName(row.playerName) === normalizeName(canonicalPlayer)
+        && (!startDate || row.dateShort >= startDate) && (!endDate || row.dateShort <= endDate))
+    : null;
   const rowsByPlayer = new Map<string, ForcePlatePercentileRow[]>();
-  for (const row of rows) {
+  for (const row of populationRows) {
     const key = normalizeName(row.playerName);
     const current = rowsByPlayer.get(key) ?? [];
     current.push(row);
     rowsByPlayer.set(key, current);
   }
-  const selected = summarize(rowsByPlayer.get(normalizeName(canonicalPlayer)) ?? [], mode);
+  const selected = summarize(filteredSelectedRows ?? rowsByPlayer.get(normalizeName(canonicalPlayer)) ?? [], mode);
   const population = cohortNames.map((name) => summarize(rowsByPlayer.get(normalizeName(name)) ?? [], mode));
   const invert = isLowerBetterMetric(metricUnit);
   const stats = {
@@ -164,6 +177,8 @@ export async function GET(request: Request) {
     })),
     selectedGroupId: validGroup?.id ?? 'all',
     selectedGroupLabel: validGroup ? (validGroup.categoryName ? `${validGroup.categoryName} · ${validGroup.name}` : validGroup.name) : 'All PCU athletes',
+    comparisonWindow: 'full_history',
+    selectedWindow: { startDate: startDate || null, endDate: endDate || null },
     stats,
   }, { headers: { 'cache-control': 'private, no-store' } });
 }

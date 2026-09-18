@@ -24,6 +24,28 @@ type ReportScope = 'Single Player' | 'Multi-Player' | 'Team';
 type PercentileScope = 'NCAA' | 'TEAM' | 'MLB';
 type ForcePlateLegDisplay = 'selected' | 'left' | 'right' | 'both';
 type SprayViewMode = 'Batted Balls' | 'Bins';
+
+const BIOMECHANICS_PERCENTILE_METRICS = [
+  'Pitch Velocity (mph)',
+  'Back Leg Peak Fz (lb)',
+  'Peak De-Weighting (lb)',
+  'Z-Force Gain (lb)',
+  'Back Leg Peak Fy (lb)',
+  'Mound Connection (BW%)',
+  'Back Leg Impulse (lb·s)',
+  'Back Leg Impulse Time (s)',
+  'Back Leg YZ Transfer (s)',
+  'Lead Leg Peak Fz (lb)',
+  'Lead Leg Peak Fy (lb)',
+  'Lead Leg Clawback (s)',
+  'Lead Leg FFC to Peak Y (s)',
+  'Lead Leg YZ Transfer (s)',
+  'Y Transfer (s)',
+  'Z Transfer (s)',
+  'Stride Length (in)',
+  'Stride Direction (deg)',
+] as const;
+
 type PanelType =
   | ''
   | 'Movement Plot'
@@ -220,6 +242,17 @@ type OverviewLitePayload = {
     iso_value?: number | null;
     result_label?: string | null;
   }>;
+  biomechanics_percentiles?: {
+    selectedGroupId: string;
+    selectedGroupLabel: string;
+    comparisonWindow?: string;
+    rows: Record<string, Record<string, {
+      value: number;
+      percentile: number | null;
+      sampleSize: number;
+      rankingDirection?: 'higher_is_higher' | 'lower_is_better' | 'handedness_normalized';
+    }>>;
+  };
 };
 
 const LEAGUE_SEASON_START = '2026-02-13';
@@ -355,6 +388,8 @@ type CellConfig = {
   percentileSummaryForceTestType: string;
   percentileSummaryForceLegDisplay: ForcePlateLegDisplay;
   percentileSummaryOvrExercises: string[];
+  percentileSummaryBiomechanicsMetrics: string[];
+  percentileSummaryBiomechanicsPitchType: string;
   percentileSummaryGroupId: string;
   biomechanicsTableMode: string;
   biomechanicsPitchKey: string;
@@ -832,6 +867,28 @@ function formatBiomechanicsTableValue(column: string, value: unknown, forceMode:
   return String(value);
 }
 
+function biomechanicsMetricUnit(column: string, forceMode: 'force' | 'bw'): string {
+  if (column === 'Pitch Velocity (mph)') return 'mph';
+  if (column === 'Mound Connection (BW%)') return '';
+  const isForceColumn = column.includes('Peak Fz') || column.includes('Peak Fy') || column.includes('Peak De-Weighting') || column.includes('Z-Force Gain');
+  const isImpulseColumn = column.includes('Impulse') && !column.includes('Time');
+  if (forceMode === 'bw' && (isForceColumn || isImpulseColumn)) return '';
+  if (isForceColumn) return 'lb';
+  if (isImpulseColumn) return 'lb·s';
+  if (
+    column.includes('Back Leg Impulse Time') ||
+    column.includes('Back Leg YZ Transfer') ||
+    column.includes('Lead Leg YZ Transfer') ||
+    column.includes('Lead Leg FFC to Peak Y') ||
+    column === 'Y Transfer (s)' ||
+    column === 'Z Transfer (s)'
+  ) return 'ms';
+  if (column.includes('Clawback')) return 's';
+  if (column.includes('Stride Length')) return 'in';
+  if (column.includes('Stride Direction')) return '°';
+  return '';
+}
+
 function summarizeBiomechanicsRowsByPitchType(
   rows: Array<Record<string, string | number | null>>,
   columns: string[]
@@ -1306,12 +1363,21 @@ function hasForcePlateLegMetric(metrics: string[]): boolean {
 type PercentileGroupOption = { id: string; label: string };
 type PercentileStatValue = { percentile: number | null; sampleSize: number };
 
+function biomechanicsMetricLabel(column: string): string {
+  return column
+    .replace(/\s*\((?:mph|lb|BW%|lb·s|s|in|deg)\)\s*$/i, '')
+    .replace(/\bFz\b/g, 'Z')
+    .replace(/\bFy\b/g, 'Y')
+    .trim();
+}
+
 function PercentileSummaryConfigFields({
   config,
   cellId,
   forcePlateMetricOptions,
   availableForcePlateTestTypes,
   ovrSprintExerciseOptions,
+  biomechanicsPitchTypeOptions,
   percentileGroups,
   setCellConfigs,
 }: {
@@ -1320,6 +1386,7 @@ function PercentileSummaryConfigFields({
   forcePlateMetricOptions: Array<{ value: string; label: string; testTypes?: string[] }>;
   availableForcePlateTestTypes: string[];
   ovrSprintExerciseOptions: Array<{ value: string; label: string }>;
+  biomechanicsPitchTypeOptions: string[];
   percentileGroups: PercentileGroupOption[];
   setCellConfigs: (updater: (current: Record<string, CellConfig>) => Record<string, CellConfig>) => void;
 }) {
@@ -1375,6 +1442,37 @@ function PercentileSummaryConfigFields({
         values={config.percentileSummaryOvrExercises}
         onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), percentileSummaryOvrExercises: next } }))}
       />
+      <label>AxioForce Metrics</label>
+      <SearchableMultiSelect
+        options={BIOMECHANICS_PERCENTILE_METRICS.map((metric) => ({ value: metric, label: biomechanicsMetricLabel(metric) }))}
+        values={config.percentileSummaryBiomechanicsMetrics}
+        onChange={(next) => setCellConfigs((current) => ({
+          ...current,
+          [cellId]: { ...(current[cellId] ?? emptyCell()), percentileSummaryBiomechanicsMetrics: next },
+        }))}
+      />
+      {config.percentileSummaryBiomechanicsMetrics.length ? (
+        <>
+          <label>AxioForce Pitch Type</label>
+          <SearchableSingleSelect
+            options={Array.from(new Set(['All', ...biomechanicsPitchTypeOptions.filter((value) => value !== 'All')])).map((value) => ({ value, label: value }))}
+            value={config.percentileSummaryBiomechanicsPitchType || 'All'}
+            onChange={(next) => setCellConfigs((current) => ({
+              ...current,
+              [cellId]: { ...(current[cellId] ?? emptyCell()), percentileSummaryBiomechanicsPitchType: next || 'All' },
+            }))}
+          />
+          <label>AxioForce Scale</label>
+          <SearchableSingleSelect
+            options={[{ value: 'force', label: 'Pounds (lb)' }, { value: 'bw', label: 'Bodyweight %' }]}
+            value={config.biomechanicsForceMode || 'force'}
+            onChange={(next) => setCellConfigs((current) => ({
+              ...current,
+              [cellId]: { ...(current[cellId] ?? emptyCell()), biomechanicsForceMode: next === 'bw' ? 'bw' : 'force' },
+            }))}
+          />
+        </>
+      ) : null}
       <label>Compare Against</label>
       <SearchableSingleSelect
         options={[{ value: 'all', label: 'All PCU athletes' }, ...percentileGroups.map((group) => ({ value: group.id, label: group.label }))]}
@@ -1517,6 +1615,7 @@ type PercentileTile = {
   leg?: 'left' | 'right' | null;
   unit: string;
   value: number | null;
+  formattedValue?: string;
   percentile: PercentileStatValue | null;
   trendPct: number | null;
   favorable: boolean | null;
@@ -1556,22 +1655,34 @@ function trendFromRows(rows: Array<{ date: string; value: number }>, lowerIsBett
 
 function PercentileSummaryPanel({
   player,
+  startDate,
+  endDate,
   forceMetrics,
   forceTestType,
   ovrExercises,
+  biomechanicsMetrics,
+  biomechanicsPitchType,
+  biomechanicsForceMode,
   groupId,
   compactMetricLabels,
   forcePlateMetricOptions,
   onGroupsLoaded,
+  onBiomechanicsPitchTypesLoaded,
 }: {
   player: string;
+  startDate: string;
+  endDate: string;
   forceMetrics: string[];
   forceTestType: string;
   ovrExercises: string[];
+  biomechanicsMetrics: string[];
+  biomechanicsPitchType: string;
+  biomechanicsForceMode: 'force' | 'bw';
   groupId: string;
   compactMetricLabels: boolean;
   forcePlateMetricOptions: Array<{ value: string; label: string; testTypes?: string[] }>;
   onGroupsLoaded: (groups: PercentileGroupOption[]) => void;
+  onBiomechanicsPitchTypesLoaded: (pitchTypes: string[]) => void;
 }) {
   const [tiles, setTiles] = useState<PercentileTile[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1579,11 +1690,13 @@ function PercentileSummaryPanel({
   const normalizedPlayer = normalizeNameForApi(player);
   const forceMetricSignature = forceMetrics.join('\u001f');
   const ovrExerciseSignature = ovrExercises.join('\u001f');
+  const biomechanicsMetricSignature = biomechanicsMetrics.join('\u001f');
 
   useEffect(() => {
     const forceMetricValues = forceMetricSignature ? forceMetricSignature.split('\u001f') : [];
     const ovrExerciseValues = ovrExerciseSignature ? ovrExerciseSignature.split('\u001f') : [];
-    if (!normalizedPlayer || (!forceMetricValues.length && !ovrExerciseValues.length)) {
+    const biomechanicsMetricValues = biomechanicsMetricSignature ? biomechanicsMetricSignature.split('\u001f') : [];
+    if (!normalizedPlayer || (!forceMetricValues.length && !ovrExerciseValues.length && !biomechanicsMetricValues.length)) {
       setTiles([]);
       setError(!normalizedPlayer ? 'Select a single player to show percentile summaries.' : '');
       return;
@@ -1603,9 +1716,14 @@ function PercentileSummaryPanel({
         const metricUnit = parsed?.metricUnit ?? option?.label.match(/\(([^)]*)\)\s*$/)?.[1] ?? '';
         const leg = forcePlateMetricLeg(metricValue);
         const params = new URLSearchParams({ player: normalizedPlayer, metricName, metricUnit, groupId, testType: forceTestType || 'All', mode: 'average' });
+        if (startDate) params.set('startDate', startDate);
+        if (endDate) params.set('endDate', endDate);
+        const overviewParams = new URLSearchParams({ player: normalizedPlayer, metrics: metricValue, test_type: forceTestType || 'All' });
+        if (startDate) overviewParams.set('start_date', startDate);
+        if (endDate) overviewParams.set('end_date', endDate);
         const [statsResponse, overviewResponse] = await Promise.all([
           fetch(`/api/player/force-plate-percentiles?${params.toString()}`, { cache: 'no-store' }),
-          fetch(`/api/dashboard/force-plates/overview?${new URLSearchParams({ player: normalizedPlayer, metrics: metricValue, test_type: forceTestType || 'All' }).toString()}`, { cache: 'no-store' }),
+          fetch(`/api/dashboard/force-plates/overview?${overviewParams.toString()}`, { cache: 'no-store' }),
         ]);
         const statsPayload = await statsResponse.json().catch(() => ({})) as { groups?: Array<{ id: string; categoryName?: string; name: string }>; stats?: { latest: PercentileStatValue } };
         const overviewPayload = await overviewResponse.json().catch(() => ({})) as OverviewLitePayload;
@@ -1647,9 +1765,14 @@ function PercentileSummaryPanel({
         if (playerEntry) {
           const percentileParams = new URLSearchParams({ playerId: String(playerEntry.id), metric: 'totalTime', groupId });
           for (const exercise of ovrExerciseValues) percentileParams.append('exercise', exercise);
+          if (startDate) percentileParams.set('startDate', startDate);
+          if (endDate) percentileParams.set('endDate', endDate);
+          const overviewParams = new URLSearchParams({ player: normalizedPlayer, exercises: ovrExerciseValues.join(','), metric: 'totalTime' });
+          if (startDate) overviewParams.set('start_date', startDate);
+          if (endDate) overviewParams.set('end_date', endDate);
           const [statsResponse, overviewResponse] = await Promise.all([
             fetch(`/api/ovr-sprint/percentile?${percentileParams.toString()}`, { cache: 'no-store' }),
-            fetch(`/api/dashboard/ovr-sprint/overview?${new URLSearchParams({ player: normalizedPlayer, exercises: ovrExerciseValues.join(','), metric: 'totalTime' }).toString()}`, { cache: 'no-store' }),
+            fetch(`/api/dashboard/ovr-sprint/overview?${overviewParams.toString()}`, { cache: 'no-store' }),
           ]);
           const statsPayload = await statsResponse.json().catch(() => ({})) as { groups?: Array<{ id: number; name: string }>; results?: Record<string, { stats: { latest: PercentileStatValue } }> };
           const overviewPayload = await overviewResponse.json().catch(() => ({})) as OverviewLitePayload;
@@ -1678,6 +1801,52 @@ function PercentileSummaryPanel({
         }
       }
 
+      if (biomechanicsMetricValues.length) {
+        const params = new URLSearchParams({
+          player: normalizedPlayer,
+          groupId,
+          forceMode: biomechanicsForceMode,
+        });
+        if (startDate) params.set('startDate', startDate);
+        if (endDate) params.set('endDate', endDate);
+        if (biomechanicsPitchType && biomechanicsPitchType !== 'All') {
+          params.set('pitchTypes', JSON.stringify([biomechanicsPitchType]));
+        }
+        const response = await fetch(`/api/player/biomechanics-percentiles?${params.toString()}`, { cache: 'no-store' });
+        const payload = await response.json().catch(() => ({})) as {
+          error?: string;
+          groups?: Array<{ id: string; label?: string; name?: string; categoryName?: string }>;
+          rows?: Record<string, Record<string, {
+            value: number;
+            percentile: number | null;
+            sampleSize: number;
+          }>>;
+        };
+        if (!response.ok) throw new Error(payload.error ?? 'Unable to load AxioForce percentile data.');
+        if (Array.isArray(payload.groups)) {
+          groups = payload.groups.map((group) => ({
+            id: group.id,
+            label: group.label || (group.categoryName ? `${group.categoryName} · ${group.name ?? ''}` : group.name) || group.id,
+          }));
+        }
+        onBiomechanicsPitchTypesLoaded(Object.keys(payload.rows ?? {}).filter((pitchType) => pitchType !== 'All'));
+        const selectedPitchType = biomechanicsPitchType && biomechanicsPitchType !== 'All' ? biomechanicsPitchType : 'All';
+        const rankRow = payload.rows?.[selectedPitchType] ?? payload.rows?.All ?? {};
+        for (const metric of biomechanicsMetricValues) {
+          const rank = rankRow[metric];
+          nextTiles.push({
+            key: `axioforce:${selectedPitchType}:${metric}`,
+            label: biomechanicsMetricLabel(metric),
+            unit: biomechanicsMetricUnit(metric, biomechanicsForceMode),
+            value: rank?.value ?? null,
+            formattedValue: rank ? formatBiomechanicsTableValue(metric, rank.value, biomechanicsForceMode) : undefined,
+            percentile: rank ? { percentile: rank.percentile, sampleSize: rank.sampleSize } : null,
+            trendPct: null,
+            favorable: null,
+          });
+        }
+      }
+
       if (!active) return;
       onGroupsLoaded(groups);
       setTiles(nextTiles);
@@ -1692,10 +1861,10 @@ function PercentileSummaryPanel({
     return () => {
       active = false;
     };
-  }, [compactMetricLabels, forceMetricSignature, forcePlateMetricOptions, forceTestType, groupId, normalizedPlayer, onGroupsLoaded, ovrExerciseSignature]);
+  }, [biomechanicsForceMode, biomechanicsMetricSignature, biomechanicsPitchType, compactMetricLabels, endDate, forceMetricSignature, forcePlateMetricOptions, forceTestType, groupId, normalizedPlayer, onBiomechanicsPitchTypesLoaded, onGroupsLoaded, ovrExerciseSignature, startDate]);
 
   if (error) return <p className="portal-muted-text">{error}</p>;
-  if (!tiles.length && !loading) return <p className="portal-muted-text">Choose at least one Force Plate metric or OVR Sprint exercise.</p>;
+  if (!tiles.length && !loading) return <p className="portal-muted-text">Choose at least one VALD metric, OVR Sprint exercise, or AxioForce metric.</p>;
 
   return (
     <div className="portal-custom-reports-kpi-grid">
@@ -1716,7 +1885,7 @@ function PercentileSummaryPanel({
               : <span className="portal-custom-reports-percentile-badge portal-custom-reports-percentile-unavailable">No rank</span>}
           </div>
           <strong className="portal-custom-reports-kpi-value-row">
-            <span className="portal-custom-reports-kpi-value">{tile.value === null ? '—' : tile.value.toFixed(1)}</span>
+            <span className="portal-custom-reports-kpi-value">{tile.value === null ? '—' : tile.formattedValue ?? tile.value.toFixed(1)}</span>
             {tile.unit ? <small title={tile.unit}>{tile.unit}</small> : null}
           </strong>
           {tile.trendPct !== null ? (
@@ -2905,6 +3074,8 @@ function emptyCell(): CellConfig {
     percentileSummaryForceTestType: 'All',
     percentileSummaryForceLegDisplay: 'selected',
     percentileSummaryOvrExercises: [],
+    percentileSummaryBiomechanicsMetrics: [],
+    percentileSummaryBiomechanicsPitchType: 'All',
     percentileSummaryGroupId: 'all',
     biomechanicsTableMode: 'Summary',
     biomechanicsPitchKey: '',
@@ -2938,6 +3109,8 @@ function normalizeCellConfig(input: Partial<CellConfig> | undefined): CellConfig
     percentileSummaryForceTestType: input?.percentileSummaryForceTestType || base.percentileSummaryForceTestType,
     percentileSummaryForceLegDisplay: ['left', 'right', 'both'].includes(String(input?.percentileSummaryForceLegDisplay)) ? input!.percentileSummaryForceLegDisplay! : base.percentileSummaryForceLegDisplay,
     percentileSummaryOvrExercises: input?.percentileSummaryOvrExercises?.length ? input.percentileSummaryOvrExercises : base.percentileSummaryOvrExercises,
+    percentileSummaryBiomechanicsMetrics: input?.percentileSummaryBiomechanicsMetrics?.filter((metric) => BIOMECHANICS_PERCENTILE_METRICS.includes(metric as typeof BIOMECHANICS_PERCENTILE_METRICS[number])) ?? base.percentileSummaryBiomechanicsMetrics,
+    percentileSummaryBiomechanicsPitchType: input?.percentileSummaryBiomechanicsPitchType || base.percentileSummaryBiomechanicsPitchType,
     percentileSummaryGroupId: input?.percentileSummaryGroupId || base.percentileSummaryGroupId,
     biomechanicsTableMode: input?.biomechanicsTableMode || base.biomechanicsTableMode,
     biomechanicsPitchKey: input?.biomechanicsPitchKey || base.biomechanicsPitchKey,
@@ -4126,6 +4299,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const [assessmentFieldOptions, setAssessmentFieldOptions] = useState<Array<{ value: string; label: string }>>([]);
   const [questionnaireCatalog, setQuestionnaireCatalog] = useState<Array<{ questionnaireId: number; questionnaireName: string; questions: Array<{ id: string; prompt: string }> }>>([]);
   const [percentileSummaryGroups, setPercentileSummaryGroups] = useState<PercentileGroupOption[]>([]);
+  const [biomechanicsPercentilePitchTypes, setBiomechanicsPercentilePitchTypes] = useState<string[]>([]);
   const [customTables, setCustomTables] = useState<CustomTableConfig[]>([]);
   const [teamCurrentRosterNames, setTeamCurrentRosterNames] = useState<string[] | null>(null);
   const [teamCurrentRosterNameKeys, setTeamCurrentRosterNameKeys] = useState<string[] | null>(null);
@@ -5474,6 +5648,43 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                 ? selectedValues(config.pitchTypes)
                 : [];
             if (biomechanicsPitchTypes.length) bioParams.set('pitchType', JSON.stringify(biomechanicsPitchTypes));
+            const rankParams = new URLSearchParams({
+              player: normalizedPlayer,
+              groupId: config.percentileSummaryGroupId || 'all',
+              forceMode: config.biomechanicsForceMode || 'force',
+            });
+            if (startDate) rankParams.set('startDate', startDate);
+            if (endDate) rankParams.set('endDate', endDate);
+            if (biomechanicsPitchTypes.length) rankParams.set('pitchTypes', JSON.stringify(biomechanicsPitchTypes));
+            const loadBiomechanicsPercentiles = async () => {
+              if (!normalizedPlayer || normalizeNameKey(normalizedPlayer) === 'all') return null;
+              const response = await fetch(`/api/player/biomechanics-percentiles?${rankParams.toString()}`, {
+                cache: 'no-store',
+                signal: controller.signal,
+              });
+              const payload = await response.json().catch(() => ({})) as {
+                groups?: Array<{ id: string; label: string }>;
+                selectedGroupId?: string;
+                selectedGroupLabel?: string;
+                comparisonWindow?: string;
+                rows?: Record<string, Record<string, {
+                  value: number;
+                  percentile: number | null;
+                  sampleSize: number;
+                  rankingDirection?: 'higher_is_higher' | 'lower_is_better' | 'handedness_normalized';
+                }>>;
+              };
+              if (!response.ok) return null;
+              if (active && Array.isArray(payload.groups)) {
+                setPercentileSummaryGroups(payload.groups.map((group) => ({ id: group.id, label: group.label })));
+              }
+              return {
+                selectedGroupId: payload.selectedGroupId ?? 'all',
+                selectedGroupLabel: payload.selectedGroupLabel ?? 'All PCU athletes',
+                comparisonWindow: payload.comparisonWindow ?? 'full_history',
+                rows: payload.rows ?? {},
+              };
+            };
             // Cache key deliberately excludes biomechanicsTableMode (but DOES
             // include forceMode, since forceMode changes the actual server-
             // computed values, not just which columns are shown): the fetch
@@ -5497,10 +5708,17 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             };
             const cached = cellsCacheRef.current.get(bioKey);
             if (cached && Date.now() - cached.at < 60_000) {
-              commitCellResult(cellId, applyTableMode(cached.payload as { table_columns?: string[]; table_rows?: Array<Record<string, string | number | null>>; leaderboard_individual_rows?: Array<Record<string, string | number | null>> }), { status: 'ready' });
+              const [tablePayload, percentilePayload] = await Promise.all([
+                Promise.resolve(applyTableMode(cached.payload as { table_columns?: string[]; table_rows?: Array<Record<string, string | number | null>>; leaderboard_individual_rows?: Array<Record<string, string | number | null>> })),
+                loadBiomechanicsPercentiles(),
+              ]);
+              commitCellResult(cellId, { ...tablePayload, ...(percentilePayload ? { biomechanics_percentiles: percentilePayload } : {}) }, { status: 'ready' });
               return;
             }
-            const response = await fetch(bioKey, { cache: 'no-store', signal: controller.signal });
+            const [response, percentilePayload] = await Promise.all([
+              fetch(bioKey, { cache: 'no-store', signal: controller.signal }),
+              loadBiomechanicsPercentiles(),
+            ]);
             const payload = (await response.json().catch(() => ({}))) as { table_columns?: string[]; table_rows?: Array<Record<string, string | number | null>>; leaderboard_individual_rows?: Array<Record<string, string | number | null>>; error?: string };
             if (!response.ok) throw new Error(payload.error ?? 'Failed to load biomechanics report data.');
             const fullPayload = {
@@ -5509,7 +5727,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
               leaderboard_individual_rows: payload.leaderboard_individual_rows ?? [],
             };
             cellsCacheRef.current.set(bioKey, { at: Date.now(), payload: fullPayload });
-            commitCellResult(cellId, applyTableMode(fullPayload), { status: 'ready' });
+            commitCellResult(cellId, {
+              ...applyTableMode(fullPayload),
+              ...(percentilePayload ? { biomechanics_percentiles: percentilePayload } : {}),
+            }, { status: 'ready' });
             return;
           }
           const ignoreDateWindow = reportType === 'Hitting' && useMostRecent200Pa;
@@ -8480,6 +8701,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                             forcePlateMetricOptions={forcePlateMetricOptions}
                             availableForcePlateTestTypes={forcePlateTestTypes}
                             ovrSprintExerciseOptions={ovrSprintExerciseOptions}
+                            biomechanicsPitchTypeOptions={Array.from(new Set([...pitchTypeOptions, ...biomechanicsPercentilePitchTypes]))}
                             percentileGroups={percentileSummaryGroups}
                             setCellConfigs={setCellConfigs}
                           />
@@ -8500,6 +8722,15 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                               options={[{ value: 'force', label: 'Pounds (lb)' }, { value: 'bw', label: 'Bodyweight %' }]}
                               value={config.biomechanicsForceMode || 'force'}
                               onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), biomechanicsForceMode: next === 'bw' ? 'bw' : 'force' } }))}
+                            />
+                            <label>Percentile Group</label>
+                            <SearchableSingleSelect
+                              options={[{ value: 'all', label: 'All PCU athletes' }, ...percentileSummaryGroups.map((group) => ({ value: group.id, label: group.label }))]}
+                              value={config.percentileSummaryGroupId || 'all'}
+                              onChange={(next) => setCellConfigs((current) => ({
+                                ...current,
+                                [cellId]: { ...(current[cellId] ?? emptyCell()), percentileSummaryGroupId: next || 'all' },
+                              }))}
                             />
                           </>
                         ) : null}
@@ -10743,6 +10974,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                       ) : contentType === 'Percentile Summary' ? (
                         <PercentileSummaryPanel
                           player={inheritedPlayer || resolvedInheritedName || config.player}
+                          startDate={useGlobalDates ? globalStartDate : config.dateStart || globalStartDate}
+                          endDate={useGlobalDates ? globalEndDate : config.dateEnd || globalEndDate}
                           forceMetrics={resolveForcePlateLegMetrics(
                             config.percentileSummaryForceMetrics,
                             config.percentileSummaryForceLegDisplay || 'selected',
@@ -10750,10 +10983,14 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                           )}
                           forceTestType={config.percentileSummaryForceTestType || 'All'}
                           ovrExercises={config.percentileSummaryOvrExercises}
+                          biomechanicsMetrics={config.percentileSummaryBiomechanicsMetrics}
+                          biomechanicsPitchType={config.percentileSummaryBiomechanicsPitchType || 'All'}
+                          biomechanicsForceMode={config.biomechanicsForceMode || 'force'}
                           groupId={config.percentileSummaryGroupId || 'all'}
                           compactMetricLabels={!(config.showControls ?? true)}
                           forcePlateMetricOptions={forcePlateMetricOptions}
                           onGroupsLoaded={setPercentileSummaryGroups}
+                          onBiomechanicsPitchTypesLoaded={setBiomechanicsPercentilePitchTypes}
                         />
                       ) : contentType === 'Biomechanics Force Chart' ? (
                         <BiomechanicsReportChart
@@ -10764,6 +11001,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                         />
                       ) : contentType === 'Summary Table' || contentType === 'Biomechanics Table' ? (
                         <div className={`portal-custom-reports-table-wrap${useCompactSummaryTable ? ' portal-custom-reports-table-wrap--compact' : ''}`}>
+                          {usesBiomechanicsTable && payload.biomechanics_percentiles ? (
+                            <div className="portal-muted-text" style={{ padding: '0.35rem 0.55rem', fontSize: '0.72rem' }}>
+                              Percentiles vs. full-history data from {payload.biomechanics_percentiles.selectedGroupLabel}
+                            </div>
+                          ) : null}
                           <table className={`portal-table${useCompactSummaryTable ? ' portal-table--compact' : ''}`}>
                             <thead>
                               <tr>
@@ -10825,6 +11067,24 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                         const isAllRow = String(splitValue ?? '').trim().toLowerCase() === 'all';
                                         const pitchStyle = !isAllRow && columnIndex === 0 ? pitchTypeCellStyle(val) : null;
                                         if (pitchStyle) return pitchStyle.label;
+                                        const biomechanicsPitchType = String(getTableRowValue(row as Record<string, unknown>, 'Pitch Type') ?? splitValue ?? '').trim() || 'Unspecified';
+                                        const biomechanicsRank = usesBiomechanicsTable && column !== '#' && column !== 'Name' && column !== 'Date' && column !== 'Pitch Type'
+                                          ? payload.biomechanics_percentiles?.rows?.[biomechanicsPitchType]?.[column]
+                                          : undefined;
+                                        if (usesBiomechanicsTable && biomechanicsRank?.percentile != null) {
+                                          return (
+                                            <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                                              <span>{val}</span>
+                                              <span
+                                                className={`portal-custom-reports-percentile-badge ${percentileTierClassName(biomechanicsRank.percentile)}`}
+                                                style={{ fontSize: '0.62rem', padding: '1px 5px', whiteSpace: 'nowrap' }}
+                                                title={`Compared with ${biomechanicsRank.sampleSize} athlete${biomechanicsRank.sampleSize === 1 ? '' : 's'} in ${payload.biomechanics_percentiles?.selectedGroupLabel ?? 'the selected group'}`}
+                                              >
+                                                {ordinalLabel(biomechanicsRank.percentile)}
+                                              </span>
+                                            </span>
+                                          );
+                                        }
                                         const percentileCellStyle =
                                           enableTableColors && percentileValue !== null
                                             ? {
@@ -10967,10 +11227,28 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   reportEnd={globalEndDate}
                   autoGenerate={automationRenderMode && automationPanelsReady}
                   onReady={setAutomationAiReady}
-                  panels={Object.entries(cellsData).map(([cellId, payload]) => {
+                  panels={visibleCellKeys.map((cellId) => {
+                    const payload = cellsData[cellId] ?? {};
                     const config = reportScope === 'Team'
                       ? normalizeCellConfig(cellConfigs[sourceCellIdForTeamScope(cellId, reportRows)])
                       : effectiveCellConfigForScope(cellId, reportScope, cellConfigs);
+                    const panelPlayer = reportScope === 'Single Player' && selectedValues(reportPlayers).length === 1
+                      ? (selectedValues(reportPlayers)[0] ?? '')
+                      : config.player;
+                    const percentileForceMetrics = resolveForcePlateLegMetrics(
+                      config.percentileSummaryForceMetrics,
+                      config.percentileSummaryForceLegDisplay || 'selected',
+                      forcePlateMetricOptions
+                    ).map((metricValue) => {
+                      const parsed = parseForcePlateFlagMetric(metricValue);
+                      const option = forcePlateMetricOptions.find((entry) => entry.value === metricValue);
+                      return {
+                        value: metricValue,
+                        label: compactForcePlatePanelLabel(parsed?.metricName ?? option?.label ?? metricValue),
+                        metricName: parsed?.metricName ?? option?.label.replace(/\s*\([^)]*\)\s*$/, '') ?? metricValue,
+                        metricUnit: parsed?.metricUnit ?? option?.label.match(/\(([^)]*)\)\s*$/)?.[1] ?? '',
+                      };
+                    });
                     return {
                       id: cellId,
                       title: config.title || normalizePanelType(config.panelType),
@@ -10985,6 +11263,27 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                         contact3dColorBy: config.contact3dColorBy,
                         batSpeedColorBy: config.batSpeedColorBy,
                         sprayView: config.sprayView,
+                        biomechanicsPercentiles: payload.biomechanics_percentiles,
+                        forcePlatePercentileConfig: normalizePanelType(config.panelType) === 'Percentile Summary'
+                          ? {
+                              player: panelPlayer,
+                              groupId: config.percentileSummaryGroupId || 'all',
+                              testType: config.percentileSummaryForceTestType || 'All',
+                              metrics: percentileForceMetrics,
+                            }
+                          : undefined,
+                        biomechanicsPercentileConfig: normalizePanelType(config.panelType) === 'Percentile Summary'
+                          ? {
+                              player: panelPlayer,
+                              groupId: config.percentileSummaryGroupId || 'all',
+                              forceMode: config.biomechanicsForceMode || 'force',
+                              pitchType: config.percentileSummaryBiomechanicsPitchType || 'All',
+                              metrics: config.percentileSummaryBiomechanicsMetrics.map((metric) => ({
+                                value: metric,
+                                label: biomechanicsMetricLabel(metric),
+                              })),
+                            }
+                          : undefined,
                       },
                     };
                   })}
