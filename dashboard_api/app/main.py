@@ -24159,6 +24159,7 @@ def pitching_overview(
             )
           )
           AND """ + _college_level_where_sql("pe") + """
+          AND NULLIF(TRIM(pe.pitcher), '') IS NOT NULL
           AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
           AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
           AND (
