@@ -4,6 +4,7 @@ import { getSessionFromRequest } from '../../../../../../lib/auth';
 import { deleteObjectFromR2 } from '../../../../../../lib/biomechanics-storage';
 import {
   createMessage,
+  editMessage,
   getConversationMeta,
   getConversationParticipantIds,
   getMessageById,
@@ -40,6 +41,41 @@ function parseAttachments(value: unknown, expectedKeyPrefix: string): Attachment
     attachments.push({ r2Key, contentType, fileName, sizeBytes, kind });
   }
   return attachments;
+}
+
+export async function PATCH(request: Request, { params }: { params: Promise<{ conversationId: string }> }) {
+  const { conversationId: conversationIdParam } = await params;
+  const conversationId = Number(conversationIdParam);
+  if (!Number.isFinite(conversationId) || conversationId <= 0) {
+    return NextResponse.json({ error: 'Valid conversationId is required.' }, { status: 400 });
+  }
+
+  const cookieStore = await cookies();
+  const session = getSessionFromRequest(request, cookieStore);
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const isParticipant = await isConversationParticipant({ conversationId, userId: session.userId ?? 0 });
+  if (!isParticipant) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
+  const input = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+  const messageId = Number(input.messageId ?? 0);
+  const text = typeof input.body === 'string' ? input.body.trim() : '';
+  if (!Number.isFinite(messageId) || messageId <= 0) {
+    return NextResponse.json({ error: 'Valid messageId is required.' }, { status: 400 });
+  }
+  if (!text) return NextResponse.json({ error: 'Message cannot be empty.' }, { status: 400 });
+  if (text.length > 10_000) return NextResponse.json({ error: 'Message is too long.' }, { status: 400 });
+
+  const updated = await editMessage({
+    conversationId,
+    messageId,
+    senderUserId: session.userId ?? 0,
+    body: text,
+  });
+  if (!updated) return NextResponse.json({ error: 'Message not found or cannot be edited.' }, { status: 404 });
+
+  const message = await getMessageById(messageId, session.userId ?? 0);
+  return NextResponse.json({ ok: true, message });
 }
 
 export async function POST(request: Request, { params }: { params: Promise<{ conversationId: string }> }) {

@@ -55,6 +55,7 @@ export type Message = {
   body: string | null;
   createdAt: string;
   deletedAt: string | null;
+  editedAt: string | null;
   attachments: MessageAttachment[];
   reactions: MessageReaction[];
 };
@@ -77,8 +78,8 @@ export type ConversationAttachment = MessageAttachment & {
 };
 
 export type MessageableUsers = {
-  players?: Array<{ userId: number; playerId: number; fullName: string }>;
-  coaches: Array<{ userId: number; name: string; role: 'admin' | 'coach' }>;
+  players?: Array<{ userId: number; playerId: number; fullName: string; organizationId?: number; organizationName?: string }>;
+  coaches: Array<{ userId: number; name: string; role: 'admin' | 'coach'; organizationId?: number; organizationName?: string; isCompanyOwner?: boolean }>;
 };
 
 class MessagingApiError extends Error {
@@ -159,6 +160,13 @@ export function deleteGroupConversation(conversationId: string) {
 
 export function deleteMessage(conversationId: string, messageId: number) {
   return api<{ ok: true }>(`/api/messaging/conversations/${conversationId}/messages?messageId=${messageId}`, { method: 'DELETE' });
+}
+
+export function editMessage(conversationId: string, messageId: number, body: string) {
+  return api<{ ok: true; message: Message }>(`/api/messaging/conversations/${conversationId}/messages`, {
+    method: 'PATCH',
+    body: JSON.stringify({ messageId, body }),
+  });
 }
 
 export function toggleMessageReaction(conversationId: string, messageId: number, emoji: string) {

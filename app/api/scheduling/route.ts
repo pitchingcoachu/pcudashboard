@@ -5,14 +5,25 @@ import { resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
 import { resolveSchoolScopedOrganizationId } from '../../../lib/programming-scope';
 import { createNotificationsForUsers } from '../../../lib/training-db';
 import { sendPushNotificationToUsers } from '../../../lib/push-notifications';
-import { bookRecurringWeekly, bookSessionSlot, cancelSessionBooking, createBookingSlots, getMinBookingLeadHours, listBookingPlayers,
-  listBookingSlots, rescheduleSessionBooking, setMinBookingLeadHours, updateBookingSlotStatus, type SessionTypeValue } from '../../../lib/booking-db';
+import { bookRecurringWeekly, bookSessionSlot, cancelSessionBooking, createBookingSlots, deleteBookingDateOverride, editBookingSlotGroup, getMinBookingLeadHours,
+  listBookingDateOverrides, listBookingPlayers, listBookingSlots, rescheduleSessionBooking, saveBookingDateOverride,
+  setMinBookingLeadHours, updateBookingSlotStatus, type BookingOverrideScope, type SessionTypeValue } from '../../../lib/booking-db';
 
 function validDate(value:string){return /^\d{4}-\d{2}-\d{2}$/.test(value);}
 function validTime(value:string){return /^\d{2}:\d{2}$/.test(value);}
 function cleanInt(value:unknown,min:number,max:number,fallback:number){const parsed=Number(value);return Number.isFinite(parsed)?Math.min(max,Math.max(min,Math.round(parsed))):fallback;}
 function formatWhen(iso:string){return new Intl.DateTimeFormat('en-US',{timeZone:'America/Phoenix',weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}).format(new Date(iso));}
 function sessionTypeLabel(type:SessionTypeValue){return type==='bullpen'?'Bullpen':'Regular Training';}
+function slotStartsForDay(date:string,startTime:string,endTime:string,interval:number):Array<{startsAt:string;endsAt:string}>{
+  const starts:Array<{startsAt:string;endsAt:string}>=[];
+  const startMinutes=Number(startTime.slice(0,2))*60+Number(startTime.slice(3)),endMinutes=Number(endTime.slice(0,2))*60+Number(endTime.slice(3));
+  for(let minute=startMinutes;minute<=endMinutes;minute+=interval){
+    const hh=String(Math.floor(minute/60)).padStart(2,'0'),mm=String(minute%60).padStart(2,'0');
+    const begins=new Date(`${date}T${hh}:${mm}:00-07:00`);
+    if(begins.getTime()>Date.now())starts.push({startsAt:begins.toISOString(),endsAt:begins.toISOString()});
+  }
+  return starts;
+}
 
 async function access(request:Request){
   const session=getSessionFromRequest(request,await cookies());
@@ -36,12 +47,13 @@ export async function GET(request:Request){
   const startDate=validDate(url.searchParams.get('startDate')??'')?url.searchParams.get('startDate')!:today;
   const endDate=validDate(url.searchParams.get('endDate')??'')?url.searchParams.get('endDate')!:startDate;
   try{
-    const [slots,players,minBookingLeadHours]=await Promise.all([
+    const [slots,players,minBookingLeadHours,dateOverrides]=await Promise.all([
       listBookingSlots({organizationId:auth.organizationId,startDate,endDate,playerId:Number(auth.session.playerId??0)||null,staff:auth.staff}),
       auth.staff?listBookingPlayers(auth.organizationId):Promise.resolve([]),
       getMinBookingLeadHours(auth.organizationId),
+      listBookingDateOverrides({organizationId:auth.organizationId,startDate:auth.staff?today:startDate,endDate:auth.staff?'9999-12-31':endDate}),
     ]);
-    return NextResponse.json({role:auth.staff?'staff':'player',slots,players,timeZone:'America/Phoenix',minBookingLeadHours});
+    return NextResponse.json({role:auth.staff?'staff':'player',slots,players,timeZone:'America/Phoenix',minBookingLeadHours,dateOverrides});
   }catch(error){return NextResponse.json({error:error instanceof Error?error.message:'Unable to load scheduling data.'},{status:500});}
 }
 
@@ -76,6 +88,21 @@ export async function POST(request:Request){
         }
       }
       const created=await createBookingSlots({organizationId:auth.organizationId,userId:auth.userId,sessionType,starts,capacity,location});
+      return NextResponse.json({ok:true,created});
+    }
+    if(action==='edit_slot_group'){
+      if(!auth.staff)return NextResponse.json({error:'Staff access required.'},{status:403});
+      const slotIds=Array.isArray(body.slotIds)?body.slotIds.map(Number).filter(id=>Number.isFinite(id)&&id>0):[];
+      const capacity=cleanInt(body.capacity,1,100,4);
+      const location=String(body.location??'');
+      const date=String(body.date??''),startTime=String(body.startTime??''),endTime=String(body.endTime??'');
+      const interval=cleanInt(body.intervalMinutes,10,480,30);
+      if(!slotIds.length)return NextResponse.json({error:'Select a published time to edit.'},{status:400});
+      if(!validDate(date)||!validTime(startTime)||!validTime(endTime))
+        return NextResponse.json({error:'Complete the day and times.'},{status:400});
+      const starts=slotStartsForDay(date,startTime,endTime,interval);
+      if(!starts.length)return NextResponse.json({error:'That time range has already passed.'},{status:400});
+      const created=await editBookingSlotGroup({organizationId:auth.organizationId,slotIds,starts,capacity,location});
       return NextResponse.json({ok:true,created});
     }
     if(action==='book'){
@@ -127,6 +154,19 @@ export async function POST(request:Request){
       if(!auth.staff)return NextResponse.json({error:'Staff access required.'},{status:403});
       const minBookingLeadHours=await setMinBookingLeadHours(auth.organizationId,Number(body.hours??0));
       return NextResponse.json({ok:true,minBookingLeadHours});
+    }
+    if(action==='save_date_override'){
+      if(!auth.staff)return NextResponse.json({error:'Staff access required.'},{status:403});
+      const date=String(body.date??'');
+      if(!validDate(date))return NextResponse.json({error:'Choose a valid date.'},{status:400});
+      const sessionType=(['all','regular','bullpen'].includes(String(body.sessionType))?String(body.sessionType):'all') as BookingOverrideScope;
+      const overrideId=await saveBookingDateOverride({organizationId:auth.organizationId,userId:auth.userId,date,sessionType,reason:String(body.reason??'').slice(0,160)});
+      return NextResponse.json({ok:true,overrideId});
+    }
+    if(action==='delete_date_override'){
+      if(!auth.staff)return NextResponse.json({error:'Staff access required.'},{status:403});
+      await deleteBookingDateOverride({organizationId:auth.organizationId,overrideId:Number(body.overrideId??0)});
+      return NextResponse.json({ok:true});
     }
     return NextResponse.json({error:'Unknown scheduling action.'},{status:400});
   }catch(error){return NextResponse.json({error:error instanceof Error?error.message:'Scheduling request failed.'},{status:400});}

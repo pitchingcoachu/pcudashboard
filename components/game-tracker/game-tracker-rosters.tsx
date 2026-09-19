@@ -100,7 +100,7 @@ export default function GameTrackerRosters() {
   }
 
   return <main className={`${styles.shell} game-tracker-rosters-shell`}>
-    <div className="game-tracker-back"><Link href="/portal/admin/game-tracker">← Game Tracker</Link></div>
+    <div className="game-tracker-back"><Link href="/portal/admin/game-tracker">← Scorebook</Link></div>
     <section className="game-tracker-rosters-hero"><div><p>TEAM LIBRARY / PLAYER IDENTITY</p><h1>Teams & Rosters</h1><span>Build opponent and intrasquad rosters without splitting a player’s permanent statistical record.</span></div><strong>{data.teams.length}<small>saved teams</small></strong></section>
     {error ? <p className="game-tracker-rosters-error">{error}</p> : null}{notice ? <p className="game-tracker-rosters-notice">{notice}</p> : null}
     <section className="game-tracker-rosters-layout">

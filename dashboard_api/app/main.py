@@ -8946,6 +8946,7 @@ def _refresh_league_daily_rollup(
                   WHERE pe.school_code = %(school_code)s
                     AND pe.session_date >= %(refresh_start)s::date
                     AND pe.session_date <= %(max_date)s::date
+                    AND NULLIF(TRIM(pe.pitcher), '') IS NOT NULL
                 )
                 INSERT INTO public.pitch_events_daily_rollup_league (
                   school_code, session_date, level_bucket, pitch_type, pitcher_name, batter_name, catcher_name, pitcher_norm, batter_norm, catcher_norm,
@@ -9315,6 +9316,7 @@ def _refresh_league_daily_rollup(
                   WHERE pe.school_code = %(school_code)s
                     AND pe.session_date >= %(refresh_start)s::date
                     AND pe.session_date <= %(max_date)s::date
+                    AND NULLIF(TRIM(pe.pitcher), '') IS NOT NULL
                 ),
                 pitch_metrics AS MATERIALIZED (
                   SELECT
@@ -12744,6 +12746,7 @@ def _refresh_pro_daily_rollup(
                   WHERE pe.school_code = 'PRO'
                     AND pe.session_date >= %(refresh_start)s::date
                     AND pe.session_date <= %(max_date)s::date
+                    AND NULLIF(TRIM(pe.pitcher), '') IS NOT NULL
                 ),
                 staged AS (
                   SELECT
@@ -13176,6 +13179,7 @@ def _refresh_pro_daily_rollup(
                   WHERE pe.school_code = 'PRO'
                     AND pe.session_date >= %(refresh_start)s::date
                     AND pe.session_date <= %(max_date)s::date
+                    AND NULLIF(TRIM(pe.pitcher), '') IS NOT NULL
                 ),
                 staged AS (
                   SELECT
@@ -19455,6 +19459,7 @@ def _pro_pitching_overview(
     level_sport_ids = _pro_level_sport_ids(level_filter)
     where = [
         "school_code = 'PRO'",
+        "NULLIF(TRIM(pitcher), '') IS NOT NULL",
         "(%(sport_ids_count)s::int = 0 OR sport_id = ANY(%(sport_ids)s::int[]))",
         _pro_level_sql_clause(level_filter, "pitcherteam", "batterteam"),
         "(%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)",
@@ -25055,6 +25060,7 @@ def pitching_ab_report(
         else:
             pro_where = [
                 "school_code = 'PRO'",
+                "NULLIF(TRIM(pitcher), '') IS NOT NULL",
                 "(%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)",
                 "(%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)",
                 """(

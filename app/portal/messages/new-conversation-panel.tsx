@@ -82,11 +82,15 @@ export function NewConversationPanel() {
   }
 
   const options: Option[] = [
-    ...(users?.players ?? []).map((p) => ({ userId: p.userId, label: p.fullName, sublabel: 'Player' })),
-    ...(users?.coaches ?? []).map((c) => ({ userId: c.userId, label: c.name, sublabel: c.role === 'admin' ? 'Admin' : 'Coach' })),
+    ...(users?.players ?? []).map((p) => ({ userId: p.userId, label: p.fullName, sublabel: `Player${p.organizationName ? ` · ${p.organizationName}` : ''}` })),
+    ...(users?.coaches ?? []).map((c) => ({
+      userId: c.userId,
+      label: c.name,
+      sublabel: c.isCompanyOwner ? 'Pearl Company Admin' : `${c.role === 'admin' ? 'Admin' : 'Coach'}${c.organizationName ? ` · ${c.organizationName}` : ''}`,
+    })),
   ];
   const q = query.trim().toLowerCase();
-  const filteredOptions = q ? options.filter((o) => o.label.toLowerCase().includes(q)) : options;
+  const filteredOptions = q ? options.filter((o) => `${o.label} ${o.sublabel}`.toLowerCase().includes(q)) : options;
 
   return (
     <div className="portal-messages-new-conversation">

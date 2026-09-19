@@ -33,7 +33,7 @@ export default function GameTrackerStatsView() {
   useEffect(() => { void load(); }, []);
 
   return <main className={`${styles.shell} game-tracker-shell`}>
-    <div className="game-tracker-back"><Link href="/portal/admin/game-tracker">← Game Tracker</Link></div>
+    <div className="game-tracker-back"><Link href="/portal/admin/game-tracker">← Scorebook</Link></div>
     <section className="game-tracker-hero"><div><p className="game-tracker-eyebrow">SITUATIONAL REPORTING</p><h1>Season Stats</h1><p>Filter every line by game context, count, outs, base state, RISP, and matchup handedness.</p></div></section>
     <form className="game-tracker-card game-tracker-filters" onSubmit={(event) => { event.preventDefault(); void load(event.currentTarget); }}>
       <label>From<input name="dateFrom" type="date" /></label><label>To<input name="dateTo" type="date" /></label>

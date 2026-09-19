@@ -70,7 +70,7 @@ export default function GameTrackerHub({ logoSrc }: { logoSrc: string }) {
         <img className="game-tracker-hero-logo" src={logoSrc} alt="" aria-hidden="true" />
         <div>
           <p className="game-tracker-eyebrow">LIVE SCORING + TEAM ANALYTICS</p>
-          <h1>Game Tracker</h1>
+          <h1>Scorebook</h1>
           <p>Score every pitch, manage runners, and turn each game, scrimmage, or live BP into searchable season data.</p>
         </div>
       </section>

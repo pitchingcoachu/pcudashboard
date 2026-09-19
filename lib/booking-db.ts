@@ -2,6 +2,14 @@ import type { PoolClient } from 'pg';
 import { ensureAuthDbReady, getDbPool, isDatabaseConfigured } from './auth-db';
 
 export type SessionTypeValue = 'bullpen' | 'regular';
+export type BookingOverrideScope = SessionTypeValue | 'all';
+
+export type BookingDateOverride = {
+  id: number;
+  date: string;
+  sessionType: BookingOverrideScope;
+  reason: string;
+};
 
 export type BookingSlot = {
   id: number;
@@ -10,6 +18,7 @@ export type BookingSlot = {
   capacity: number;
   location: string;
   status: 'open' | 'closed' | 'cancelled';
+  closedByOverride: boolean;
   bookedCount: number;
   myBookingId: number | null;
   attendees: Array<{ bookingId: number; playerId: number; playerName: string }>;
@@ -91,6 +100,20 @@ export async function ensureBookingTables(): Promise<void> {
   await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_session_booking_active_player ON session_bookings (slot_id, player_id) WHERE status IN ('booked', 'attended');`);
   await client.query(`CREATE INDEX IF NOT EXISTS idx_session_bookings_slot_status ON session_bookings (slot_id, status);`);
   await client.query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS min_booking_lead_hours INTEGER NOT NULL DEFAULT 4;`);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS booking_date_overrides (
+      id BIGSERIAL PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      override_date DATE NOT NULL,
+      session_type TEXT NOT NULL DEFAULT 'all' CHECK (session_type IN ('all','regular','bullpen')),
+      reason TEXT NOT NULL DEFAULT '',
+      created_by_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (organization_id, override_date, session_type)
+    );
+  `);
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_booking_date_overrides_org_date ON booking_date_overrides (organization_id, override_date);`);
     await client.query('COMMIT');
     bookingTablesReady = true;
   } catch (error) {
@@ -114,6 +137,44 @@ export async function setMinBookingLeadHours(organizationId: number, hours: numb
   const clamped = Math.min(336, Math.max(0, Math.round(hours)));
   await getDbPool().query(`UPDATE organizations SET min_booking_lead_hours=$2, updated_at=NOW() WHERE id=$1`, [organizationId, clamped]);
   return clamped;
+}
+
+export async function listBookingDateOverrides(input: { organizationId: number; startDate: string; endDate: string }): Promise<BookingDateOverride[]> {
+  await ensureBookingTables();
+  const result = await getDbPool().query(
+    `SELECT id, TO_CHAR(override_date,'YYYY-MM-DD') AS override_date, session_type, reason
+     FROM booking_date_overrides
+     WHERE organization_id=$1 AND override_date BETWEEN $2::date AND $3::date
+     ORDER BY override_date, CASE session_type WHEN 'all' THEN 0 WHEN 'regular' THEN 1 ELSE 2 END`,
+    [input.organizationId, input.startDate, input.endDate]
+  );
+  return result.rows.map((row) => ({
+    id: Number(row.id), date: String(row.override_date), sessionType: row.session_type as BookingOverrideScope, reason: String(row.reason ?? ''),
+  }));
+}
+
+export async function saveBookingDateOverride(input: {
+  organizationId: number; userId: number; date: string; sessionType: BookingOverrideScope; reason?: string;
+}): Promise<number> {
+  await ensureBookingTables();
+  const result = await getDbPool().query(
+    `INSERT INTO booking_date_overrides (organization_id,override_date,session_type,reason,created_by_user_id)
+     VALUES ($1,$2::date,$3,$4,$5)
+     ON CONFLICT (organization_id,override_date,session_type)
+     DO UPDATE SET reason=EXCLUDED.reason,created_by_user_id=EXCLUDED.created_by_user_id,updated_at=NOW()
+     RETURNING id`,
+    [input.organizationId, input.date, input.sessionType, input.reason?.trim() ?? '', input.userId]
+  );
+  return Number(result.rows[0].id);
+}
+
+export async function deleteBookingDateOverride(input: { organizationId: number; overrideId: number }): Promise<void> {
+  await ensureBookingTables();
+  const result = await getDbPool().query(
+    `DELETE FROM booking_date_overrides WHERE id=$1 AND organization_id=$2 RETURNING id`,
+    [input.overrideId, input.organizationId]
+  );
+  if (!result.rows[0]) throw new Error('Date override not found.');
 }
 
 export async function listBookingPlayers(organizationId: number): Promise<Array<{ id: number; name: string; userId: number | null }>> {
@@ -145,6 +206,57 @@ export async function createBookingSlots(input: {
   return created;
 }
 
+/**
+ * Replaces a previously-published group of slots (one day + session type, as shown in the
+ * "Already published" summary) with a freshly-generated set over new times/capacity/location.
+ * Refuses if any slot in the group already has an active booking -- editing a published block
+ * is only allowed while it's still untouched; cancel/reschedule the booking first otherwise.
+ */
+export async function editBookingSlotGroup(input: {
+  organizationId: number; slotIds: number[]; starts: Array<{ startsAt: string; endsAt: string }>;
+  capacity: number; location?: string;
+}): Promise<number> {
+  await ensureBookingTables();
+  if (!input.slotIds.length) throw new Error('No published times were selected to edit.');
+  const client = await getDbPool().connect();
+  try {
+    await client.query('BEGIN');
+    const existing = await client.query<{ id: number; session_type: SessionTypeValue; created_by_user_id: number | null }>(
+      `SELECT id, session_type, created_by_user_id FROM booking_slots WHERE id = ANY($1::bigint[]) AND organization_id = $2 FOR UPDATE`,
+      [input.slotIds, input.organizationId]
+    );
+    if (existing.rowCount !== input.slotIds.length) throw new Error('Some of these published times could not be found.');
+    const sessionType = existing.rows[0].session_type;
+    if (existing.rows.some((row) => row.session_type !== sessionType)) throw new Error('These times mix session types and cannot be edited together.');
+    const createdByUserId = existing.rows.find((row) => row.created_by_user_id)?.created_by_user_id ?? null;
+    const booked = await client.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM session_bookings WHERE slot_id = ANY($1::bigint[]) AND status IN ('booked','attended')`,
+      [input.slotIds]
+    );
+    if (Number(booked.rows[0]?.count ?? 0) > 0) {
+      throw new Error('One or more of these times already has a booking. Cancel or reschedule it before editing this block.');
+    }
+    await client.query(`DELETE FROM booking_slots WHERE id = ANY($1::bigint[]) AND organization_id = $2`, [input.slotIds, input.organizationId]);
+    let created = 0;
+    for (const item of input.starts) {
+      const result = await client.query(
+        `INSERT INTO booking_slots (organization_id,session_type,starts_at,ends_at,capacity,location,created_by_user_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT (organization_id,session_type,starts_at) DO NOTHING RETURNING id`,
+        [input.organizationId, sessionType, item.startsAt, item.endsAt, input.capacity, input.location?.trim() || '', createdByUserId]
+      );
+      created += result.rowCount ?? 0;
+    }
+    await client.query('COMMIT');
+    return created;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function listBookingSlots(input: {
   organizationId: number; startDate: string; endDate: string; playerId: number | null; staff: boolean;
 }): Promise<BookingSlot[]> {
@@ -155,7 +267,19 @@ export async function listBookingSlots(input: {
   // the hour that starts ~1 hour before the bullpen time (the player will already be arriving then).
   const result = await getDbPool().query(
     `WITH base AS (
-       SELECT s.id, s.session_type, s.starts_at, s.capacity, s.location, s.status,
+       SELECT s.id, s.session_type, s.starts_at, s.capacity, s.location,
+         CASE WHEN s.status='open' AND EXISTS (
+           SELECT 1 FROM booking_date_overrides o
+           WHERE o.organization_id=s.organization_id
+             AND o.override_date=(s.starts_at AT TIME ZONE 'America/Phoenix')::date
+             AND o.session_type IN ('all',s.session_type)
+         ) THEN 'closed' ELSE s.status END AS status,
+         EXISTS (
+           SELECT 1 FROM booking_date_overrides o
+           WHERE o.organization_id=s.organization_id
+             AND o.override_date=(s.starts_at AT TIME ZONE 'America/Phoenix')::date
+             AND o.session_type IN ('all',s.session_type)
+         ) AS closed_by_override,
          DATE_TRUNC('hour', s.starts_at AT TIME ZONE 'America/Phoenix') AS hour_bucket,
          COUNT(b.id) FILTER (WHERE b.status IN ('booked','attended'))::int AS own_booked_count,
          MAX(b.id) FILTER (WHERE b.player_id=$4 AND b.status IN ('booked','attended')) AS my_booking_id,
@@ -165,7 +289,7 @@ export async function listBookingSlots(input: {
        LEFT JOIN session_bookings b ON b.slot_id=s.id AND b.status IN ('booked','attended') LEFT JOIN players p ON p.id=b.player_id
        WHERE s.organization_id=$1 AND s.starts_at >= ($2::date AT TIME ZONE 'America/Phoenix')
          AND s.starts_at < (($3::date + 1) AT TIME ZONE 'America/Phoenix')
-         ${input.staff ? '' : "AND s.ends_at>NOW() AND (s.status='open' OR EXISTS (SELECT 1 FROM session_bookings own WHERE own.slot_id=s.id AND own.player_id=$4 AND own.status IN ('booked','attended')))"}
+         ${input.staff ? '' : "AND s.ends_at>NOW() AND ((s.status='open' AND NOT EXISTS (SELECT 1 FROM booking_date_overrides o WHERE o.organization_id=s.organization_id AND o.override_date=(s.starts_at AT TIME ZONE 'America/Phoenix')::date AND o.session_type IN ('all',s.session_type))) OR EXISTS (SELECT 1 FROM session_bookings own WHERE own.slot_id=s.id AND own.player_id=$4 AND own.status IN ('booked','attended')))"}
        GROUP BY s.id,s.session_type,s.starts_at,s.capacity,s.location,s.status
      ),
      bullpen_spillover AS (
@@ -175,7 +299,7 @@ export async function listBookingSlots(input: {
        WHERE s.organization_id=$1 AND s.session_type='bullpen'
        GROUP BY 1
      )
-     SELECT base.id, base.session_type, base.starts_at, base.capacity, base.location, base.status, base.my_booking_id, base.attendees,
+     SELECT base.id, base.session_type, base.starts_at, base.capacity, base.location, base.status, base.closed_by_override, base.my_booking_id, base.attendees,
        CASE WHEN base.session_type='regular'
          THEN SUM(base.own_booked_count) OVER (PARTITION BY base.session_type, base.hour_bucket)
            + COALESCE(MAX(spill.spillover_count) OVER (PARTITION BY base.session_type, base.hour_bucket), 0)
@@ -187,7 +311,7 @@ export async function listBookingSlots(input: {
   return result.rows.map((row) => ({
     id: Number(row.id), sessionType: row.session_type as SessionTypeValue,
     startsAt: new Date(row.starts_at).toISOString(), capacity: Number(row.capacity),
-    location: row.location ?? '', status: row.status, bookedCount: Number(row.booked_count),
+    location: row.location ?? '', status: row.status, closedByOverride: Boolean(row.closed_by_override), bookedCount: Number(row.booked_count),
     myBookingId: row.my_booking_id ? Number(row.my_booking_id) : null, attendees: input.staff ? row.attendees : [],
   }));
 }
@@ -221,6 +345,15 @@ async function bookSlotWithClient(
   );
   const slot = slotResult.rows[0];
   if (!slot || slot.status !== 'open') throw new Error('This time is no longer available.');
+  const dateOverride = await client.query(
+    `SELECT 1 FROM booking_date_overrides
+     WHERE organization_id=$1
+       AND override_date=($2::timestamptz AT TIME ZONE 'America/Phoenix')::date
+       AND session_type IN ('all',$3)
+     LIMIT 1`,
+    [input.organizationId, slot.starts_at, slot.session_type]
+  );
+  if (dateOverride.rows[0]) throw new Error('This date is closed and is not available for booking.');
   if (new Date(slot.starts_at).getTime() <= Date.now()) throw new Error('This session has already started.');
   if (new Date(slot.starts_at).getTime() > Date.now() + MAX_ADVANCE_BOOKING_DAYS * 86400000) {
     throw new Error(`This time is more than ${MAX_ADVANCE_BOOKING_DAYS} days out — booking opens closer to the date.`);
@@ -389,13 +522,15 @@ export async function bookRecurringWeekly(input: {
 
 export async function cancelSessionBooking(input: { organizationId: number; bookingId: number; userId: number; playerId: number | null; staff: boolean }) {
   await ensureBookingTables();
+  const params = [input.bookingId, input.organizationId, input.userId];
+  if (!input.staff) params.push(input.playerId ?? 0);
   const result = await getDbPool().query(
     `UPDATE session_bookings b SET status='cancelled',cancelled_by_user_id=$3,cancelled_at=NOW(),updated_at=NOW()
      FROM booking_slots s, players p
      WHERE b.id=$1 AND b.organization_id=$2 AND s.id=b.slot_id AND p.id=b.player_id
        AND b.status='booked' ${input.staff ? '' : 'AND b.player_id=$4'}
      RETURNING b.id,b.player_user_id,b.player_id,p.full_name,s.session_type,s.starts_at`,
-    [input.bookingId, input.organizationId, input.userId, input.playerId ?? 0]
+    params
   );
   if (!result.rows[0]) throw new Error('Booking not found or already cancelled.');
   const row = result.rows[0];

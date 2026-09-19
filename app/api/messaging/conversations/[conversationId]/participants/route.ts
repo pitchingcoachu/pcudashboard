@@ -3,12 +3,15 @@ import { NextResponse } from 'next/server';
 import { getSessionFromRequest } from '../../../../../../lib/auth';
 import {
   addConversationParticipants,
+  findActiveMessageUserByEmail,
   getConversationMeta,
   isConversationParticipant,
   listMessageablePlayersForOrganization,
+  listMessageableUsersAcrossOrganizations,
   removeConversationParticipant,
 } from '../../../../../../lib/messaging-db';
 import { listCoachesByOrganization } from '../../../../../../lib/training-db';
+import { COMPANY_MESSAGING_OWNER_EMAIL, isCompanyMessagingOwner } from '../../../../../../lib/messaging-access';
 
 // PATCH { addUserIds?: number[]; removeUserIds?: number[] } -- adds and/or
 // removes members from an existing group chat. Restricted to coach/admin
@@ -38,7 +41,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ co
   }
 
   const organizationId = Number(session.organizationId ?? 0);
-  if (organizationId !== conversation.organizationId) {
+  const isCompanyOwner = isCompanyMessagingOwner(session);
+  if (!isCompanyOwner && organizationId !== conversation.organizationId) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
@@ -55,14 +59,23 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ co
   }
 
   if (addUserIds.length) {
-    const [players, coaches] = await Promise.all([
-      listMessageablePlayersForOrganization(organizationId),
-      listCoachesByOrganization(organizationId),
-    ]);
-    const messageablePlayerUserIds = new Set(players.map((p) => Number(p.userId)));
-    const coachUserIds = new Set(coaches.map((c) => Number(c.userId)));
-    const invalid = addUserIds.some((id) => !messageablePlayerUserIds.has(id) && !coachUserIds.has(id));
-    if (invalid) return NextResponse.json({ error: 'New members must be players, coaches, or admins at your school.' }, { status: 403 });
+    if (isCompanyOwner) {
+      const directoryIds = new Set((await listMessageableUsersAcrossOrganizations()).map((user) => user.userId));
+      if (addUserIds.some((id) => !directoryIds.has(id))) {
+        return NextResponse.json({ error: 'New members must be active coaches, admins, or players.' }, { status: 403 });
+      }
+    } else {
+      const [players, coaches, companyOwner] = await Promise.all([
+        listMessageablePlayersForOrganization(organizationId),
+        listCoachesByOrganization(organizationId),
+        findActiveMessageUserByEmail(COMPANY_MESSAGING_OWNER_EMAIL),
+      ]);
+      const messageablePlayerUserIds = new Set(players.map((player) => Number(player.userId)));
+      const coachUserIds = new Set(coaches.filter((coach) => coach.isActive).map((coach) => Number(coach.userId)));
+      if (companyOwner) coachUserIds.add(companyOwner.userId);
+      const invalid = addUserIds.some((id) => !messageablePlayerUserIds.has(id) && !coachUserIds.has(id));
+      if (invalid) return NextResponse.json({ error: 'New members must be at your school or the Pearl company administrator.' }, { status: 403 });
+    }
   }
 
   const currentParticipantIds = new Set(conversation.participants.map((p) => p.userId));

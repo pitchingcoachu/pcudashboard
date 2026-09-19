@@ -1,5 +1,5 @@
 import { gameTrackerErrorResponse, requireGameTrackerAccess } from '../../../../../../lib/game-tracker/access';
-import { changeGameTrackerPlayerPosition, saveGameTrackerLineup, substituteGameTrackerPlayer } from '../../../../../../lib/game-tracker/db';
+import { changeGameTrackerPlayerPosition, saveGameTrackerLineup, setGameTrackerPitcher, substituteGameTrackerPlayer } from '../../../../../../lib/game-tracker/db';
 import { lineupActionSchema, lineupSchema } from '../../../../../../lib/game-tracker/validation';
 
 type Context = { params: Promise<{ gameId: string }> };
@@ -27,7 +27,14 @@ export async function POST(request: Request, context: Context) {
           outgoingPlayerId: input.outgoingPlayerId,
           incoming: input.incoming,
         })
-      : await changeGameTrackerPlayerPosition({
+      : input.action === 'set_pitcher'
+        ? await setGameTrackerPitcher({
+            organizationId: access.organizationId,
+            gameId,
+            teamSide: input.teamSide,
+            incoming: input.incoming,
+          })
+        : await changeGameTrackerPlayerPosition({
           organizationId: access.organizationId,
           gameId,
           playerId: input.playerId,

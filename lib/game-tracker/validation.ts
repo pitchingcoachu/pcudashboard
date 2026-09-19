@@ -45,6 +45,11 @@ export const lineupActionSchema = z.discriminatedUnion('action', [
     playerId: z.coerce.number().int().positive(),
     position: z.string().trim().min(1).max(10),
   }),
+  z.object({
+    action: z.literal('set_pitcher'),
+    teamSide: z.enum(['us', 'opponent']),
+    incoming: lineupPlayerSchema.omit({ id: true, teamSide: true, battingOrder: true, isStarter: true, isActive: true }),
+  }),
 ]);
 
 const runnerAdvanceSchema = z.object({

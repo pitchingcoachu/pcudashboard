@@ -32,11 +32,15 @@ export function ManageMembersModal({
 
   const currentMemberIds = new Set(conversation.participants.map((p) => p.userId));
   const addOptions = [
-    ...(users?.players ?? []).map((p) => ({ userId: p.userId, label: p.fullName, sublabel: 'Player' })),
-    ...(users?.coaches ?? []).map((c) => ({ userId: c.userId, label: c.name, sublabel: c.role === 'admin' ? 'Admin' : 'Coach' })),
+    ...(users?.players ?? []).map((p) => ({ userId: p.userId, label: p.fullName, sublabel: `Player${p.organizationName ? ` · ${p.organizationName}` : ''}` })),
+    ...(users?.coaches ?? []).map((c) => ({
+      userId: c.userId,
+      label: c.name,
+      sublabel: c.isCompanyOwner ? 'Pearl Company Admin' : `${c.role === 'admin' ? 'Admin' : 'Coach'}${c.organizationName ? ` · ${c.organizationName}` : ''}`,
+    })),
   ].filter((o) => !currentMemberIds.has(o.userId));
   const q = query.trim().toLowerCase();
-  const filteredAddOptions = q ? addOptions.filter((o) => o.label.toLowerCase().includes(q)) : addOptions;
+  const filteredAddOptions = q ? addOptions.filter((o) => `${o.label} ${o.sublabel}`.toLowerCase().includes(q)) : addOptions;
 
   function toggleAdd(userId: number) {
     setAddUserIds((prev) => (prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]));

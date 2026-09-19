@@ -188,7 +188,7 @@ function LineupEditor({ bundle, onSaved, locked = false }: { bundle: Bundle; onS
 function playerName(players: GameTrackerPlayer[], id: number | null) { return players.find((player) => player.id === id)?.displayName ?? 'Not set'; }
 
 function SubstitutionPanel({ bundle, onClose, onSaved }: { bundle: Bundle; onClose: () => void; onSaved: () => Promise<void> }) {
-  const [mode, setMode] = useState<'substitute' | 'change_position'>('substitute');
+  const [mode, setMode] = useState<'substitute' | 'change_position' | 'set_pitcher'>('substitute');
   const liveBattingSide = battingSideForHalf(bundle.game.homeAway, bundle.game.state.half);
   const liveLineup = bundle.players
     .filter((player) => player.teamSide === liveBattingSide && player.isActive && player.battingOrder !== null)
@@ -216,14 +216,14 @@ function SubstitutionPanel({ bundle, onClose, onSaved }: { bundle: Bundle; onClo
       : bundle.players.find((player) => player.teamSide === nextSide && player.isActive);
     setSide(nextSide);
     setSelectedPlayerId(first?.id ?? 0);
-    setPosition(mode === 'change_position' ? first?.position ?? '' : 'PH');
+    setPosition(mode === 'change_position' ? first?.position ?? '' : mode === 'set_pitcher' ? 'P' : 'PH');
     setStatTeamId(nextSide === 'us' ? bundle.game.usTeamId : bundle.game.opponentTeamId);
   }
 
   function changeSelectedPlayer(id: number) {
     const player = bundle.players.find((candidate) => candidate.id === id);
     setSelectedPlayerId(id);
-    setPosition(mode === 'change_position' ? player?.position ?? '' : 'PH');
+    setPosition(mode === 'change_position' ? player?.position ?? '' : mode === 'set_pitcher' ? 'P' : 'PH');
   }
 
   function changeName(value: string) {
@@ -244,11 +244,14 @@ function SubstitutionPanel({ bundle, onClose, onSaved }: { bundle: Bundle; onClo
 
   async function submit() {
     if (!selectedPlayerId) return setError('Choose an active player.');
-    if (mode === 'substitute' && !name.trim()) return setError('Enter the replacement player name.');
+    if ((mode === 'substitute' || mode === 'set_pitcher') && !name.trim()) return setError(mode === 'set_pitcher' ? 'Enter the incoming pitcher name.' : 'Enter the replacement player name.');
     setSaving(true); setError('');
+    const incoming = { playerId: rosterPlayerId, rosterPersonId, statTeamId, displayName: name, bats, throws, position: mode === 'set_pitcher' ? 'P' : position };
     const body = mode === 'substitute'
-      ? { action: mode, outgoingPlayerId: selectedPlayerId, incoming: { playerId: rosterPlayerId, rosterPersonId, statTeamId, displayName: name, bats, throws, position } }
-      : { action: mode, playerId: selectedPlayerId, position };
+      ? { action: mode, outgoingPlayerId: selectedPlayerId, incoming }
+      : mode === 'set_pitcher'
+        ? { action: mode, teamSide: side, incoming }
+        : { action: mode, playerId: selectedPlayerId, position };
     const response = await fetch(`/api/game-tracker/games/${bundle.game.id}/lineup`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
     });
@@ -264,24 +267,25 @@ function SubstitutionPanel({ bundle, onClose, onSaved }: { bundle: Bundle; onClo
     <div className="game-tracker-segmented" role="group" aria-label="Lineup change type">
       <button type="button" className={mode === 'substitute' ? 'is-active' : ''} onClick={() => { setMode('substitute'); setPosition('PH'); }}>Pinch hit / replace</button>
       <button type="button" className={mode === 'change_position' ? 'is-active' : ''} onClick={() => { setMode('change_position'); setPosition(selectedPlayer?.position ?? ''); }}>Change position</button>
+      <button type="button" className={mode === 'set_pitcher' ? 'is-active' : ''} onClick={() => { setMode('set_pitcher'); setPosition('P'); }}>Pitching change</button>
     </div>
     <div className="game-tracker-substitution-grid">
       <label>Game team<select value={side} onChange={(event) => changeSide(event.target.value as TeamSide)}><option value="us">{bundle.game.usTeamName}</option><option value="opponent">{bundle.game.opponentName}</option></select></label>
-      <label>{mode === 'substitute' ? 'Player leaving' : 'Player'}<select value={selectedPlayerId || ''} onChange={(event) => changeSelectedPlayer(Number(event.target.value))}><option value="">Choose player</option>{activePlayers.map((player) => <option key={player.id} value={player.id}>{player.battingOrder ? `${player.battingOrder}. ` : ''}{player.displayName} · {player.position ?? '—'}</option>)}</select></label>
-      {mode === 'substitute' ? <>
-        <label className="is-wide">Replacement player<input list="game-tracker-substitution-roster" value={name} placeholder="Select roster player or type a name" onChange={(event) => changeName(event.target.value)} /></label>
+      {mode !== 'set_pitcher' ? <label>{mode === 'substitute' ? 'Player leaving' : 'Player'}<select value={selectedPlayerId || ''} onChange={(event) => changeSelectedPlayer(Number(event.target.value))}><option value="">Choose player</option>{activePlayers.map((player) => <option key={player.id} value={player.id}>{player.battingOrder ? `${player.battingOrder}. ` : ''}{player.displayName} · {player.position ?? '—'}</option>)}</select></label> : <div className="game-tracker-substitution-note">Current pitcher: <strong>{playerName(bundle.players, bundle.game.state.pitcherIds[side])}</strong></div>}
+      {mode === 'substitute' || mode === 'set_pitcher' ? <>
+        <label className="is-wide">{mode === 'set_pitcher' ? 'Incoming pitcher' : 'Replacement player'}<input list="game-tracker-substitution-roster" value={name} placeholder="Select roster player or type a name" onChange={(event) => changeName(event.target.value)} /></label>
         <datalist id="game-tracker-substitution-roster">{Array.from(new Set([...bundle.roster.map((player) => player.fullName), ...bundle.rosterMembers.map((member) => member.displayName)])).sort().map((playerName) => <option key={playerName} value={playerName} />)}</datalist>
         <label>Bats<select value={bats} onChange={(event) => setBats(event.target.value as Handedness)}><option value="R">Right</option><option value="L">Left</option><option value="S">Switch</option></select></label>
         <label>Throws<select value={throws} onChange={(event) => setThrows(event.target.value as ThrowingHand)}><option value="R">Right</option><option value="L">Left</option></select></label>
         <label>Stats team<select value={statTeamId ?? ''} onChange={(event) => setStatTeamId(event.target.value ? Number(event.target.value) : null)}><option value="">Game only</option>{bundle.teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label>
       </> : null}
-      <label>New position<select value={position} onChange={(event) => setPosition(event.target.value)}>{POSITION_OPTIONS.map((value) => <option key={value}>{value}</option>)}</select></label>
+      {mode !== 'set_pitcher' ? <label>New position<select value={position} onChange={(event) => setPosition(event.target.value)}>{POSITION_OPTIONS.map((value) => <option key={value}>{value}</option>)}</select></label> : null}
     </div>
     {mode === 'substitute' ? <p className="game-tracker-substitution-note">{selectedPlayer?.id === liveBatter?.id
       ? `The replacement takes over the current at-bat immediately at ${bundle.game.state.balls}–${bundle.game.state.strikes}. The outgoing player’s earlier plays stay intact.`
       : `The replacement takes over batting spot ${selectedPlayer?.battingOrder ?? '—'} the next time that spot comes up. The outgoing player’s earlier plays and stats stay intact.`}</p> : null}
     {error ? <p className="game-tracker-error">{error}</p> : null}
-    <div className="game-tracker-inline-actions"><button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button><button type="button" className="btn btn-primary" disabled={saving} onClick={submit}>{saving ? 'Saving…' : mode === 'substitute' ? 'Confirm substitution' : 'Update position'}</button></div>
+    <div className="game-tracker-inline-actions"><button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button><button type="button" className="btn btn-primary" disabled={saving} onClick={submit}>{saving ? 'Saving…' : mode === 'substitute' ? 'Confirm substitution' : mode === 'set_pitcher' ? 'Confirm pitching change' : 'Update position'}</button></div>
   </section>;
 }
 
@@ -406,7 +410,7 @@ export default function GameTrackerLive({ gameId }: { gameId: number }) {
     window.location.href = '/portal/admin/game-tracker';
   }
 
-  if (!bundle) return <main className={`${styles.shell} game-tracker-shell`}><p>{error || 'Loading Game Tracker…'}</p></main>;
+  if (!bundle) return <main className={`${styles.shell} game-tracker-shell`}><p>{error || 'Loading Scorebook…'}</p></main>;
   const state = bundle.game.state;
   const lineScore = bundle.events.reduce((totals, event) => {
     if (event.isVoided) return totals;

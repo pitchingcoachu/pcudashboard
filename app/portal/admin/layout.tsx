@@ -10,10 +10,10 @@ import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
 import PortalNotificationsBell from '../notifications-bell';
 import PortalThemeToggle from '../theme-toggle';
 import PortalMessagesNavButton from '../messages-nav-button';
-import PortalNavOverflowMenu from '../nav-overflow-menu';
 import { resolveSessionDashboardSchoolOptions } from '../../../lib/dashboard-school-options';
 import { canViewPortalActivity } from '../../../lib/portal-activity';
 import { buildStaffMoreNavItems } from '../../../lib/portal-primary-nav';
+import StaffPrimaryNav from '../staff-primary-nav';
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | null = null;
@@ -94,25 +94,12 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         )
       }
       navLinks={
-        <>
-          <Link href="/portal/admin" className="portal-nav-link">
-            Home
-          </Link>
-          {canAccessProgramming && (
-            <Link href="/portal/admin/schedule" className="portal-nav-link">
-              Schedule
-            </Link>
-          )}
-          <Link href="/portal/dashboard" className="portal-nav-link">
-            Dashboard
-          </Link>
-          {canAccessPlayerNotes && (
-            <Link href="/portal/admin/player-notes" className="portal-nav-link">
-              Player Notes
-            </Link>
-          )}
-          <PortalNavOverflowMenu items={moreItems} />
-        </>
+        <StaffPrimaryNav
+          canAccessSchedule={canAccessProgramming}
+          canAccessSessionBooking={canAccessSessionBooking}
+          canAccessPlayerNotes={canAccessPlayerNotes}
+          moreItems={moreItems}
+        />
       }
       mobileNavLoggedInAs={session.name ?? session.email}
       mobileNavItems={

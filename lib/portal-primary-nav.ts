@@ -30,7 +30,7 @@ export function buildStaffMoreNavItems(input: {
   return [
     ...(isStaff ? [{ href: '/portal/admin/ai-sessions', label: 'Transcription' }] : []),
     ...(!isTrial && !isLeague && !isPro ? [{ href: '/portal/admin/pulse', label: 'PULSE' }] : []),
-    ...(input.canAccessGameTracker ? [{ href: '/portal/admin/game-tracker', label: 'Game Tracker' }] : []),
+    ...(input.canAccessGameTracker ? [{ href: '/portal/admin/game-tracker', label: 'Scorebook' }] : []),
     ...(input.canAccessSessionBooking ? [{ href: '/portal/scheduling', label: 'Booking' }] : []),
     { href: '/profiles', label: 'Profiles' },
     ...(showClientManagement ? [{ href: '/portal/admin/clients', label: 'Players' }] : []),

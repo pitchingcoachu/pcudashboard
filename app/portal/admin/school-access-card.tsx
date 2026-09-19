@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 
 type Props = {
   schoolCode: string;
+  embedded?: boolean;
   initialAccess: {
     dashboard: boolean;
     programming: boolean;
@@ -13,7 +14,7 @@ type Props = {
   };
 };
 
-export default function SchoolAccessCard({ schoolCode, initialAccess }: Props) {
+export default function SchoolAccessCard({ schoolCode, initialAccess, embedded = false }: Props) {
   const router = useRouter();
   const [dashboard, setDashboard] = useState(initialAccess.dashboard);
   const [programming, setProgramming] = useState(initialAccess.programming);
@@ -88,14 +89,16 @@ export default function SchoolAccessCard({ schoolCode, initialAccess }: Props) {
     }
   }
 
-  return (
-    <article className="portal-admin-card">
-      <h2>School Access</h2>
-      <p>{`Selected School: ${schoolCode}`}</p>
-      <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}>
+  const content = (
+    <>
+      <div>
+        <h3 style={{ margin: 0 }}>School Access</h3>
+        <p className="portal-muted-text" style={{ margin: '0.18rem 0 0' }}>{`Selected school: ${schoolCode}`}</p>
+      </div>
+      <div className="portal-form-grid" style={{ gridTemplateColumns: embedded ? 'repeat(2, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))' }}>
         <label className="portal-checkbox-label">
           <input type="checkbox" checked={dashboard} onChange={(event) => setDashboard(event.target.checked)} />
-          Dashboard
+          On Field Data
         </label>
         <label className="portal-checkbox-label">
           <input type="checkbox" checked={programming} onChange={(event) => setProgramming(event.target.checked)} />
@@ -107,7 +110,7 @@ export default function SchoolAccessCard({ schoolCode, initialAccess }: Props) {
         </label>
         <label className="portal-checkbox-label">
           <input type="checkbox" checked={gameTracker} onChange={(event) => setGameTracker(event.target.checked)} />
-          Game Tracker
+          Scorebook
         </label>
       </div>
       <div className="portal-choice-line-actions">
@@ -116,6 +119,9 @@ export default function SchoolAccessCard({ schoolCode, initialAccess }: Props) {
         </button>
       </div>
       {message ? <p className={message.includes('Failed') ? 'auth-error' : 'auth-message'}>{message}</p> : null}
-    </article>
+    </>
   );
+
+  if (embedded) return <div style={{ display: 'grid', gap: '.7rem', padding: '.35rem' }}>{content}</div>;
+  return <article className="portal-admin-card">{content}</article>;
 }

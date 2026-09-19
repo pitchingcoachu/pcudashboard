@@ -12,8 +12,9 @@ import tabStyles from '../ovr-sprint/ovr-sprint.module.css';
 const OvrSprintDashboard = dynamic(() => import('../ovr-sprint/ovr-sprint-dashboard'), { loading: () => <LoadingPanel /> });
 const OvrVbtDashboard = dynamic(() => import('../ovr-sprint/ovr-vbt-dashboard'), { loading: () => <LoadingPanel /> });
 const BiomechanicsHub = dynamic(() => import('../dashboard/biomechanics-hub'), { loading: () => <LoadingPanel /> });
+const UniversalViewChart = dynamic(() => import('./universal-view-chart'), { loading: () => <LoadingPanel /> });
 
-type DataTab = 'vald' | 'sprint' | 'vbt' | 'biomechanics' | 'imports';
+type DataTab = 'vald' | 'sprint' | 'vbt' | 'biomechanics' | 'chart' | 'imports';
 
 type Props = {
   snapshot: ValdSnapshot | null;
@@ -44,6 +45,8 @@ export default function ValdOvrDataDashboard({ snapshot, valdError, lastSyncLabe
     ? { src: '/vald.webp', alt: 'VALD', fit: 'cover' as const, position: 'center', scale: 2.8 }
     : tab === 'biomechanics'
       ? { src: '/axioforce.jpeg', alt: 'AxioForce', fit: 'contain' as const, position: 'right center', scale: 1 }
+      : tab === 'chart'
+        ? { src: '/pearl-lockup-transparent.png', alt: 'Pearl', fit: 'contain' as const, position: 'right center', scale: 1 }
       : { src: '/ovr.png', alt: 'OVR', fit: 'contain' as const, position: 'right center', scale: 1 };
 
   async function selectTab(next: DataTab) {
@@ -52,7 +55,7 @@ export default function ValdOvrDataDashboard({ snapshot, valdError, lastSyncLabe
     if (next === 'vald') url.searchParams.delete('tab');
     else url.searchParams.set('tab', next);
     window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
-    if (next === 'vald' || next === 'biomechanics') return;
+    if (next === 'vald' || next === 'biomechanics' || next === 'chart') return;
     setLoading(true);
     setLoadError('');
     try {
@@ -97,6 +100,7 @@ export default function ValdOvrDataDashboard({ snapshot, valdError, lastSyncLabe
       <button type="button" className={tab === 'sprint' ? tabStyles.active : ''} onClick={() => selectTab('sprint')}>Sprint</button>
       <button type="button" className={tab === 'vbt' ? tabStyles.active : ''} onClick={() => selectTab('vbt')}>VBT</button>
       <button type="button" className={tab === 'biomechanics' ? tabStyles.active : ''} onClick={() => selectTab('biomechanics')}>Biomechanics</button>
+      <button type="button" className={tab === 'chart' ? tabStyles.active : ''} onClick={() => selectTab('chart')}>View Chart</button>
       {canImport ? <button type="button" className={tab === 'imports' ? tabStyles.active : ''} onClick={() => selectTab('imports')}>Imports</button> : null}
     </div> : null}
 
@@ -107,9 +111,10 @@ export default function ValdOvrDataDashboard({ snapshot, valdError, lastSyncLabe
     </> : null}
 
     {tab === 'biomechanics' ? <BiomechanicsHub role={role} schoolCode={schoolCode} isActive /> : null}
+    {tab === 'chart' ? <UniversalViewChart schoolCode={schoolCode} /> : null}
 
-    {tab !== 'vald' && tab !== 'biomechanics' && loading ? <LoadingPanel /> : null}
-    {tab !== 'vald' && tab !== 'biomechanics' && !loading && loadError ? <article className="portal-admin-card"><p className="auth-error" style={{ margin: 0 }}>{loadError}</p></article> : null}
+    {tab !== 'vald' && tab !== 'biomechanics' && tab !== 'chart' && loading ? <LoadingPanel /> : null}
+    {tab !== 'vald' && tab !== 'biomechanics' && tab !== 'chart' && !loading && loadError ? <article className="portal-admin-card"><p className="auth-error" style={{ margin: 0 }}>{loadError}</p></article> : null}
     {tab === 'sprint' && !loading && !loadError ? <OvrSprintDashboard key={`sprint-${dataVersion}`} initialResults={sprintResults} initialUploads={uploads} canImport={canImport} viewMode="sprint" playerOnly={role === 'player'} /> : null}
     {tab === 'vbt' && !loading && !loadError ? <OvrVbtDashboard key={`vbt-${dataVersion}`} initialResults={vbtResults} playerOnly={role === 'player'} /> : null}
     {tab === 'imports' && !loading && !loadError ? <OvrSprintDashboard key={`imports-${dataVersion}`} initialResults={sprintResults} initialUploads={uploads} canImport={canImport} viewMode="imports" /> : null}

@@ -42,7 +42,7 @@ export default function GameTrackerPlayerStats({ playerKey }: { playerKey: strin
   ] : fielding ? [['G', value(fielding.games)], ['PO', value(fielding.putouts)], ['A', value(fielding.assists)], ['E', value(fielding.errors)], ['FLD%', rate(fielding.fieldingPct)]] : [];
 
   return <main className={`${styles.shell} game-tracker-player-shell`}>
-    <div className="game-tracker-back"><Link href="/portal/admin/game-tracker/stats">← Season Stats</Link><Link href="/portal/admin/game-tracker">Game Tracker</Link></div>
+    <div className="game-tracker-back"><Link href="/portal/admin/game-tracker/stats">← Season Stats</Link><Link href="/portal/admin/game-tracker">Scorebook</Link></div>
     <section className="game-tracker-player-hero"><div><p>PLAYER FILE / ALL TEAM APPEARANCES</p><h1>{detail.playerName}</h1><span>{detail.games.length} tracked game{detail.games.length === 1 ? '' : 's'} · one statistical identity</span></div><div className="game-tracker-player-monogram">{detail.playerName.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}</div></section>
     <section className="game-tracker-player-highlights">{highlights.map(([label, stat]) => <article key={label}><small>{label}</small><strong>{stat}</strong></article>)}</section>
     <section className="game-tracker-player-grid">

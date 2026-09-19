@@ -3,11 +3,14 @@ import { NextResponse } from 'next/server';
 import { getSessionFromRequest } from '../../../../lib/auth';
 import {
   createGroupConversation,
+  findActiveMessageUserByEmail,
   findOrCreateOneToOneConversation,
   listConversationsForUser,
   listMessageablePlayersForOrganization,
+  listMessageableUsersAcrossOrganizations,
 } from '../../../../lib/messaging-db';
 import { listCoachesByOrganization } from '../../../../lib/training-db';
+import { COMPANY_MESSAGING_OWNER_EMAIL, isCompanyMessagingOwner } from '../../../../lib/messaging-access';
 
 async function requireSession(request: Request) {
   const cookieStore = await cookies();
@@ -24,7 +27,6 @@ export async function GET(request: Request) {
   const allowed = await requireSession(request);
   if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
   const conversations = await listConversationsForUser({
-    organizationId: allowed.organizationId,
     userId: allowed.session.userId ?? 0,
   });
   return NextResponse.json({ conversations });
@@ -46,31 +48,43 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'At least one participant is required.' }, { status: 400 });
   }
 
-  const [players, coaches] = await Promise.all([
-    listMessageablePlayersForOrganization(organizationId),
-    listCoachesByOrganization(organizationId),
-  ]);
-  // listCoachesByOrganization's userId can come back as a string at runtime
-  // (Postgres/node-pg quirk on that query's aggregate column list) despite
-  // being typed as number -- coerce both sides so Set.has() comparisons
-  // against participantUserIds (already Number()-coerced above) don't fail
-  // on a type mismatch.
-  const messageablePlayerUserIds = new Set(players.map((p) => Number(p.userId)));
-  const coachUserIds = new Set(coaches.map((c) => Number(c.userId)));
+  if (participantUserIds.includes(currentUserId)) {
+    return NextResponse.json({ error: 'You cannot add yourself as a recipient.' }, { status: 400 });
+  }
 
-  if (session.role === 'player') {
+  let conversationOrganizationId = organizationId;
+  if (isCompanyMessagingOwner(session)) {
+    const directory = await listMessageableUsersAcrossOrganizations();
+    const directoryById = new Map(directory.map((user) => [user.userId, user]));
+    const recipients = participantUserIds.map((id) => directoryById.get(id));
+    if (recipients.some((recipient) => !recipient)) {
+      return NextResponse.json({ error: 'Recipients must be active coaches, admins, or players.' }, { status: 403 });
+    }
+    const recipientOrganizations = Array.from(new Set(recipients.map((recipient) => recipient?.organizationId).filter((id): id is number => Boolean(id))));
+    if (recipientOrganizations.length === 1) conversationOrganizationId = recipientOrganizations[0];
+  } else if (session.role === 'player') {
+    const coaches = await listCoachesByOrganization(organizationId);
+    const coachUserIds = new Set(coaches.filter((coach) => coach.isActive).map((coach) => Number(coach.userId)));
     const invalid = participantUserIds.some((id) => !coachUserIds.has(id));
     if (invalid) return NextResponse.json({ error: 'Players can only message coaches or admins at their school.' }, { status: 403 });
   } else if (session.role === 'coach' || session.role === 'admin') {
+    const [players, coaches, companyOwner] = await Promise.all([
+      listMessageablePlayersForOrganization(organizationId),
+      listCoachesByOrganization(organizationId),
+      findActiveMessageUserByEmail(COMPANY_MESSAGING_OWNER_EMAIL),
+    ]);
+    const messageablePlayerUserIds = new Set(players.map((player) => Number(player.userId)));
+    const coachUserIds = new Set(coaches.filter((coach) => coach.isActive).map((coach) => Number(coach.userId)));
+    if (companyOwner) coachUserIds.add(companyOwner.userId);
     const invalid = participantUserIds.some((id) => !messageablePlayerUserIds.has(id) && !coachUserIds.has(id));
-    if (invalid) return NextResponse.json({ error: 'Recipients must be players, coaches, or admins at your school.' }, { status: 403 });
+    if (invalid) return NextResponse.json({ error: 'Recipients must be at your school or the Pearl company administrator.' }, { status: 403 });
   } else {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
   if (participantUserIds.length === 1 && !name) {
     const result = await findOrCreateOneToOneConversation({
-      organizationId,
+      organizationId: conversationOrganizationId,
       userIdA: currentUserId,
       userIdB: participantUserIds[0],
       createdByUserId: currentUserId,
@@ -82,7 +96,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Group chats need a name.' }, { status: 400 });
   }
   const created = await createGroupConversation({
-    organizationId,
+    organizationId: conversationOrganizationId,
     name,
     participantUserIds,
     createdByUserId: currentUserId,

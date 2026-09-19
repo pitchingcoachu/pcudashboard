@@ -782,6 +782,80 @@ function nextPitcherId(players: GameTrackerPlayer[], side: TeamSide, excludingId
   return players.find((player) => player.teamSide === side && player.isActive && player.id !== excludingId && player.position === 'P')?.id ?? null;
 }
 
+/** Set the active pitcher without requiring that pitcher to occupy a batting-order slot. */
+export async function setGameTrackerPitcher(input: {
+  organizationId: number;
+  gameId: number;
+  teamSide: TeamSide;
+  incoming: Omit<LineupPlayerInput, 'id' | 'teamSide' | 'battingOrder' | 'isStarter' | 'isActive'>;
+}) {
+  await ensureGameTrackerReady();
+  const client = await getDbPool().connect();
+  try {
+    await client.query('BEGIN');
+    const gameResult = await client.query<DbGameRow>(
+      'SELECT * FROM game_tracker_games WHERE id=$1 AND organization_id=$2 FOR UPDATE',
+      [input.gameId, input.organizationId]
+    );
+    const gameRow = gameResult.rows[0];
+    if (!gameRow) throw new Error('Game not found.');
+    if (gameRow.status === 'final') throw new Error('Reopen the game before making a pitching change.');
+    const name = input.incoming.displayName.trim();
+    if (!name) throw new Error('Enter the incoming pitcher name.');
+    const game = mapGame(gameRow);
+    const sideTeamId = input.teamSide === 'us' ? game.usTeamId : game.opponentTeamId;
+    const identity = await resolveLineupIdentity(client, {
+      organizationId: input.organizationId,
+      name,
+      playerId: input.incoming.playerId,
+      rosterPersonId: input.incoming.rosterPersonId,
+      statTeamId: input.incoming.statTeamId ?? sideTeamId,
+      appearanceTeamId: sideTeamId,
+    });
+    let players = await getPlayers(client, input.gameId);
+    const normalizedName = normalizeName(name);
+    let incomingPlayer = players.find((player) => player.teamSide === input.teamSide && player.isActive && (
+      (identity.rosterPersonId != null && player.rosterPersonId === identity.rosterPersonId)
+      || (input.incoming.playerId != null && player.playerId === input.incoming.playerId)
+      || normalizeName(player.displayName) === normalizedName
+    ));
+
+    if (incomingPlayer) {
+      await client.query('UPDATE game_tracker_players SET position=$1, updated_at=NOW() WHERE id=$2', ['P', incomingPlayer.id]);
+    } else {
+      const inserted = await client.query<DbPlayerRow>(`
+        INSERT INTO game_tracker_players (
+          game_id, team_side, player_id, roster_person_id, stat_team_id, display_name, jersey_number,
+          bats, throws, batting_order, position, is_starter, is_active
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,'P',FALSE,TRUE)
+        RETURNING *
+      `, [
+        input.gameId, input.teamSide, input.incoming.playerId ?? null, identity.rosterPersonId,
+        identity.statTeamId, name, input.incoming.jerseyNumber?.trim() || null,
+        input.incoming.bats, input.incoming.throws,
+      ]);
+      incomingPlayer = mapPlayer(inserted.rows[0]);
+    }
+
+    players = await getPlayers(client, input.gameId);
+    const selectedPitcher = players.find((player) => player.id === incomingPlayer?.id);
+    if (!selectedPitcher) throw new Error('Could not set the incoming pitcher.');
+    const state = structuredClone(game.state);
+    state.pitcherIds[input.teamSide] = selectedPitcher.id;
+    const updated = await client.query<DbGameRow>(
+      'UPDATE game_tracker_games SET state_jsonb=$1::jsonb, revision=revision+1, updated_at=NOW() WHERE id=$2 RETURNING *',
+      [JSON.stringify(state), input.gameId]
+    );
+    await client.query('COMMIT');
+    return { game: mapGame(updated.rows[0]), players };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function substituteGameTrackerPlayer(input: {
   organizationId: number;
   gameId: number;

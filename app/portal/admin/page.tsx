@@ -1,13 +1,10 @@
-import Link from 'next/link';
 import SchoolAccessCard from './school-access-card';
 import PlayerSearch from './player-search';
-import ViewModeToggle from '../view-mode-toggle';
-import ExportsCard from '../settings/exports-card';
+import HomeNavigation, { type HomeNavigationModule } from './home-navigation';
 import {
   getClientCountByOrganization,
   getExerciseCountByOrganization,
   getWorkoutCountByOrganization,
-  listClientStatusCountsByOrganization,
   listCoachesByOrganization,
   resolveOrganizationIdForSchool,
 } from '../../../lib/training-db';
@@ -22,7 +19,6 @@ import {
   resolveProgrammingSchoolCode,
 } from '../../../lib/programming-scope';
 import { canViewPortalActivity } from '../../../lib/portal-activity';
-import { resolveViewMode } from '../../../lib/view-mode';
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | null = null;
@@ -40,7 +36,6 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: 
 
 export default async function AdminHomePage() {
   const session = await requirePortalSession();
-  const viewMode = await resolveViewMode();
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
   const isTrialSchool = programmingSchoolCode === 'TRIAL';
   const schoolAccess = await withTimeout(
@@ -82,7 +77,7 @@ export default async function AdminHomePage() {
   ]);
   const clientManagementOrganizationId = canAccessClientManagement ? resolvedClientManagementOrganizationId : 0;
   const programmingOrganizationId = canAccessProgramming ? resolvedProgrammingOrganizationId : 0;
-  const [visibleClientCountResult, coachesResult, exerciseCountResult, workoutCountResult, coachStatusCountsResult] = await Promise.allSettled([
+  const [visibleClientCountResult, coachesResult, exerciseCountResult, workoutCountResult] = await Promise.allSettled([
     clientManagementOrganizationId > 0
       ? withTimeout(
           getClientCountByOrganization({
@@ -98,200 +93,162 @@ export default async function AdminHomePage() {
       : Promise.resolve([]),
     programmingOrganizationId > 0 ? withTimeout(getExerciseCountByOrganization(programmingOrganizationId), 3_500, 0) : Promise.resolve(0),
     programmingOrganizationId > 0 ? withTimeout(getWorkoutCountByOrganization(programmingOrganizationId), 3_500, 0) : Promise.resolve(0),
-    session.role === 'coach' && clientManagementOrganizationId > 0
-      ? withTimeout(
-          listClientStatusCountsByOrganization({
-            organizationId: clientManagementOrganizationId,
-            assignedCoachUserId: session.userId ?? 0,
-          }),
-          3_500,
-          []
-        )
-      : Promise.resolve([]),
   ]);
   const visibleClientCount = visibleClientCountResult.status === 'fulfilled' ? visibleClientCountResult.value : 0;
   const coaches = coachesResult.status === 'fulfilled' ? coachesResult.value : [];
   const exerciseCount = exerciseCountResult.status === 'fulfilled' ? exerciseCountResult.value : 0;
   const workoutCount = workoutCountResult.status === 'fulfilled' ? workoutCountResult.value : 0;
-  const coachStatusCounts = coachStatusCountsResult.status === 'fulfilled' ? coachStatusCountsResult.value : [];
-  const statusSummary = coachStatusCounts
-    .map(({ status, count }) => `${status}: ${count}`)
-    .join(' | ');
+  const school = String(programmingSchoolCode ?? '').trim().toUpperCase();
+  const isLeagueSchool = school === 'LEAGUE' || school === 'INDY';
+  const isProSchool = school === 'PRO';
+  const canAccessSessionBooking = school === 'PCU';
+  const canAccessPlayerNotes = (session.role === 'admin' || session.role === 'coach') && !isLeagueSchool;
+  const canAccessActivityTracker = !isTrialSchool && canViewPortalActivity(session);
+  const canAccessEmailAutomations =
+    !isTrialSchool && session.role === 'admin' && session.email.trim().toLowerCase() === 'jgaynor@pitchingcoachu.com';
+  const displayName = String(session.name ?? '').trim();
+  const firstName = (
+    displayName.includes(',')
+      ? displayName.split(',').slice(1).join(' ').trim().split(/\s+/)[0]
+      : displayName.split(/\s+/)[0]
+  ) || String(session.email ?? '').trim().split('@')[0] || 'Coach';
+
+  const modules: HomeNavigationModule[] = [
+    {
+      key: 'ball-flight',
+      title: 'On Field Data',
+      description: 'Pitching, hitting, catching, reports, comparisons, and player development insights.',
+      href: '/portal/dashboard',
+      items: [
+        { href: '/portal/dashboard?suite=pitching', label: 'Pitching' },
+        { href: '/portal/dashboard?suite=hitting', label: 'Hitting' },
+        ...(!isProSchool ? [{ href: '/portal/dashboard?suite=catching', label: 'Catching' }] : []),
+        { href: '/portal/dashboard?suite=custom-reports', label: 'Custom Reports' },
+        { href: '/portal/dashboard?suite=comparison-tool', label: 'Comparison Tool' },
+        ...(!isLeagueSchool ? [{ href: '/portal/dashboard?suite=player-plans', label: 'Player Plans' }] : []),
+        ...(!isLeagueSchool ? [{ href: '/portal/dashboard?suite=stuff-calculator', label: 'Stuff+ Calculator' }] : []),
+      ],
+      meta: 'Dashboard',
+    },
+    ...(!isTrialSchool ? [{
+      key: 'performance' as const,
+      title: 'Performance Data',
+      description: 'Force plates, sprint timing, velocity-based training, and pitching biomechanics.',
+      href: '/portal/force-plates',
+      items: [
+        ...(school === 'PCU' ? [
+          { href: '/portal/force-plates', label: 'VALD Force Plates' },
+          { href: '/portal/force-plates?tab=sprint', label: 'OVR Sprint' },
+          { href: '/portal/force-plates?tab=vbt', label: 'OVR VBT' },
+          { href: '/portal/force-plates?tab=biomechanics', label: 'AxioForce Biomechanics' },
+          ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/force-plates?tab=imports', label: 'Imports' }] : []),
+        ] : [{ href: '/portal/force-plates', label: 'Force Plate Data' }]),
+        ...(!isLeagueSchool && !isProSchool ? [{ href: '/portal/admin/pulse', label: 'PULSE' }] : []),
+      ],
+      meta: school === 'PCU' ? 'VALD · OVR · AxioForce · PULSE' : !isLeagueSchool && !isProSchool ? 'Force plates · PULSE' : 'Force plate workspace',
+    }] : []),
+    ...(canAccessProgramming ? [{
+      key: 'programming' as const,
+      title: 'Programming',
+      description: 'Build schedules, manage training content, capture sessions, and review player notes.',
+      href: '/portal/admin/schedule',
+      items: [
+        { href: '/portal/admin/schedule', label: 'Schedule' },
+        { href: '/portal/admin/workouts', label: 'Workout Library' },
+        { href: '/portal/admin/exercises', label: 'Exercise Library' },
+        { href: '/portal/admin/ai-sessions', label: 'AI Sessions' },
+        ...(canAccessPlayerNotes ? [{ href: '/portal/admin/player-notes', label: 'Player Notes' }] : []),
+        { href: '/portal/admin/master-calendar', label: 'Master Calendar' },
+      ],
+      meta: `${workoutCount} workouts · ${exerciseCount} exercises`,
+    }] : []),
+    ...(canAccessClientManagement ? [{
+      key: 'roster' as const,
+      title: 'Roster Management',
+      description: 'Add and edit athletes, coaches, permissions, assignments, and player groups.',
+      href: '/portal/admin/clients',
+      items: [
+        { href: '/portal/admin/clients', label: 'Players' },
+        { href: '/portal/admin/coaches', label: 'Coaches' },
+        { href: '/portal/admin/clients/groups', label: 'Player Groups' },
+        { href: '/profiles', label: 'Player Profiles' },
+      ],
+      meta: `${visibleClientCount} athletes · ${coaches.length} staff`,
+    }] : []),
+    ...(canAccessSessionBooking ? [{
+      key: 'booking' as const,
+      title: 'Book Sessions',
+      description: 'Publish availability, reserve sessions, and manage upcoming appointments.',
+      href: '/portal/scheduling',
+      items: [
+        { href: '/portal/scheduling', label: 'Calendar & Bookings' },
+      ],
+      meta: 'PCU session calendar',
+    }] : []),
+    ...(canAccessGameTracker ? [{
+      key: 'scorebook' as const,
+      title: 'Scorebook',
+      description: 'Score games, scrimmages, and live BP with lineups and situational statistics.',
+      href: '/portal/admin/game-tracker',
+      items: [
+        { href: '/portal/admin/game-tracker', label: 'Games & Live Scoring' },
+        { href: '/portal/admin/game-tracker/stats', label: 'Season Statistics' },
+        { href: '/portal/admin/game-tracker/teams', label: 'Teams & Rosters' },
+      ],
+      meta: 'Games · Stats · Rosters',
+    }] : []),
+    {
+      key: 'nutrition',
+      title: 'Nutrition',
+      description: 'Review roster-wide nutrition logging, adherence, hydration, and calorie targets.',
+      href: '/portal/admin/nutrition',
+      items: [{ href: '/portal/admin/nutrition', label: 'Nutrition Dashboard' }],
+      meta: 'Roster nutrition overview',
+    },
+    {
+      key: 'more',
+      title: 'Admin Tools',
+      description: 'School access, questionnaires, uploads, activity, exports, and organization settings.',
+      href: canAccessProgramming ? '/portal/admin/questionnaires' : !isTrialSchool ? '/portal/admin/csv-uploads' : '/portal/settings',
+      items: [
+        ...(canAccessProgramming ? [{ href: '/portal/admin/questionnaires', label: 'Questionnaires' }] : []),
+        ...(canAccessProgramming ? [{ href: '/portal/admin/testing', label: 'Testing Builder' }] : []),
+        ...(!isTrialSchool ? [{ href: '/portal/admin/csv-uploads', label: 'CSV Uploads' }] : []),
+        ...(canAccessActivityTracker ? [{ href: '/portal/admin/activity', label: 'Activity Tracker' }] : []),
+        ...(canAccessEmailAutomations ? [{ href: '/portal/admin/email-templates', label: 'Email Automations' }] : []),
+        { href: '/portal/settings', label: 'Settings & Exports' },
+      ],
+      meta: 'Additional workspace tools',
+    },
+  ];
+
   return (
     <div className={isTrialSchool ? 'portal-admin-home portal-admin-home--trial' : 'portal-admin-home'} style={{ display: 'grid', gap: 20 }}>
       <PlayerSearch />
-    <div className="portal-admin-grid">
-      {canAccessGameTracker ? (
-        <article className="portal-admin-card">
-          <h2>Game Tracker</h2>
-          <p>Score games, scrimmages, and live BP pitch by pitch with live box scores and situational stats.</p>
-          <Link href="/portal/admin/game-tracker" className="btn btn-primary as-link">
-            Open Game Tracker
-          </Link>
-        </article>
-      ) : null}
+      <HomeNavigation
+        modules={modules}
+        firstName={firstName}
+        adminToolsContent={session.role === 'admin' ? (
+          <SchoolAccessCard
+            embedded
+            schoolCode={programmingSchoolCode}
+            initialAccess={{
+              dashboard: schoolAccess.dashboard,
+              programming: schoolAccess.programming,
+              clientManagement: schoolAccess.clientManagement,
+              gameTracker: schoolAccess.gameTracker,
+            }}
+          />
+        ) : null}
+      />
+
+      <div className="portal-admin-grid">
       {programmingOrganizationId <= 0 ? (
         <article className="portal-admin-card">
           <h2>Programming Data</h2>
           <p>No programming data is configured for {programmingSchoolCode} yet.</p>
         </article>
       ) : null}
-      {session.role === 'admin' ? (
-        <SchoolAccessCard
-          schoolCode={programmingSchoolCode}
-          initialAccess={{
-            dashboard: schoolAccess.dashboard,
-            programming: schoolAccess.programming,
-            clientManagement: schoolAccess.clientManagement,
-            gameTracker: schoolAccess.gameTracker,
-          }}
-        />
-      ) : null}
-      {canAccessClientManagement ? (
-        <article className="portal-admin-card">
-          <h2>Players</h2>
-          <p>{visibleClientCount} school athletes with plans and login access.</p>
-          <Link href="/portal/admin/clients" className="btn btn-primary as-link">
-            Manage Players
-          </Link>
-        </article>
-      ) : null}
-      {(session.role === 'admin' || session.role === 'coach') && canAccessClientManagement && (
-        <article className="portal-admin-card">
-          <h2>Coaches</h2>
-          <p>{coaches.length} staff accounts with coach/admin access.</p>
-          <Link href="/portal/admin/coaches" className="btn btn-primary as-link">
-            Manage Coaches
-          </Link>
-        </article>
-      )}
-      {session.role === 'coach' && (
-        <article className="portal-admin-card">
-          <h2>My Athlete Status</h2>
-          <p>{statusSummary || 'No assigned athletes yet.'}</p>
-          <Link href="/portal/admin/schedule" className="btn btn-primary as-link">
-            Open Assigned Schedule
-          </Link>
-        </article>
-      )}
-      {canAccessProgramming ? (
-        <>
-          <article className="portal-admin-card">
-            <h2>Exercise Library</h2>
-            <p>{exerciseCount} PCU and school exercises and drills.</p>
-            <Link href="/portal/admin/exercises" className="btn btn-primary as-link">
-              Open Exercise Library
-            </Link>
-          </article>
-          <article className="portal-admin-card">
-            <h2>Workout Library</h2>
-            <p>{workoutCount} PCU and school workouts.</p>
-            <Link href="/portal/admin/workouts" className="btn btn-primary as-link">
-              Open Workout Library
-            </Link>
-          </article>
-          <article className="portal-admin-card">
-            <h2>Schedule</h2>
-            <p>Build calendars with drag/drop workout scheduling.</p>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <Link href="/portal/admin/schedule" className="btn btn-primary as-link">
-                Open Schedule
-              </Link>
-              <Link href="/portal/admin/master-calendar" className="btn btn-ghost as-link">
-                Master Calendar
-              </Link>
-            </div>
-          </article>
-          <article className="portal-admin-card">
-            <h2>Testing</h2>
-            <p>Build testing report layouts with player/date filters and trend panels.</p>
-            <Link href="/portal/admin/testing" className="btn btn-primary as-link">
-              Open Testing
-            </Link>
-          </article>
-          <article className="portal-admin-card">
-            <h2>Questionnaires</h2>
-            <p>Create player questionnaires and review submitted answers.</p>
-            <Link href="/portal/admin/questionnaires" className="btn btn-primary as-link">
-              Open Questionnaires
-            </Link>
-          </article>
-        </>
-      ) : null}
-      <article className="portal-admin-card">
-        <h2>Player Notes</h2>
-        <p>Log and review notes for players.</p>
-        <Link href="/portal/admin/player-notes" className="btn btn-primary as-link">
-          Open Player Notes
-        </Link>
-      </article>
-      <article className="portal-admin-card">
-        <h2>AI Sessions</h2>
-        <p>Record or upload sessions and turn them into editable transcripts and summaries.</p>
-        <Link href="/portal/admin/ai-sessions" className="btn btn-primary as-link">Open AI Sessions</Link>
-      </article>
-      <article className="portal-admin-card">
-        <h2>Nutrition</h2>
-        <p>See roster-wide logging consistency and calorie targets.</p>
-        <Link href="/portal/admin/nutrition" className="btn btn-primary as-link">
-          Open Nutrition
-        </Link>
-      </article>
-      {!isTrialSchool && canViewPortalActivity(session) ? (
-        <article className="portal-admin-card">
-          <h2>Activity Tracker</h2>
-          <p>Review logins, page views, and recent portal activity across all schools.</p>
-          <Link href="/portal/admin/activity" className="btn btn-primary as-link">
-            Open Activity Tracker
-          </Link>
-        </article>
-      ) : null}
-      {!isTrialSchool && session.role === 'admin' && session.email.trim().toLowerCase() === 'jgaynor@pitchingcoachu.com' ? (
-        <article className="portal-admin-card">
-          <h2>Email Automations</h2>
-          <p>Edit the automatic email sent after someone submits the PCU Dashboard form.</p>
-          <Link href="/portal/admin/email-templates" className="btn btn-primary as-link">
-            Open Email Automations
-          </Link>
-        </article>
-      ) : null}
-      {!isTrialSchool ? (
-        <article className="portal-admin-card">
-          <h2>Force Plate Data</h2>
-          <p>View VALD ForceDecks metrics and test history.</p>
-          <Link href="/portal/force-plates" className="btn btn-primary as-link">
-            Open Force Plate Data
-          </Link>
-        </article>
-      ) : null}
-      {!isTrialSchool && (session.role === 'admin' || session.role === 'coach') ? (
-        <article className="portal-admin-card">
-          <h2>CSV Uploads</h2>
-          <p>Import Rapsodo pitching exports directly into this school&apos;s dashboard.</p>
-          <Link href="/portal/admin/csv-uploads" className="btn btn-primary as-link">
-            Open CSV Uploads
-          </Link>
-        </article>
-      ) : null}
-      <article className="portal-admin-card">
-        <h2>Dashboard</h2>
-        <p>Open the main dashboard view.</p>
-        <Link href="/portal/dashboard" className="btn btn-primary as-link">
-          Open Dashboard
-        </Link>
-      </article>
-      <ExportsCard />
-      {/* Admin/coach's tab bar Settings destination is this page (players
-          get a dedicated /portal/settings instead) -- without this card,
-          admin/coach had no reachable way to switch to the desktop site on
-          mobile at all. Mobile-app-view only (see .portal-mobile-only-card
-          in pearl-mobile.css); a redundant control on the real desktop
-          dashboard would make no sense there. */}
-      <article className="portal-admin-card portal-mobile-only-card">
-        <h2>Display</h2>
-        <p>Choose between the mobile app view and the full desktop site.</p>
-        <ViewModeToggle viewMode={viewMode} />
-      </article>
     </div>
     </div>
   );

@@ -50,8 +50,9 @@ async function createMessagingTables(): Promise<void> {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_messages_conversation_created ON messages (conversation_id, created_at DESC);`);
   // deleted_at marks an unsent message -- body/attachments are cleared on
-  // unsend, this timestamp is what the UI uses to render a placeholder.
+  // unsend. edited_at preserves whether the sender changed the text later.
   await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS message_reactions (
@@ -142,6 +143,7 @@ export type MessageRow = {
   body: string | null;
   createdAt: string;
   deletedAt: string | null;
+  editedAt: string | null;
   attachments: MessageAttachmentRow[];
   reactions: MessageReactionRow[];
 };
@@ -233,7 +235,6 @@ export async function createGroupConversation(input: {
 }
 
 export async function listConversationsForUser(input: {
-  organizationId: number;
   userId: number;
 }): Promise<ConversationListRow[]> {
   await ensureMessagingTablesReady();
@@ -266,7 +267,7 @@ export async function listConversationsForUser(input: {
         c.updated_at,
         my_cp.last_read_at,
         my_cp.pinned_at,
-        COUNT(m.id) FILTER (WHERE m.created_at > my_cp.last_read_at AND m.sender_user_id IS DISTINCT FROM $2)::text AS unread_count,
+        COUNT(m.id) FILTER (WHERE m.created_at > my_cp.last_read_at AND m.sender_user_id IS DISTINCT FROM $1)::text AS unread_count,
         lm.id AS last_message_id,
         lm.body AS last_message_body,
         lm.sender_user_id AS last_message_sender_id,
@@ -281,18 +282,17 @@ export async function listConversationsForUser(input: {
           WHERE cp2.conversation_id = c.id
         ) AS participants
       FROM conversations c
-      JOIN conversation_participants my_cp ON my_cp.conversation_id = c.id AND my_cp.user_id = $2
+      JOIN conversation_participants my_cp ON my_cp.conversation_id = c.id AND my_cp.user_id = $1
       LEFT JOIN messages m ON m.conversation_id = c.id
       LEFT JOIN LATERAL (
         SELECT * FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1
       ) lm ON TRUE
       LEFT JOIN auth_users lm_sender ON lm_sender.id = lm.sender_user_id
-      WHERE c.organization_id = $1
-        AND (my_cp.hidden_at IS NULL OR c.updated_at > my_cp.hidden_at)
+      WHERE (my_cp.hidden_at IS NULL OR c.updated_at > my_cp.hidden_at)
       GROUP BY c.id, c.name, c.is_group, c.photo_data_url, c.created_by_user_id, c.updated_at, my_cp.last_read_at, my_cp.pinned_at, lm.id, lm.body, lm.sender_user_id, lm_sender.name, lm.created_at
       ORDER BY c.updated_at DESC
     `,
-    [input.organizationId, input.userId]
+    [input.userId]
   );
 
   return result.rows.map((row) => ({
@@ -421,9 +421,10 @@ export async function listMessages(input: {
     body: string | null;
     created_at: string;
     deleted_at: string | null;
+    edited_at: string | null;
   }>(
     `
-      SELECT m.id, m.sender_user_id, COALESCE(NULLIF(u.name, ''), u.email) AS sender_name, m.body, m.created_at, m.deleted_at
+      SELECT m.id, m.sender_user_id, COALESCE(NULLIF(u.name, ''), u.email) AS sender_name, m.body, m.created_at, m.deleted_at, m.edited_at
       FROM messages m
       LEFT JOIN auth_users u ON u.id = m.sender_user_id
       WHERE m.conversation_id = $1 AND ($2::bigint IS NULL OR m.id < $2)
@@ -510,6 +511,7 @@ export async function listMessages(input: {
       body: row.body,
       createdAt: row.created_at,
       deletedAt: row.deleted_at,
+      editedAt: row.edited_at,
       attachments: attachmentsByMessage.get(row.id) ?? [],
       reactions: reactionsByMessage.get(Number(row.id)) ?? [],
     }))
@@ -580,9 +582,10 @@ export async function getMessageById(messageId: number, currentUserId?: number):
     body: string | null;
     created_at: string;
     deleted_at: string | null;
+    edited_at: string | null;
   }>(
     `
-      SELECT m.id, m.sender_user_id, COALESCE(NULLIF(u.name, ''), u.email) AS sender_name, m.body, m.created_at, m.deleted_at
+      SELECT m.id, m.sender_user_id, COALESCE(NULLIF(u.name, ''), u.email) AS sender_name, m.body, m.created_at, m.deleted_at, m.edited_at
       FROM messages m
       LEFT JOIN auth_users u ON u.id = m.sender_user_id
       WHERE m.id = $1
@@ -640,6 +643,7 @@ export async function getMessageById(messageId: number, currentUserId?: number):
     body: row.body,
     createdAt: row.created_at,
     deletedAt: row.deleted_at,
+    editedAt: row.edited_at,
     attachments: attachmentsResult.rows.map((a) => ({
       id: a.id,
       kind: a.kind === 'video' || a.kind === 'pdf' || a.kind === 'file' ? a.kind : 'photo',
@@ -725,6 +729,29 @@ export async function createMessage(input: {
   }
 }
 
+export async function editMessage(input: {
+  conversationId: number;
+  messageId: number;
+  senderUserId: number;
+  body: string;
+}): Promise<boolean> {
+  await ensureMessagingTablesReady();
+  const pool = getDbPool();
+  const result = await pool.query(
+    `
+      UPDATE messages
+      SET body = $4, edited_at = NOW()
+      WHERE id = $1
+        AND conversation_id = $2
+        AND sender_user_id = $3
+        AND deleted_at IS NULL
+      RETURNING id
+    `,
+    [input.messageId, input.conversationId, input.senderUserId, input.body]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 export async function markConversationRead(input: { conversationId: number; userId: number }): Promise<void> {
   await ensureMessagingTablesReady();
   const pool = getDbPool();
@@ -775,7 +802,7 @@ export async function unsendMessage(input: { messageId: number }): Promise<{ ok:
       [input.messageId]
     );
     const updated = await client.query(
-      `UPDATE messages SET body = NULL, deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`,
+      `UPDATE messages SET body = NULL, deleted_at = NOW(), edited_at = NULL WHERE id = $1 AND deleted_at IS NULL`,
       [input.messageId]
     );
     if ((updated.rowCount ?? 0) < 1) {
@@ -878,4 +905,89 @@ export async function listMessageablePlayersForOrganization(organizationId: numb
     [organizationId]
   );
   return result.rows.map((row) => ({ userId: row.user_id, playerId: row.player_id, fullName: row.full_name }));
+}
+
+export type MessageableUserDirectoryRow = {
+  userId: number;
+  role: 'admin' | 'coach' | 'player';
+  name: string;
+  organizationId: number;
+  organizationName: string;
+  playerId: number | null;
+};
+
+export async function listMessageableUsersAcrossOrganizations(): Promise<MessageableUserDirectoryRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  const pool = getDbPool();
+  const result = await pool.query<{
+    user_id: number;
+    role: string;
+    name: string;
+    organization_id: number;
+    organization_name: string;
+    player_id: number | null;
+  }>(`
+    SELECT
+      u.id AS user_id,
+      u.role,
+      COALESCE(NULLIF(TRIM(CASE WHEN u.role = 'player' THEN p.full_name ELSE u.name END), ''), u.email) AS name,
+      u.organization_id,
+      o.name AS organization_name,
+      p.id AS player_id
+    FROM auth_users u
+    JOIN organizations o ON o.id = u.organization_id
+    LEFT JOIN players p ON p.user_id = u.id AND p.organization_id = u.organization_id
+    WHERE COALESCE(u.is_active, TRUE) = TRUE
+      AND u.role IN ('admin', 'coach', 'player')
+      AND (u.role <> 'player' OR p.id IS NOT NULL)
+    ORDER BY o.name, CASE WHEN u.role = 'admin' THEN 0 WHEN u.role = 'coach' THEN 1 ELSE 2 END, name
+  `);
+  return result.rows.map((row) => ({
+    userId: Number(row.user_id),
+    role: row.role === 'player' ? 'player' : row.role === 'coach' ? 'coach' : 'admin',
+    name: row.name,
+    organizationId: Number(row.organization_id),
+    organizationName: row.organization_name,
+    playerId: row.player_id === null ? null : Number(row.player_id),
+  }));
+}
+
+export async function findActiveMessageUserByEmail(email: string): Promise<MessageableUserDirectoryRow | null> {
+  const normalized = String(email ?? '').trim().toLowerCase();
+  if (!normalized || !isDatabaseConfigured()) return null;
+  const pool = getDbPool();
+  const result = await pool.query<{
+    user_id: number;
+    role: string;
+    name: string;
+    organization_id: number;
+    organization_name: string;
+    player_id: number | null;
+  }>(`
+    SELECT
+      u.id AS user_id,
+      u.role,
+      COALESCE(NULLIF(TRIM(CASE WHEN u.role = 'player' THEN p.full_name ELSE u.name END), ''), u.email) AS name,
+      u.organization_id,
+      o.name AS organization_name,
+      p.id AS player_id
+    FROM auth_users u
+    JOIN organizations o ON o.id = u.organization_id
+    LEFT JOIN players p ON p.user_id = u.id AND p.organization_id = u.organization_id
+    WHERE LOWER(u.email) = $1
+      AND COALESCE(u.is_active, TRUE) = TRUE
+      AND u.role IN ('admin', 'coach', 'player')
+    ORDER BY CASE WHEN u.role = 'admin' THEN 0 WHEN u.role = 'coach' THEN 1 ELSE 2 END, u.id DESC
+    LIMIT 1
+  `, [normalized]);
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    userId: Number(row.user_id),
+    role: row.role === 'player' ? 'player' : row.role === 'coach' ? 'coach' : 'admin',
+    name: row.name,
+    organizationId: Number(row.organization_id),
+    organizationName: row.organization_name,
+    playerId: row.player_id === null ? null : Number(row.player_id),
+  };
 }

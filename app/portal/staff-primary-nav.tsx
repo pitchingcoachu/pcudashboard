@@ -1,6 +1,6 @@
-import Link from 'next/link';
 import type { PortalPrimaryNavItem } from '../../lib/portal-primary-nav';
 import PortalNavOverflowMenu from './nav-overflow-menu';
+import PrimaryNavLink from './primary-nav-link';
 
 type StaffPrimaryNavProps = {
   activeHref?: string;
@@ -9,10 +9,6 @@ type StaffPrimaryNavProps = {
   canAccessPlayerNotes: boolean;
   moreItems: PortalPrimaryNavItem[];
 };
-
-function navClass(active: boolean): string {
-  return `portal-nav-link${active ? ' active' : ''}`;
-}
 
 export function staffPrimaryMobileItems(input: Omit<StaffPrimaryNavProps, 'activeHref'>): PortalPrimaryNavItem[] {
   return [
@@ -27,21 +23,21 @@ export function staffPrimaryMobileItems(input: Omit<StaffPrimaryNavProps, 'activ
 export default function StaffPrimaryNav({ activeHref, canAccessSchedule, canAccessPlayerNotes, moreItems }: StaffPrimaryNavProps) {
   return (
     <>
-      <Link href="/portal/admin" className={navClass(activeHref === '/portal/admin')}>
+      <PrimaryNavLink href="/portal/admin" exact active={activeHref === undefined ? undefined : activeHref === '/portal/admin'}>
         Home
-      </Link>
+      </PrimaryNavLink>
       {canAccessSchedule ? (
-        <Link href="/portal/admin/schedule" className={navClass(activeHref === '/portal/admin/schedule')}>
+        <PrimaryNavLink href="/portal/admin/schedule" active={activeHref === undefined ? undefined : activeHref === '/portal/admin/schedule'}>
           Schedule
-        </Link>
+        </PrimaryNavLink>
       ) : null}
-      <Link href="/portal/dashboard" className={navClass(activeHref === '/portal/dashboard')}>
+      <PrimaryNavLink href="/portal/dashboard" active={activeHref === undefined ? undefined : activeHref === '/portal/dashboard'}>
         Dashboard
-      </Link>
+      </PrimaryNavLink>
       {canAccessPlayerNotes ? (
-        <Link href="/portal/admin/player-notes" className={navClass(activeHref === '/portal/admin/player-notes')}>
+        <PrimaryNavLink href="/portal/admin/player-notes" active={activeHref === undefined ? undefined : activeHref === '/portal/admin/player-notes'}>
           Player Notes
-        </Link>
+        </PrimaryNavLink>
       ) : null}
       <PortalNavOverflowMenu items={moreItems} />
     </>

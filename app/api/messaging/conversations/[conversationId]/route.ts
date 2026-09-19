@@ -9,6 +9,7 @@ import {
   isConversationParticipant,
   listMessages,
 } from '../../../../../lib/messaging-db';
+import { isCompanyMessagingOwner } from '../../../../../lib/messaging-access';
 
 async function requireParticipant(request: Request, conversationId: number) {
   const cookieStore = await cookies();
@@ -70,7 +71,8 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ c
   }
   const isCreator = conversation.createdByUserId !== null && conversation.createdByUserId === allowed.session.userId;
   const isOrgAdmin = allowed.session.role === 'admin' && allowed.session.organizationId === conversation.organizationId;
-  if (!isCreator && !isOrgAdmin) {
+  const isCompanyOwner = isCompanyMessagingOwner(allowed.session);
+  if (!isCreator && !isOrgAdmin && !isCompanyOwner) {
     return NextResponse.json({ error: 'Only the group creator or an admin can delete this group.' }, { status: 403 });
   }
 

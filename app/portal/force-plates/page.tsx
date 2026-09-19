@@ -84,10 +84,10 @@ export default async function ForcePlatesPage({
   const tabQueryRaw = Array.isArray(params.tab) ? params.tab[0] : params.tab;
   const requestedTab = String(tabQueryRaw ?? '').trim().toLowerCase();
   const allowedTabs = isStaff
-    ? ['vald', 'sprint', 'vbt', 'biomechanics', 'imports']
-    : ['vald', 'sprint', 'vbt', 'biomechanics'];
+    ? ['vald', 'sprint', 'vbt', 'biomechanics', 'chart', 'imports']
+    : ['vald', 'sprint', 'vbt', 'biomechanics', 'chart'];
   const initialTab = isPcu && allowedTabs.includes(requestedTab)
-    ? requestedTab as 'vald' | 'sprint' | 'vbt' | 'biomechanics' | 'imports'
+    ? requestedTab as 'vald' | 'sprint' | 'vbt' | 'biomechanics' | 'chart' | 'imports'
     : 'vald';
 
   let playerScopedName = '';
@@ -126,7 +126,7 @@ export default async function ForcePlatesPage({
   let availablePlayers: string[] = [];
   let availableTestTypes: string[] = [];
   if (!isPcu) {
-    error = 'Force Plate Data is currently enabled only for PCU.';
+    error = 'Force Plate Data is not currently enabled for this organization.';
   } else if (!canAccessProgramming) {
     error = 'Programming access is required to view Force Plate Data.';
   } else if (candidateNames.length === 0) {

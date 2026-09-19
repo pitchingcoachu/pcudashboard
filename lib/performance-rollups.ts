@@ -241,6 +241,49 @@ export async function refreshValdPerformanceRollups(args: {
        latest_value=EXCLUDED.latest_value, updated_at=NOW()`,
       [args.organizationId, args.schoolCode, startDate, endDate]
     );
+    await client.query(
+      `WITH daily_jump_height AS (
+         SELECT r.organization_id, r.school_code,
+           (r.date_time_utc AT TIME ZONE 'America/Phoenix')::date AS session_date,
+           r.player_name_norm, MAX(r.player_name) AS player_name, r.test_type,
+           AVG(r.value) AS jump_height_inches
+         FROM force_plate_metric_rows r
+         WHERE r.organization_id=$1 AND r.school_code=$2
+           AND r.point_type='average' AND r.date_time_utc IS NOT NULL
+           AND r.date_time_utc >= $3::date
+           AND r.date_time_utc < $4::date + INTERVAL '1 day'
+           AND r.metric_name='Jump Height (Flight Time) in Inches'
+           AND r.metric_unit='Inch' AND r.test_type IN ('CMJ','SJ')
+         GROUP BY r.organization_id, r.school_code,
+           (r.date_time_utc AT TIME ZONE 'America/Phoenix')::date,
+           r.player_name_norm, r.test_type
+       ), paired AS (
+         SELECT organization_id, school_code, session_date, player_name_norm,
+           MAX(player_name) AS player_name,
+           MAX(jump_height_inches) FILTER (WHERE test_type='CMJ') AS cmj_inches,
+           MAX(jump_height_inches) FILTER (WHERE test_type='SJ') AS sj_inches
+         FROM daily_jump_height
+         GROUP BY organization_id, school_code, session_date, player_name_norm
+       )
+       INSERT INTO performance_metric_daily_rollups (
+         organization_id, school_code, source, session_date, player_id, player_name_norm,
+         player_name, activity_type, metric_key, metric_name, metric_unit, sample_count,
+         value_sum, value_min, value_max, latest_value, updated_at
+       )
+       SELECT organization_id, school_code, 'vald', session_date, NULL::bigint, player_name_norm,
+         player_name, 'CMJ-SJ', 'CMJ - SJ Jump Height' || E'\u001f' || 'Inch',
+         'CMJ - SJ Jump Height', 'Inch', 1,
+         ROUND((cmj_inches - sj_inches)::numeric, 1)::double precision,
+         ROUND((cmj_inches - sj_inches)::numeric, 1)::double precision,
+         ROUND((cmj_inches - sj_inches)::numeric, 1)::double precision,
+         ROUND((cmj_inches - sj_inches)::numeric, 1)::double precision, NOW()
+       FROM paired WHERE cmj_inches IS NOT NULL AND sj_inches IS NOT NULL
+       ON CONFLICT (organization_id, school_code, source, session_date, player_name_norm, activity_type, metric_key)
+       DO UPDATE SET player_name=EXCLUDED.player_name, sample_count=1,
+         value_sum=EXCLUDED.value_sum, value_min=EXCLUDED.value_min,
+         value_max=EXCLUDED.value_max, latest_value=EXCLUDED.latest_value, updated_at=NOW()`,
+      [args.organizationId, args.schoolCode, startDate, endDate]
+    );
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});

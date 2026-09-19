@@ -3,9 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 type SessionTypeValue='bullpen'|'regular';
+type OverrideScope='all'|SessionTypeValue;
 type Person={id:number;name:string};
-type Slot={id:number;sessionType:SessionTypeValue;startsAt:string;capacity:number;location:string;status:'open'|'closed'|'cancelled';bookedCount:number;myBookingId:number|null;attendees:Array<{bookingId:number;playerId:number;playerName:string}>};
-type Payload={role:'staff'|'player';slots:Slot[];players:Person[];minBookingLeadHours:number;error?:string};
+type Slot={id:number;sessionType:SessionTypeValue;startsAt:string;capacity:number;location:string;status:'open'|'closed'|'cancelled';closedByOverride:boolean;bookedCount:number;myBookingId:number|null;attendees:Array<{bookingId:number;playerId:number;playerName:string}>};
+type DateOverride={id:number;date:string;sessionType:OverrideScope;reason:string};
+type Payload={role:'staff'|'player';slots:Slot[];players:Person[];minBookingLeadHours:number;dateOverrides:DateOverride[];error?:string};
 type RecurringResult={startsAt:string;status:'booked'|'unavailable';reason?:string};
 
 const PHOENIX='America/Phoenix';
@@ -15,10 +17,12 @@ const addDays=(ymd:string,amount:number)=>{const date=new Date(`${ymd}T12:00:00Z
 const today=()=>dateKey(new Date());
 const dayLabel=(ymd:string)=>new Intl.DateTimeFormat('en-US',{timeZone:'UTC',weekday:'short',month:'short',day:'numeric'}).format(new Date(`${ymd}T12:00:00Z`));
 const timeLabel=(iso:string)=>new Intl.DateTimeFormat('en-US',{timeZone:PHOENIX,hour:'numeric',minute:'2-digit'}).format(new Date(iso));
+const timeLabel24=(iso:string)=>new Intl.DateTimeFormat('en-GB',{timeZone:PHOENIX,hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(iso));
 const fullDate=(ymd:string)=>new Intl.DateTimeFormat('en-US',{timeZone:'UTC',weekday:'long',month:'long',day:'numeric'}).format(new Date(`${ymd}T12:00:00Z`));
 const shortDate=(iso:string)=>new Intl.DateTimeFormat('en-US',{timeZone:PHOENIX,month:'short',day:'numeric'}).format(new Date(iso));
 const WEEKDAYS=[{id:0,label:'Sun'},{id:1,label:'Mon'},{id:2,label:'Tue'},{id:3,label:'Wed'},{id:4,label:'Thu'},{id:5,label:'Fri'},{id:6,label:'Sat'}];
 const sessionTypeLabel=(type:SessionTypeValue)=>type==='bullpen'?'Bullpen':'Regular Training';
+const overrideScopeLabel=(scope:OverrideScope)=>scope==='all'?'All session types':sessionTypeLabel(scope);
 
 async function request(body:Record<string,unknown>){
   const response=await fetch('/api/scheduling',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
@@ -44,6 +48,8 @@ export default function SchedulingSuite({role,logoSrc,logoAlt,schoolName}:{role:
   const [calendarView,setCalendarView]=useState<'day'|'week'|'month'>('week');
   const [calendarAnchor,setCalendarAnchor]=useState(today);
   const [leadHoursDraft,setLeadHoursDraft]=useState<number|null>(null);
+  const [overrideDraft,setOverrideDraft]=useState<{date:string;sessionType:OverrideScope;reason:string}>({date:today(),sessionType:'all',reason:''});
+  const [manageOverrides,setManageOverrides]=useState<DateOverride[]>([]);
   const isStaff=role!=='player';
   const maxDate=addDays(today(),MAX_ADVANCE_DAYS);
   const rangeEnd=isStaff?addDays(rangeStart,41):(addDays(rangeStart,13)>maxDate?maxDate:addDays(rangeStart,13));
@@ -78,19 +84,19 @@ export default function SchedulingSuite({role,logoSrc,logoAlt,schoolName}:{role:
     if(!isStaff||mode!=='manage'||!draft.startDate||!draft.endDate)return;
     setExistingLoading(true);
     try{const response=await fetch(`/api/scheduling?startDate=${draft.startDate}&endDate=${draft.endDate}`,{cache:'no-store'});const next=await response.json().catch(()=>({}))as Payload;
-      if(response.ok)setExistingSlots(next.slots??[]);
+      if(response.ok){setExistingSlots(next.slots??[]);setManageOverrides(next.dateOverrides??[]);}
     }catch{ /* ignore -- keep prior summary on transient failure */ }finally{setExistingLoading(false);}
   },[isStaff,mode,draft.startDate,draft.endDate]);
   useEffect(()=>{void loadExisting();},[loadExisting]);
   const existingByDay=useMemo(()=>{
-    const groups=new Map<string,Map<SessionTypeValue,{first:string;last:string;count:number}>>();
+    const groups=new Map<string,Map<SessionTypeValue,{first:string;last:string;count:number;slotIds:number[];hasBookings:boolean;capacity:number;location:string}>>();
     for(const slot of existingSlots){
       if(slot.status==='cancelled')continue;
       const day=dateKey(new Date(slot.startsAt));
-      const byType=groups.get(day)??new Map<SessionTypeValue,{first:string;last:string;count:number}>();
+      const byType=groups.get(day)??new Map<SessionTypeValue,{first:string;last:string;count:number;slotIds:number[];hasBookings:boolean;capacity:number;location:string}>();
       const entry=byType.get(slot.sessionType);
-      if(!entry)byType.set(slot.sessionType,{first:slot.startsAt,last:slot.startsAt,count:1});
-      else{entry.count+=1;if(slot.startsAt<entry.first)entry.first=slot.startsAt;if(slot.startsAt>entry.last)entry.last=slot.startsAt;}
+      if(!entry)byType.set(slot.sessionType,{first:slot.startsAt,last:slot.startsAt,count:1,slotIds:[slot.id],hasBookings:slot.bookedCount>0,capacity:slot.capacity,location:slot.location});
+      else{entry.count+=1;entry.slotIds.push(slot.id);if(slot.bookedCount>0)entry.hasBookings=true;if(slot.startsAt<entry.first)entry.first=slot.startsAt;if(slot.startsAt>entry.last)entry.last=slot.startsAt;}
       groups.set(day,byType);
     }
     return Array.from(groups.entries()).sort(([a],[b])=>a.localeCompare(b)).map(([day,byType])=>({
@@ -98,10 +104,29 @@ export default function SchedulingSuite({role,logoSrc,logoAlt,schoolName}:{role:
       types:Array.from(byType.entries()).map(([sessionType,range])=>({sessionType,...range})),
     }));
   },[existingSlots]);
+  const [editingGroup,setEditingGroup]=useState<{day:string;sessionType:SessionTypeValue;slotIds:number[]}|null>(null);
+  const [editDraft,setEditDraft]=useState({startTime:'',endTime:'',intervalMinutes:30,capacity:4,location:''});
+  const startEditGroup=(day:string,group:{sessionType:SessionTypeValue;first:string;last:string;slotIds:number[];capacity:number;location:string})=>{
+    setEditingGroup({day,sessionType:group.sessionType,slotIds:group.slotIds});
+    setEditDraft({startTime:timeLabel24(group.first),endTime:timeLabel24(group.last),intervalMinutes:group.sessionType==='regular'?30:20,capacity:group.capacity,location:group.location});
+    setMessage('');
+  };
+  const cancelEditGroup=()=>setEditingGroup(null);
+  const saveEditGroup=async()=>{
+    if(!editingGroup)return;
+    setWorking(true);setMessage('');
+    try{
+      const result=await request({action:'edit_slot_group',slotIds:editingGroup.slotIds,date:editingGroup.day,startTime:editDraft.startTime,endTime:editDraft.endTime,intervalMinutes:editDraft.intervalMinutes,capacity:editDraft.capacity,location:editDraft.location});
+      setMessage(typeof result.created==='number'?`Availability updated. ${result.created} time${result.created===1?'':'s'} published.`:'Availability updated.');
+      setEditingGroup(null);
+      await Promise.all([load(),loadExisting(),loadCalendar()]);
+    }catch(error){setMessage(error instanceof Error?error.message:'Request failed.');}
+    finally{setWorking(false);}
+  };
 
   const days=useMemo(()=>Array.from({length:14},(_,index)=>addDays(rangeStart,index)).filter(day=>isStaff||day<=maxDate),[rangeStart,isStaff,maxDate]);
   const slots=useMemo(()=>(payload?.slots??[]).filter(slot=>dateKey(new Date(slot.startsAt))===selectedDate&&(typeFilter==='all'||slot.sessionType===typeFilter)),[payload?.slots,selectedDate,typeFilter]);
-  const run=async(body:Record<string,unknown>,success:string)=>{setWorking(true);setMessage('');try{const result=await request(body);setMessage(typeof result.created==='number'?`${success} ${result.created} new time${result.created===1?'':'s'} added.`:success);await load();}catch(error){setMessage(error instanceof Error?error.message:'Request failed.');}finally{setWorking(false);}};
+  const run=async(body:Record<string,unknown>,success:string)=>{setWorking(true);setMessage('');try{const result=await request(body);setMessage(typeof result.created==='number'?`${success} ${result.created} new time${result.created===1?'':'s'} added.`:success);await Promise.all([load(),loadExisting(),loadCalendar()]);}catch(error){setMessage(error instanceof Error?error.message:'Request failed.');}finally{setWorking(false);}};
   const toggleWeekday=(id:number)=>setDraft(current=>({...current,weekdays:current.weekdays.includes(id)?current.weekdays.filter(value=>value!==id):[...current.weekdays,id]}));
 
   const startReschedule=(bookingId:number,sessionType:SessionTypeValue)=>{setRescheduling({bookingId,sessionType});setMessage(`Pick a new ${sessionTypeLabel(sessionType)} time below — tap "Move here" on any open slot.`);};
@@ -138,7 +163,7 @@ export default function SchedulingSuite({role,logoSrc,logoAlt,schoolName}:{role:
   return <section className="booking-shell">
     <header className="booking-hero">
       <img className="booking-hero-logo" src={logoSrc} alt={logoAlt} />
-      <div><p className="booking-kicker">{schoolName.toUpperCase()} SESSION BOOKING</p><h1>Booking</h1><p>Reserve a time and keep the week moving.</p></div>
+      <div><p className="booking-kicker">{schoolName.toUpperCase()} SESSION BOOKING</p><h1>Book Your Next Session</h1><p>Reserve a time and keep the week moving.</p></div>
     </header>
     {isStaff?<nav className="booking-tabs" aria-label="Scheduling views"><button className={mode==='book'?'is-active':''} onClick={()=>setMode('book')}>Calendar & bookings</button><button className={mode==='manage'?'is-active':''} onClick={()=>setMode('manage')}>Availability setup</button><button className={mode==='calendar'?'is-active':''} onClick={()=>setMode('calendar')}>Calendar</button></nav>:null}
     {message?<div className="booking-message" role="status">{message}{rescheduling?<button type="button" className="booking-link" onClick={cancelReschedule}>Cancel reschedule</button>:null}</div>:null}
@@ -149,7 +174,7 @@ export default function SchedulingSuite({role,logoSrc,logoAlt,schoolName}:{role:
           <button className="booking-secondary" disabled={working||leadHoursDraft===null||leadHoursDraft===payload?.minBookingLeadHours} onClick={()=>void saveLeadHours()}>Save booking window</button>
         </div>
       </article>
-      <article className="booking-panel"><div className="booking-panel-heading"><span>01</span><div><h2>Session type</h2><p>Choose which kind of time you're publishing.</p></div></div>
+      <article className="booking-panel"><div className="booking-panel-heading"><span>01</span><div><h2>Session type</h2><p>Choose which kind of time you are publishing.</p></div></div>
         <nav className="booking-tabs" aria-label="Availability type"><button className={buildMode==='regular'?'is-active':''} onClick={()=>setBuildMode('regular')}>Regular Training</button><button className={buildMode==='bullpen'?'is-active':''} onClick={()=>setBuildMode('bullpen')}>Bullpen</button></nav>
       </article>
       <article className="booking-panel booking-panel--accent"><div className="booking-panel-heading"><span>02</span><div><h2>Build availability</h2><p>Turn a weekly window into individual bookable times.</p></div></div>
@@ -157,7 +182,22 @@ export default function SchedulingSuite({role,logoSrc,logoAlt,schoolName}:{role:
           <div className="booking-form-row"><label>From<input type="date" value={draft.startDate} onChange={event=>setDraft({...draft,startDate:event.target.value})}/></label><label>Through<input type="date" value={draft.endDate} onChange={event=>setDraft({...draft,endDate:event.target.value})}/></label></div>
           <div className="booking-existing-summary">
             <p className="booking-existing-heading">Already published in this range{existingLoading?' — refreshing…':''}</p>
-            {existingByDay.length===0?<p className="booking-empty-inline">Nothing published yet for these dates.</p>:<ul>{existingByDay.map(({day,types})=><li key={day}><strong>{dayLabel(day)}</strong>{types.map(({sessionType,first,last,count})=><span key={sessionType} className="booking-existing-chip">{sessionTypeLabel(sessionType)} {timeLabel(first)}{count>1?`–${timeLabel(last)}`:''}</span>)}</li>)}</ul>}
+            {existingByDay.length===0?<p className="booking-empty-inline">Nothing published yet for these dates.</p>:<ul>{existingByDay.map(({day,types})=><li key={day}><strong>{dayLabel(day)}</strong>{types.map(group=><button type="button" key={group.sessionType} className="booking-existing-chip" disabled={working||group.hasBookings} title={group.hasBookings?'Cancel or reschedule the booking on this time before editing.':'Edit this published time'} onClick={()=>startEditGroup(day,group)}>{sessionTypeLabel(group.sessionType)} {timeLabel(group.first)}{group.count>1?`–${timeLabel(group.last)}`:''}</button>)}</li>)}</ul>}
+            {editingGroup?<div className="booking-edit-group">
+              <p className="booking-existing-heading">Editing {sessionTypeLabel(editingGroup.sessionType)} · {dayLabel(editingGroup.day)}</p>
+              <div className="booking-form-row"><label>First time<input type="time" value={editDraft.startTime} onChange={event=>setEditDraft({...editDraft,startTime:event.target.value})}/></label><label>End window<input type="time" value={editDraft.endTime} onChange={event=>setEditDraft({...editDraft,endTime:event.target.value})}/></label></div>
+              <div className="booking-form-row">
+                <label>Start every (min){editingGroup.sessionType==='regular'?<small>Regular Training must use 30-minute intervals.</small>:null}
+                  <input type="number" min={editingGroup.sessionType==='regular'?30:10} max={editingGroup.sessionType==='regular'?30:480} step="5" value={editDraft.intervalMinutes} disabled={editingGroup.sessionType==='regular'} onChange={event=>setEditDraft({...editDraft,intervalMinutes:Number(event.target.value)})}/>
+                </label>
+                <label>Capacity<input type="number" min="1" value={editDraft.capacity} onChange={event=>setEditDraft({...editDraft,capacity:Number(event.target.value)})}/></label>
+              </div>
+              <label>Location<input value={editDraft.location} onChange={event=>setEditDraft({...editDraft,location:event.target.value})} placeholder={`${schoolName} Facility`}/></label>
+              <div className="booking-form-row">
+                <button className="booking-primary" disabled={working} onClick={()=>void saveEditGroup()}>Save changes</button>
+                <button className="booking-secondary" disabled={working} onClick={cancelEditGroup}>Cancel</button>
+              </div>
+            </div>:null}
           </div>
           <fieldset><legend>Days offered</legend><div className="booking-weekdays">{WEEKDAYS.map(day=><button type="button" key={day.id} className={draft.weekdays.includes(day.id)?'is-selected':''} onClick={()=>toggleWeekday(day.id)}>{day.label}</button>)}</div></fieldset>
           <div className="booking-form-row"><label>First time<input type="time" value={draft.startTime} onChange={event=>setDraft({...draft,startTime:event.target.value})}/></label><label>End window<input type="time" value={draft.endTime} onChange={event=>setDraft({...draft,endTime:event.target.value})}/></label></div>
@@ -169,6 +209,21 @@ export default function SchedulingSuite({role,logoSrc,logoAlt,schoolName}:{role:
           </div>
           <label>Location<input value={draft.location} onChange={event=>setDraft({...draft,location:event.target.value})} placeholder={`${schoolName} Facility`}/></label>
           <button className="booking-primary" disabled={working} onClick={()=>void run({action:'create_slots',sessionType:buildMode,...draft},'Availability published.')}>Publish availability</button>
+        </div>
+      </article>
+      <article className="booking-panel booking-panel--override"><div className="booking-panel-heading"><span>03</span><div><h2>Date overrides</h2><p>Close a specific date without changing your normal availability schedule.</p></div></div>
+        <div className="booking-form-stack">
+          <div className="booking-form-row">
+            <label>Closed date<input type="date" min={today()} value={overrideDraft.date} onChange={event=>setOverrideDraft({...overrideDraft,date:event.target.value})}/></label>
+            <label>Applies to<select value={overrideDraft.sessionType} onChange={event=>setOverrideDraft({...overrideDraft,sessionType:event.target.value as OverrideScope})}><option value="all">All session types</option><option value="regular">Regular Training</option><option value="bullpen">Bullpen</option></select></label>
+          </div>
+          <label>Reason (optional)<input maxLength={160} value={overrideDraft.reason} onChange={event=>setOverrideDraft({...overrideDraft,reason:event.target.value})} placeholder="Holiday, facility closed, travel…"/></label>
+          <p className="booking-override-note">Existing bookings are preserved. New bookings on this date will be blocked until you remove the override.</p>
+          <button className="booking-primary" disabled={working||!overrideDraft.date} onClick={()=>void run({action:'save_date_override',...overrideDraft},'Date closed.')}>Close this date</button>
+          <div className="booking-override-list">
+            <p className="booking-existing-heading">Upcoming closures</p>
+            {manageOverrides.length===0?<p className="booking-empty-inline">No upcoming date overrides.</p>:manageOverrides.map(override=><div key={override.id} className="booking-override-item"><span><strong>{dayLabel(override.date)}</strong><small>{overrideScopeLabel(override.sessionType)}{override.reason?` · ${override.reason}`:''}</small></span><button type="button" className="booking-link" disabled={working} onClick={()=>{if(window.confirm(`Remove the closure for ${dayLabel(override.date)}?`))void run({action:'delete_date_override',overrideId:override.id},'Date override removed.');}}>Remove</button></div>)}
+          </div>
         </div>
       </article>
     </div>:mode==='calendar'&&isStaff?<div className="booking-calendar-panel">
@@ -208,7 +263,7 @@ export default function SchedulingSuite({role,logoSrc,logoAlt,schoolName}:{role:
               </div>
             :slot.status==='open'&&!full?<button className="booking-primary" disabled={working||(isStaff&&!playerChoice)} onClick={()=>void run({action:'book',slotId:slot.id,...(isStaff?{playerId:playerChoice}:{})},bookedMessage)}>{isStaff?'Add player':'Book'}</button>
             :<span>{slot.status==='open'?'Full':slot.status}</span>}
-            {isStaff?<button className="booking-link" disabled={working} onClick={()=>void run({action:'slot_status',slotId:slot.id,status:slot.status==='open'?'closed':'open'},slot.status==='open'?'Time closed.':'Time reopened.')}>{slot.status==='open'?'Close time':'Reopen'}</button>:null}
+            {isStaff?(slot.closedByOverride?<span className="booking-bullpen-note">Closed by date override</span>:<button className="booking-link" disabled={working} onClick={()=>void run({action:'slot_status',slotId:slot.id,status:slot.status==='open'?'closed':'open'},slot.status==='open'?'Time closed.':'Time reopened.')}>{slot.status==='open'?'Close time':'Reopen'}</button>):null}
           </div>
         </article>;
       })}</div>}

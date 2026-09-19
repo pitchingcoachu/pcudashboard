@@ -17,6 +17,7 @@ type Props = {
   primaryColumnName?: string;
   siteLogoSrc?: string | null;
   siteLogoAlt?: string;
+  siteLogoSize?: number;
   pointLogoSrcForLabel?: (label: string) => string;
   formatValue?: (column: string, value: unknown) => string;
   correlationQueryBase?: string;
@@ -405,11 +406,13 @@ function AxisSearchSelect({
   );
 
   return (
-    <div ref={rootRef} style={{ position: 'relative' }}>
+    <div ref={rootRef} style={{ position: 'relative', minWidth: 0 }}>
       <button
         type="button"
         className="portal-search-select-trigger"
         style={{
+          display: 'flex',
+          alignItems: 'center',
           width: '100%',
           justifyContent: 'space-between',
           fontSize: '1rem',
@@ -417,10 +420,15 @@ function AxisSearchSelect({
           background: isLightTheme ? '#fff' : 'rgba(15, 23, 42, 0.82)',
           color: isLightTheme ? '#374151' : '#e5e7eb',
           borderColor: isLightTheme ? '#cbd5e1' : 'rgba(255,255,255,0.2)',
+          minWidth: 0,
+          overflow: 'hidden',
         }}
         onClick={() => setOpen((current) => !current)}
       >
-        {value || placeholder}
+        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {value || placeholder}
+        </span>
+        <span aria-hidden="true" style={{ flex: '0 0 auto', marginLeft: 8 }}>⌄</span>
       </button>
       {open ? (
         <div
@@ -502,6 +510,7 @@ export default function LeaderboardCorrelationModal({
   primaryColumnName,
   siteLogoSrc,
   siteLogoAlt,
+  siteLogoSize,
   pointLogoSrcForLabel,
   formatValue,
   correlationQueryBase,
@@ -1066,8 +1075,8 @@ export default function LeaderboardCorrelationModal({
                     href={siteLogoDataUrl}
                     x={14}
                     y={4}
-                    width={isProSiteLogo ? 58 : 66}
-                    height={isProSiteLogo ? 58 : 66}
+                    width={siteLogoSize ?? (isProSiteLogo ? 58 : 66)}
+                    height={siteLogoSize ?? (isProSiteLogo ? 58 : 66)}
                     preserveAspectRatio="xMidYMid meet"
                     aria-label={siteLogoAlt ?? 'Site logo'}
                   />
