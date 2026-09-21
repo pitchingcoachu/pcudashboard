@@ -8,11 +8,12 @@ type BiomechanicsHubProps = {
   role: 'admin' | 'coach' | 'player';
   schoolCode: string;
   isActive?: boolean;
+  fixedPlayerName?: string;
 };
 
 type BiomechanicsSubPage = 'force-plates' | 'motion-capture';
 
-export default function BiomechanicsHub({ role, schoolCode, isActive = true }: BiomechanicsHubProps) {
+export default function BiomechanicsHub({ role, schoolCode, isActive = true, fixedPlayerName }: BiomechanicsHubProps) {
   const [activeSubPage, setActiveSubPage] = useState<BiomechanicsSubPage>('force-plates');
 
   return (
@@ -37,10 +38,10 @@ export default function BiomechanicsHub({ role, schoolCode, isActive = true }: B
       </div>
 
       <div style={{ display: activeSubPage === 'force-plates' ? 'block' : 'none' }}>
-        <BiomechanicsSuite role={role} schoolCode={schoolCode} isActive={isActive && activeSubPage === 'force-plates'} />
+        <BiomechanicsSuite role={role} schoolCode={schoolCode} isActive={isActive && activeSubPage === 'force-plates'} fixedPlayerName={fixedPlayerName} />
       </div>
       <div style={{ display: activeSubPage === 'motion-capture' ? 'block' : 'none' }}>
-        <MotionCaptureDashboard />
+        <MotionCaptureDashboard fixedPlayerName={fixedPlayerName} />
       </div>
     </div>
   );

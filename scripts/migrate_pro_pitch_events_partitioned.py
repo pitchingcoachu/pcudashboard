@@ -70,6 +70,7 @@ DDL_INDEXES = [
         CASE
           WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'Four-Seam' THEN 'Fastball'
           WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'Two-Seam' THEN 'Sinker'
+          WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'OneSeamFastBall' THEN 'Sinker'
           WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'Changeup' THEN 'ChangeUp'
           WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'Knuckleball' THEN 'Knuckleball'
           WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'Splitter' THEN 'Splitter'

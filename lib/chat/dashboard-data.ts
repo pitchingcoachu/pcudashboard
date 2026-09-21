@@ -95,11 +95,9 @@ export function resolveSeasonWindow(schoolCode: string, latestAvailableDate: str
   const today = todayIso();
   const latest = latestAvailableDate && isIsoDate(latestAvailableDate) ? latestAvailableDate : today;
   if (upper === 'PRO') return { startDate: '2026-03-25', endDate: latest };
-  if (upper === 'CNU') return { startDate: '2026-01-31', endDate: latest };
-  if (upper === 'PCU') {
-    return { startDate: latest, endDate: latest };
-  }
-  return { startDate: '2026-02-13', endDate: latest };
+  if (['LI', 'INDY'].includes(upper)) return { startDate: '2026-04-01', endDate: today };
+  if (upper === 'LEAGUE') return { startDate: '2026-02-13', endDate: '2026-06-22' };
+  return { startDate: latest, endDate: latest };
 }
 
 export function resolveLast14Window(endDate: string): { startDate: string; endDate: string } {

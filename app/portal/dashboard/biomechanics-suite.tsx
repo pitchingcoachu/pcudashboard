@@ -1331,7 +1331,8 @@ function LineChart({
   );
 }
 
-export default function BiomechanicsSuite({ role, schoolCode, isActive = true }: { role: Role; schoolCode: string; isActive?: boolean }) {
+export default function BiomechanicsSuite({ role, schoolCode, isActive = true, fixedPlayerName }: { role: Role; schoolCode: string; isActive?: boolean; fixedPlayerName?: string }) {
+  const athleteLocked = role === 'player' || Boolean(fixedPlayerName);
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
   const [mode, setMode] = useState<ViewMode>('Force');
@@ -1386,7 +1387,7 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
   const [pitchTypeOptions, setPitchTypeOptions] = useState<string[]>([]);
   const [selectedTags, setSelectedTags] = useState<string[]>(['All']);
   const [selectedPitchTypes, setSelectedPitchTypes] = useState<string[]>(['All']);
-  const [appliedPitchers, setAppliedPitchers] = useState<string[]>(['All']);
+  const [appliedPitchers, setAppliedPitchers] = useState<string[]>(fixedPlayerName ? [fixedPlayerName] : ['All']);
   const [appliedTags, setAppliedTags] = useState<string[]>(['All']);
   const [appliedPitchTypes, setAppliedPitchTypes] = useState<string[]>(['All']);
   const [percentileGroupId, setPercentileGroupId] = useState<string>('all');
@@ -1406,7 +1407,7 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
   const [selectedPitchStrideDirectionIn, setSelectedPitchStrideDirectionIn] = useState<number | null>(null);
   const [selectedPitchHasVideo, setSelectedPitchHasVideo] = useState<boolean>(false);
   const [scrubTime, setScrubTime] = useState<number | null>(null);
-  const [selectedPitchers, setSelectedPitchers] = useState<string[]>(['All']);
+  const [selectedPitchers, setSelectedPitchers] = useState<string[]>(fixedPlayerName ? [fixedPlayerName] : ['All']);
   const [comparePitchKeyA, setComparePitchKeyA] = useState<string>('');
   const [comparePitchKeyB, setComparePitchKeyB] = useState<string>('');
   const [comparePitchPointsA, setComparePitchPointsA] = useState<PitchPoint[]>([]);
@@ -1489,6 +1490,12 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
   useEffect(() => {
     void loadCustomTables();
   }, []);
+
+  useEffect(() => {
+    if (!fixedPlayerName) return;
+    setSelectedPitchers([fixedPlayerName]);
+    setAppliedPitchers([fixedPlayerName]);
+  }, [fixedPlayerName]);
 
   useEffect(() => {
     let active = true;
@@ -2611,10 +2618,10 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
         <button type="button" className={pageTab === 'summary' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setPageTab('summary')}>
           Summary
         </button>
-        {role !== 'player' ? <button type="button" className={pageTab === 'leaderboard' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setPageTab('leaderboard')}>
+        {!athleteLocked ? <button type="button" className={pageTab === 'leaderboard' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setPageTab('leaderboard')}>
           Leaderboard
         </button> : null}
-        {role !== 'player' ? <button type="button" className={pageTab === 'compare' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setPageTab('compare')}>
+        {!athleteLocked ? <button type="button" className={pageTab === 'compare' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setPageTab('compare')}>
           Compare
         </button> : null}
       </div>
@@ -2629,10 +2636,10 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
         </label>
         <label style={{ display: 'grid', gap: 4, minWidth: filterControlMinWidth }}>
           <span style={filterLabelStyle}>Player</span>
-          {role === 'player' ? (
+          {athleteLocked ? (
             <div className="biomechanics-player-lock" style={{ ...selectStyle, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-              <span>{toFirstLastName(pitcherOptions[0] ?? 'Your profile')}</span>
-              <small style={{ color: '#94a3b8', fontSize: 10, fontWeight: 800, letterSpacing: '.08em', textTransform: 'uppercase' }}>My data</small>
+              <span>{toFirstLastName(fixedPlayerName ?? pitcherOptions[0] ?? 'Your profile')}</span>
+              <small style={{ color: '#94a3b8', fontSize: 10, fontWeight: 800, letterSpacing: '.08em', textTransform: 'uppercase' }}>Selected Athlete</small>
             </div>
           ) : <SearchableMultiSelect options={playerSelectOptions} values={selectedPitchers} onChange={setSelectedPitchers} />}
         </label>

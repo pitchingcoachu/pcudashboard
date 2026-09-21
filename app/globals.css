@@ -4012,7 +4012,6 @@ body.theme-light .portal-nav-mobile-sheet-option.active {
   border: none;
   border-radius: 11px;
   cursor: pointer;
-  font: inherit;
 }
 
 .portal-nav-overflow-caret {

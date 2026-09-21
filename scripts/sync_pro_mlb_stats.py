@@ -134,7 +134,7 @@ def _norm_pitch_type(code: str, desc: str) -> str:
         return "Splitter"
     if "cutter" in d:
         return "Cutter"
-    if "sinker" in d or "two-seam" in d:
+    if "sinker" in d or "one-seam" in d or "oneseam" in d or "two-seam" in d:
         return "Sinker"
     if "fastball" in d or "four-seam" in d:
         return "Fastball"

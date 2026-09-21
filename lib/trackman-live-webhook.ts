@@ -156,7 +156,7 @@ export function normalizeTrackmanPitch(payload: unknown): NormalizedTrackmanPitc
     relSpeedMph: speedMph,
     inducedVertBreakIn: inducedVerticalInches,
     horzBreakIn: horizontalInches,
-    pitchType: textValue(field(pitchTag, 'TaggedPitchType', 'taggedPitchType')),
+    pitchType: canonicalLivePitchType(textValue(field(pitchTag, 'TaggedPitchType', 'taggedPitchType'))),
     pitcherThrows: textValue(field(pitcher, 'PitchingHandedness', 'pitchingHandedness')),
     taggedPitcherName: textValue(field(pitcher, 'NameRef', 'nameRef')),
     flightData:
@@ -171,6 +171,14 @@ export function normalizeTrackmanPitch(payload: unknown): NormalizedTrackmanPitc
           }
         : null,
   };
+}
+
+function canonicalLivePitchType(value:string|null):string|null {
+  if(!value)return null;
+  const token=value.toLowerCase().replace(/[^a-z0-9]+/g,'');
+  if(token==='oneseamfastball')return 'Sinker';
+  if(token==='fourseam'||token==='fourseamfastball')return 'Fastball';
+  return value;
 }
 
 async function ensureTrackmanLiveSchema(): Promise<void> {
@@ -273,7 +281,7 @@ export async function storeTrackmanBallEvent(payload: unknown): Promise<boolean>
   const pitchTag = object(field(root, 'PitchTag', 'pitchTag'));
   const players = object(field(root, 'Players', 'players'));
   const pitcher = object(field(players, 'Pitcher', 'pitcher'));
-  const pitchType = normalized?.pitchType ?? textValue(field(pitchTag, 'TaggedPitchType', 'taggedPitchType'));
+  const pitchType = normalized?.pitchType ?? canonicalLivePitchType(textValue(field(pitchTag, 'TaggedPitchType', 'taggedPitchType')));
   const pitcherThrows = normalized?.pitcherThrows ?? textValue(field(pitcher, 'PitchingHandedness', 'pitchingHandedness'));
   const taggedPitcherName = normalized?.taggedPitcherName ?? textValue(field(pitcher, 'NameRef', 'nameRef'));
   const isPlayMetadata = Boolean(pitchTag || players || field(root, 'TaggerBehavior', 'taggerBehavior'));
@@ -450,7 +458,7 @@ export async function listBufferedTrackmanPitches(sessionId: string, sinceUpdate
       relSpeedMph: normalized?.relSpeedMph ?? storedNumbers.relSpeedMph,
       inducedVertBreakIn: normalized?.inducedVertBreakIn ?? storedNumbers.inducedVertBreakIn,
       horzBreakIn: normalized?.horzBreakIn ?? storedNumbers.horzBreakIn,
-      pitchType: normalized?.pitchType ?? row.pitch_type,
+      pitchType: normalized?.pitchType ?? canonicalLivePitchType(row.pitch_type),
       pitcherThrows: normalized?.pitcherThrows ?? row.pitcher_throws,
       taggedPitcherName: normalized?.taggedPitcherName ?? row.tagged_pitcher_name,
       flightData: normalized?.flightData ?? null,

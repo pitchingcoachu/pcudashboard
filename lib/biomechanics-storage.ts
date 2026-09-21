@@ -267,17 +267,57 @@ export async function uploadPlayerMediaToR2(args: {
   return key;
 }
 
-export async function getObjectFromR2(key: string): Promise<{ body: AsyncIterable<Uint8Array>; contentType: string; contentLength: number | null } | null> {
+export async function uploadCoachDashboardMediaToR2(args: {
+  organizationId: number;
+  ownerUserId: number;
+  fileName: string;
+  contentType: string;
+  body: Buffer;
+}): Promise<string | null> {
+  const safeName = String(args.fileName ?? 'media').replace(/[^a-zA-Z0-9._-]+/g, '-');
+  const normalizedType = String(args.contentType ?? '').toLowerCase();
+  const kind = normalizedType.startsWith('image/') ? 'photo' : normalizedType.startsWith('video/') ? 'video' : normalizedType === 'application/pdf' ? 'pdf' : 'file';
+  const key = `coach-dashboard/org-${args.organizationId}/user-${args.ownerUserId}/${kind}-${Date.now()}-${safeName}`;
+  const client = getR2Client();
+  if (!client) {
+    if (!canUseLocalMotionCaptureStorage()) throw new Error('R2 not configured and local storage only works in development.');
+    const filePath = path.join(localMotionCaptureRoot(), key);
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, args.body);
+    return `local:${key}`;
+  }
+  try {
+    await client.send(new PutObjectCommand({
+      Bucket: getR2Bucket(),
+      Key: key,
+      Body: args.body,
+      ContentType: args.contentType,
+      Metadata: { organization_id: String(args.organizationId), owner_user_id: String(args.ownerUserId) },
+    }));
+    return key;
+  } catch {
+    return null;
+  }
+}
+
+export async function getObjectFromR2(key: string, range?: string | null): Promise<{ body: AsyncIterable<Uint8Array>; contentType: string; contentLength: number | null; contentRange?: string } | null> {
   if (key.startsWith('local:')) {
     if (!canUseLocalMotionCaptureStorage()) return null;
     const localKey = key.slice('local:'.length);
     const filePath = path.join(localMotionCaptureRoot(), localKey);
     try {
       const info = await stat(filePath);
+      const match=range?.match(/^bytes=(\d*)-(\d*)$/);
+      const requestedStart=match?.[1]?Number(match[1]):0;
+      const requestedEnd=match?.[2]?Number(match[2]):info.size-1;
+      const hasRange=Boolean(match)&&Number.isFinite(requestedStart)&&Number.isFinite(requestedEnd)&&requestedStart>=0&&requestedStart<=requestedEnd&&requestedStart<info.size;
+      const start=hasRange?requestedStart:0;
+      const end=hasRange?Math.min(requestedEnd,info.size-1):info.size-1;
       return {
-        body: createReadStream(filePath) as unknown as AsyncIterable<Uint8Array>,
+        body: createReadStream(filePath,hasRange?{start,end}:undefined) as unknown as AsyncIterable<Uint8Array>,
         contentType: inferVideoContentTypeFromKey(localKey),
-        contentLength: info.size,
+        contentLength: end-start+1,
+        ...(hasRange?{contentRange:`bytes ${start}-${end}/${info.size}`}:{})
       };
     } catch {
       return null;
@@ -287,12 +327,13 @@ export async function getObjectFromR2(key: string): Promise<{ body: AsyncIterabl
   if (!client) return null;
   const bucket = getR2Bucket();
   try {
-    const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+    const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key, ...(range?{Range:range}:{}) }));
     if (!response.Body) return null;
     return {
       body: response.Body as AsyncIterable<Uint8Array>,
       contentType: response.ContentType ?? 'application/octet-stream',
       contentLength: typeof response.ContentLength === 'number' ? response.ContentLength : null,
+      ...(response.ContentRange?{contentRange:response.ContentRange}:{}),
     };
   } catch {
     return null;

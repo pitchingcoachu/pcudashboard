@@ -208,6 +208,7 @@ function normalizePitchType(value: string): string {
     fourseamfastball: 'Fastball',
     twoseam: 'Sinker',
     twoseamfastball: 'Sinker',
+    oneseamfastball: 'Sinker',
     sinker: 'Sinker',
     cutter: 'Cutter',
     slider: 'Slider',

@@ -226,7 +226,7 @@ function formatUniversalChartValue(column: string, value: unknown): string {
   return String(value);
 }
 
-export default function UniversalViewChart({ schoolCode }: { schoolCode: string }) {
+export default function UniversalViewChart({ schoolCode, fixedPlayerName }: { schoolCode: string; fixedPlayerName?: string }) {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [xAxis, setXAxis] = useState<AxisState>(EMPTY_AXIS);
   const [yAxis, setYAxis] = useState<AxisState>(EMPTY_AXIS);
@@ -234,7 +234,7 @@ export default function UniversalViewChart({ schoolCode }: { schoolCode: string 
   const [endDate, setEndDate] = useState('');
   const [groupIds, setGroupIds] = useState<string[]>([]);
   const [selectedPlayers, setSelectedPlayers] = useState<string[]>([]);
-  const [pointMode, setPointMode] = useState<'averages' | 'observations'>('averages');
+  const [pointMode, setPointMode] = useState<'averages' | 'observations'>(fixedPlayerName ? 'observations' : 'averages');
   const [loading, setLoading] = useState(true);
   const [chartLoading, setChartLoading] = useState(false);
   const [error, setError] = useState('');
@@ -250,6 +250,11 @@ export default function UniversalViewChart({ schoolCode }: { schoolCode: string 
         const payload = await response.json().catch(() => ({})) as Catalog & { error?: string };
         if (!response.ok) throw new Error(payload.error || 'Could not load chart options.');
         setCatalog(payload);
+        if (fixedPlayerName) {
+          const normalize = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+          const matched = payload.players?.find((player) => normalize(player.name) === normalize(fixedPlayerName));
+          setSelectedPlayers(matched ? [matched.name] : [fixedPlayerName]);
+        }
         const [x, y] = chooseDefaultAxes(payload.sources ?? []);
         setXAxis(x);
         setYAxis(y);
@@ -262,7 +267,7 @@ export default function UniversalViewChart({ schoolCode }: { schoolCode: string 
       .catch((loadError) => { if (!controller.signal.aborted) setError(loadError instanceof Error ? loadError.message : 'Could not load chart options.'); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, []);
+  }, [fixedPlayerName]);
 
   const sameAxis = xAxis.source === yAxis.source && xAxis.metric === yAxis.metric && xAxis.activities.join(',') === yAxis.activities.join(',');
 
@@ -309,20 +314,20 @@ export default function UniversalViewChart({ schoolCode }: { schoolCode: string 
       <div className={styles.scopeGrid} style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
         <label><span>Start date</span><input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label>
         <label><span>End date</span><input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></label>
-        {catalog.groups.length ? <label><span>VALD groups</span><SearchMultiSelect
+        {!fixedPlayerName && catalog.groups.length ? <label><span>VALD groups</span><SearchMultiSelect
           options={catalog.groups.map((group) => ({ value: group.id, label: group.label || group.name, detail: `${group.memberNames.length} athletes` }))}
           values={groupIds}
           onChange={setGroupIds}
           placeholder="All VALD groups"
           searchPlaceholder="Search VALD groups…"
         /></label> : null}
-        <label><span>Specific players</span><SearchMultiSelect
+        {fixedPlayerName ? <label><span>Athlete</span><input value={fixedPlayerName} readOnly aria-label="Selected athlete" /></label> : <label><span>Specific players</span><SearchMultiSelect
           options={catalog.players.map((player) => ({ value: player.name, label: player.name }))}
           values={selectedPlayers}
           onChange={setSelectedPlayers}
           placeholder="All eligible players"
           searchPlaceholder="Search players…"
-        /></label>
+        /></label>}
         <label><span>Chart points</span><select value={pointMode} onChange={(event) => setPointMode(event.target.value === 'observations' ? 'observations' : 'averages')}>
           <option value="averages">Athlete averages</option>
           <option value="observations">Every data point / date</option>

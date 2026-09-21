@@ -798,7 +798,7 @@ function SkeletonPreview({ mode, frame }: { mode: 'skeleton' | 'markers'; frame:
   );
 }
 
-export default function MotionCaptureDashboard({ initialPlayerId }: { initialPlayerId?: number | null }) {
+export default function MotionCaptureDashboard({ initialPlayerId, fixedPlayerName }: { initialPlayerId?: number | null; fixedPlayerName?: string }) {
   const [players, setPlayers] = useState<PlayerChoice[]>([]);
   const [selectedPlayer, setSelectedPlayer] = useState<PlayerProfile | null>(null);
   const [selectedPlayerId, setSelectedPlayerId] = useState<number>(Number(initialPlayerId ?? 0));
@@ -1002,7 +1002,18 @@ export default function MotionCaptureDashboard({ initialPlayerId }: { initialPla
       const response = await fetch(`/api/motion-capture?${params.toString()}`, { cache: 'no-store' });
       const payload = (await response.json()) as Payload;
       if (!response.ok) throw new Error(payload.error || 'Failed to load motion capture data.');
-      setPlayers(payload.players ?? []);
+      const normalize = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+      const lockedPlayer = fixedPlayerName
+        ? (payload.players ?? []).find((player) => normalize(player.fullName) === normalize(fixedPlayerName))
+        : null;
+      setPlayers(lockedPlayer ? [lockedPlayer] : (payload.players ?? []));
+      if (fixedPlayerName && lockedPlayer && nextPlayerId !== lockedPlayer.playerId) {
+        setSelectedPlayer(null);
+        setTrackmanPitches([]);
+        setThrows([]);
+        setSelectedPlayerId(lockedPlayer.playerId);
+        return;
+      }
       setSelectedPlayer(payload.selectedPlayer ?? null);
       setTrackmanPitches(payload.trackmanPitches ?? []);
       setThrows(payload.throws ?? []);
@@ -1454,7 +1465,7 @@ export default function MotionCaptureDashboard({ initialPlayerId }: { initialPla
           <div className="portal-form-grid">
             <label>
               Player
-              <select
+              {fixedPlayerName ? <div className="biomechanics-player-lock"><span>{fixedPlayerName}</span><small>Selected Athlete</small></div> : <select
                 value={selectedPlayerId || ''}
                 onChange={(event) => setSelectedPlayerId(Number(event.target.value))}
               >
@@ -1463,7 +1474,7 @@ export default function MotionCaptureDashboard({ initialPlayerId }: { initialPla
                     {player.fullName}
                   </option>
                 ))}
-              </select>
+              </select>}
             </label>
             <label>
               Date

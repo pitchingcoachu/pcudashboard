@@ -16,12 +16,16 @@ WITH src AS (
       ELSE ''
     END AS pitcherthrows_norm,
     CASE
-      WHEN LOWER(TRIM(COALESCE(pe.taggedpitchtype, ''))) IN ('fastball','sinker') THEN 'Fastballs'
+      WHEN REGEXP_REPLACE(LOWER(COALESCE(pe.taggedpitchtype, '')), '[^a-z0-9]', '', 'g') IN ('fastball','fourseam','fourseamfastball','sinker','oneseamfastball') THEN 'Fastballs'
       WHEN LOWER(TRIM(COALESCE(pe.taggedpitchtype, ''))) IN ('cutter','slider','sweeper','curveball') THEN 'Breaking Balls'
       WHEN LOWER(TRIM(COALESCE(pe.taggedpitchtype, ''))) IN ('changeup','splitter','forkball','screwball') THEN 'Off-Speed'
       ELSE 'Other'
     END AS pitch_group,
-    COALESCE(NULLIF(TRIM(pe.taggedpitchtype), ''), 'Unknown') AS pitch_type,
+    CASE
+      WHEN REGEXP_REPLACE(LOWER(COALESCE(pe.taggedpitchtype, '')), '[^a-z0-9]', '', 'g') IN ('fourseam','fourseamfastball') THEN 'Fastball'
+      WHEN REGEXP_REPLACE(LOWER(COALESCE(pe.taggedpitchtype, '')), '[^a-z0-9]', '', 'g') = 'oneseamfastball' THEN 'Sinker'
+      ELSE COALESCE(NULLIF(TRIM(pe.taggedpitchtype), ''), 'Unknown')
+    END AS pitch_type,
     CASE
       WHEN GREATEST(0, LEAST(3, COALESCE((NULLIF(BTRIM(pe.balls::text), ''))::int, 0))) = 0
        AND GREATEST(0, LEAST(2, COALESCE((NULLIF(BTRIM(pe.strikes::text), ''))::int, 0))) = 0 THEN '0-0'

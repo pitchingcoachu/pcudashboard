@@ -7766,6 +7766,7 @@ def _ensure_performance_indexes() -> None:
           CASE
             WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), NULLIF(TRIM(autopitchtype), ''), '') = 'Four-Seam' THEN 'Fastball'
             WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), NULLIF(TRIM(autopitchtype), ''), '') = 'Two-Seam' THEN 'Sinker'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), NULLIF(TRIM(autopitchtype), ''), '') = 'OneSeamFastBall' THEN 'Sinker'
             WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), NULLIF(TRIM(autopitchtype), ''), '') = 'Changeup' THEN 'ChangeUp'
             WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), NULLIF(TRIM(autopitchtype), ''), '') = 'Knuckleball' THEN 'Knuckleball'
             WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), NULLIF(TRIM(autopitchtype), ''), '') = 'Splitter' THEN 'Splitter'
@@ -8345,6 +8346,7 @@ def _ensure_performance_indexes() -> None:
           CASE
             WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'Four-Seam' THEN 'Fastball'
             WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'Two-Seam' THEN 'Sinker'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'OneSeamFastBall' THEN 'Sinker'
             WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'Changeup' THEN 'ChangeUp'
             WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'Knuckleball' THEN 'Knuckleball'
             WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'Splitter' THEN 'Splitter'
@@ -17077,7 +17079,7 @@ def _pro_map_pitch_type(code: str, desc: str) -> str:
         return "Splitter"
     if "cutter" in d:
         return "Cutter"
-    if "sinker" in d or "two-seam" in d:
+    if "sinker" in d or "one-seam" in d or "oneseam" in d or "two-seam" in d:
         return "Sinker"
     if "fastball" in d or "four-seam" in d:
         return "Fastball"

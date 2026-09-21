@@ -115,6 +115,18 @@ export default async function AdminHomePage() {
 
   const modules: HomeNavigationModule[] = [
     {
+      key: 'coach-dashboard',
+      title: `${firstName}'s Dashboard`,
+      description: 'A private command center for your athletes, notes, media, flags, reports, questionnaires, and workout progress.',
+      href: '/portal/admin/my-dashboard',
+      items: [
+        { href: '/portal/admin/my-dashboard', label: 'Open Personal Dashboard' },
+        { href: '/portal/admin/my-dashboard#notes', label: 'Personal Notes' },
+        { href: '/portal/admin/my-dashboard#media', label: 'Media & Reports' },
+      ],
+      meta: 'Private coach workspace',
+    },
+    {
       key: 'ball-flight',
       title: 'On Field Data',
       description: 'Pitching, hitting, catching, reports, comparisons, and player development insights.',

@@ -8,7 +8,8 @@ import { uploadPlayerMediaToR2 } from './biomechanics-storage';
 import { sendPushNotificationToUsers } from './push-notifications';
 import { claimAutomationRun, finishAutomationRun, type ReportAutomationPanel, type ReportAutomationRow } from './report-automations-db';
 import { buildAutomationRenderContext, resolvePanelDateRange } from './report-automation-render-context';
-import { createPlayerMedia, getPlayerNotificationContext, listPlayerSummariesByOrganization, notifyPlayerForStaffActivity } from './training-db';
+import { createNotificationsForUsers, createPlayerMedia, getPlayerNotificationContext, listPlayerSummariesByOrganization, notifyPlayerForStaffActivity } from './training-db';
+import { listDashboardCoachUserIdsForPlayer } from './coach-dashboard-db';
 
 function localDate(now: Date, timeZone: string): string {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone, year:'numeric', month:'2-digit', day:'2-digit' }).formatToParts(now);
@@ -384,6 +385,12 @@ export async function executeReportAutomation(automation: ReportAutomationRow, o
         const context = await getPlayerNotificationContext({ organizationId:automation.organizationId, playerId:player.playerId });
         const recipients = await notifyPlayerForStaffActivity({ playerUserId:context?.userId ?? null, eventType:'automated_report_saved', title:'New report available', detail:`${automation.reportTitle} was saved to your profile`, path:`/portal/player?previewPlayerId=${player.playerId}`, actorUserId:automation.createdByUserId, actorName:session.actorName, actorRole:session.actorRole, playerId:player.playerId, playerName:player.fullName }).catch(() => []);
         if (recipients.length) await sendPushNotificationToUsers({ userIds:recipients, title:'New report available', body:`${automation.reportTitle} was saved to your profile`, data:{path:`/portal/player?previewPlayerId=${player.playerId}`} });
+      }
+      const dashboardCoachIds = await listDashboardCoachUserIdsForPlayer({ organizationId:automation.organizationId, playerId:player.playerId }).catch(() => []);
+      if (dashboardCoachIds.length) {
+        const detail = `${automation.reportTitle} for ${player.fullName} is ready in your dashboard.`;
+        await createNotificationsForUsers({ recipientUserIds:dashboardCoachIds, eventType:'coach_dashboard_report', title:'Athlete report ready', detail, path:'/portal/admin/my-dashboard', playerId:player.playerId, playerName:player.fullName }).catch(() => {});
+        await sendPushNotificationToUsers({ userIds:dashboardCoachIds, title:'Athlete report ready', body:detail, data:{path:'/portal/admin/my-dashboard'} }).catch(() => {});
       }
       await finishAutomationRun(runId, 'saved', aiSummaryError ? `Report saved without AI summary: ${aiSummaryError}` : 'Report saved to player profile.', created.id); counts.saved += 1;
     } catch (error) {

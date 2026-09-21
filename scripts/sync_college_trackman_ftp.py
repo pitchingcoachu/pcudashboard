@@ -432,6 +432,7 @@ def canonical_pitch_type_sql(column: str) -> sql.Composed:
         """CASE TRIM({column})
              WHEN 'Four-Seam' THEN 'Fastball'
              WHEN 'Two-Seam' THEN 'Sinker'
+             WHEN 'OneSeamFastBall' THEN 'Sinker'
              WHEN 'Changeup' THEN 'ChangeUp'
              WHEN 'Knuckle-Curve' THEN 'Curveball'
              ELSE NULLIF(TRIM({column}), '')

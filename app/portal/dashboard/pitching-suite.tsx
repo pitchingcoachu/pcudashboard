@@ -1426,6 +1426,7 @@ function resolvePitchTypeFilterValue(rowLabel: string, availablePitchTypes: stri
     fastball: 'Fastball',
     twoseam: 'Sinker',
     twoseamfastball: 'Sinker',
+    oneseamfastball: 'Sinker',
     sinker: 'Sinker',
     cutter: 'Cutter',
     slider: 'Slider',
@@ -6138,19 +6139,7 @@ export default function PitchingSuite({
       const payloadSchoolCode = String(payload.school_code ?? '').toUpperCase();
       const isLeagueSchool = payloadSchoolCode === 'LEAGUE';
       const isAtlanticLeagueSchool = ['LI', 'INDY'].includes(payloadSchoolCode);
-      const isProSchool = String(payload.school_code ?? '').toUpperCase() === 'PRO';
-      if (isPlayerRole && !isLeagueSchool && !isAtlanticLeagueSchool && !isProSchool) {
-        const schoolCode = String(payload.school_code ?? '').trim().toUpperCase();
-        if (schoolCode === 'PCU') {
-          setStartDate(nextDate);
-          setEndDate(nextDate);
-          return;
-        }
-        const defaultSeasonStart = schoolCode === 'CNU' ? '2026-01-30' : '2026-02-13';
-        const seasonStart = minDate && minDate > defaultSeasonStart ? minDate : defaultSeasonStart;
-        setStartDate(seasonStart);
-        setEndDate(nextDate || seasonStart);
-      } else if (isAtlanticLeagueSchool) {
+      if (isAtlanticLeagueSchool) {
         setStartDate(ATLANTIC_LEAGUE_SEASON_START);
         setEndDate(toYmdNow());
       } else if (isLeagueSchool) {

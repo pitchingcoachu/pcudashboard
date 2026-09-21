@@ -712,7 +712,7 @@ function colorFromThresholdBand(value: number | null, poor: number, great: numbe
 function pitchFamilyKey(pitch: string): string {
   const key = normalizePitchLabel(pitch);
   if (key.includes('fastball') || key === 'fb' || key === 'fourseam' || key === 'fourseamfastball') return 'fastball';
-  if (key.includes('sinker') || key === 'si' || key === 'twoseam' || key === 'twoseamfastball') return 'sinker';
+  if (key.includes('sinker') || key === 'si' || key === 'oneseamfastball' || key === 'twoseam' || key === 'twoseamfastball') return 'sinker';
   if (key.includes('cutter') || key === 'fc') return 'cutter';
   if (key.includes('slider') || key === 'sl') return 'slider';
   if (key.includes('sweeper') || key === 'sv') return 'sweeper';

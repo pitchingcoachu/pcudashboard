@@ -83,6 +83,8 @@ export default async function ForcePlatesPage({
   const requestedPlayer = String(playerQueryRaw ?? '').trim();
   const tabQueryRaw = Array.isArray(params.tab) ? params.tab[0] : params.tab;
   const requestedTab = String(tabQueryRaw ?? '').trim().toLowerCase();
+  const embedQueryRaw = Array.isArray(params.embed) ? params.embed[0] : params.embed;
+  const embedded = String(embedQueryRaw ?? '').trim().toLowerCase() === 'dashboard';
   const allowedTabs = isStaff
     ? ['vald', 'sprint', 'vbt', 'biomechanics', 'chart', 'imports']
     : ['vald', 'sprint', 'vbt', 'biomechanics', 'chart'];
@@ -180,13 +182,36 @@ export default async function ForcePlatesPage({
         } else {
           snapshot = {
             ...fullSnapshot,
-            players: fullSnapshot.players,
+            players: embedded && selectedPlayers.length === 1
+              ? fullSnapshot.players.filter((player) => normalizeName(player.playerName) === normalizeName(selectedPlayers[0]))
+              : fullSnapshot.players,
           };
         }
       }
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to load ForceDecks data.';
     }
+  }
+
+  const dashboard = (
+    <ValdOvrDataDashboard
+      snapshot={snapshot}
+      valdError={error}
+      lastSyncLabel={snapshot ? formatShortDateTime(snapshot.fetchedAt) : ''}
+      canManageViews={isStaff && !embedded}
+      canImport={isStaff && !embedded}
+      showOvr={isPcu}
+      role={session.role}
+      schoolCode={selectedSchoolCode}
+      initialTab={initialTab}
+      availableTestTypes={availableTestTypes}
+      focusedPlayerName={embedded ? selectedPlayers[0] : undefined}
+      embedded={embedded}
+    />
+  );
+
+  if (embedded) {
+    return <div style={{ minWidth: 0, padding: '2px', background: 'var(--page-bg, #050506)' }}>{dashboard}</div>;
   }
 
   return (
@@ -246,18 +271,7 @@ export default async function ForcePlatesPage({
       tabBarGameTrackerVisible={canAccessGameTracker}
     >
       <div className="portal-admin-stack">
-        <ValdOvrDataDashboard
-          snapshot={snapshot}
-          valdError={error}
-          lastSyncLabel={snapshot ? formatShortDateTime(snapshot.fetchedAt) : ''}
-          canManageViews={isStaff}
-          canImport={isStaff}
-          showOvr={isPcu}
-          role={session.role}
-          schoolCode={selectedSchoolCode}
-          initialTab={initialTab}
-          availableTestTypes={availableTestTypes}
-        />
+        {dashboard}
       </div>
     </PortalChrome>
   );

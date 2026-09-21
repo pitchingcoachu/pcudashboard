@@ -27,13 +27,20 @@ type Props = {
   schoolCode: string;
   initialTab?: DataTab;
   availableTestTypes?: string[];
+  focusedPlayerName?: string;
+  embedded?: boolean;
 };
 
 function LoadingPanel() {
   return <div className={tabStyles.loadingPanel}>Loading data…</div>;
 }
 
-export default function ValdOvrDataDashboard({ snapshot, valdError, lastSyncLabel, canManageViews, canImport, showOvr, role, schoolCode, initialTab = 'vald', availableTestTypes = [] }: Props) {
+function samePlayer(left: string, right: string) {
+  const normalize = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+  return normalize(left) === normalize(right);
+}
+
+export default function ValdOvrDataDashboard({ snapshot, valdError, lastSyncLabel, canManageViews, canImport, showOvr, role, schoolCode, initialTab = 'vald', availableTestTypes = [], focusedPlayerName = '', embedded = false }: Props) {
   const [tab, setTab] = useState<DataTab>(initialTab);
   const [sprintResults, setSprintResults] = useState<OvrSprintResult[]>([]);
   const [vbtResults, setVbtResults] = useState<OvrVbtResult[]>([]);
@@ -51,6 +58,7 @@ export default function ValdOvrDataDashboard({ snapshot, valdError, lastSyncLabe
 
   async function selectTab(next: DataTab) {
     setTab(next);
+    if (embedded) window.scrollTo({ top: 0, behavior: 'instant' });
     const url = new URL(window.location.href);
     if (next === 'vald') url.searchParams.delete('tab');
     else url.searchParams.set('tab', next);
@@ -62,8 +70,10 @@ export default function ValdOvrDataDashboard({ snapshot, valdError, lastSyncLabe
       const response = await fetch('/api/ovr-sprint', { cache: 'no-store' });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error ?? 'Unable to load OVR data.');
-      setSprintResults(Array.isArray(payload.results) ? payload.results : []);
-      setVbtResults(Array.isArray(payload.vbtResults) ? payload.vbtResults : []);
+      const nextSprintResults = Array.isArray(payload.results) ? payload.results : [];
+      const nextVbtResults = Array.isArray(payload.vbtResults) ? payload.vbtResults : [];
+      setSprintResults(focusedPlayerName ? nextSprintResults.filter((row: OvrSprintResult) => samePlayer(row.athleteName, focusedPlayerName)) : nextSprintResults);
+      setVbtResults(focusedPlayerName ? nextVbtResults.filter((row: OvrVbtResult) => samePlayer(row.athleteName, focusedPlayerName)) : nextVbtResults);
       setUploads(Array.isArray(payload.uploads) ? payload.uploads : []);
       setDataVersion((version) => version + 1);
     } catch (error) {
@@ -74,7 +84,7 @@ export default function ValdOvrDataDashboard({ snapshot, valdError, lastSyncLabe
   }
 
   return <>
-    <div className={`portal-admin-headline ${forcePlateStyles.pageHeadline}`}>
+    {!embedded ? <div className={`portal-admin-headline ${forcePlateStyles.pageHeadline}`}>
       <div className={forcePlateStyles.pageTitleGroup}>
         <h2 style={{ margin: 0 }}>{showOvr ? 'Biomechanics and Performance Data' : 'VALD Force Plate Data'}</h2>
       </div>
@@ -94,29 +104,29 @@ export default function ValdOvrDataDashboard({ snapshot, valdError, lastSyncLabe
           priority={tab === initialTab}
         />
       </div>
-    </div>
-    {showOvr ? <div className={tabStyles.dataTabs} role="tablist" aria-label="Biomechanics and performance data type">
+    </div> : null}
+    {showOvr ? <div className={`${tabStyles.dataTabs} ${embedded ? tabStyles.embeddedTabs : ''}`} role="tablist" aria-label="Biomechanics and performance data type">
       <button type="button" className={tab === 'vald' ? tabStyles.active : ''} onClick={() => selectTab('vald')}>VALD Force Plates</button>
       <button type="button" className={tab === 'sprint' ? tabStyles.active : ''} onClick={() => selectTab('sprint')}>Sprint</button>
       <button type="button" className={tab === 'vbt' ? tabStyles.active : ''} onClick={() => selectTab('vbt')}>VBT</button>
       <button type="button" className={tab === 'biomechanics' ? tabStyles.active : ''} onClick={() => selectTab('biomechanics')}>Biomechanics</button>
       <button type="button" className={tab === 'chart' ? tabStyles.active : ''} onClick={() => selectTab('chart')}>View Chart</button>
-      {canImport ? <button type="button" className={tab === 'imports' ? tabStyles.active : ''} onClick={() => selectTab('imports')}>Imports</button> : null}
+      {canImport && !focusedPlayerName ? <button type="button" className={tab === 'imports' ? tabStyles.active : ''} onClick={() => selectTab('imports')}>Imports</button> : null}
     </div> : null}
 
     {tab === 'vald' ? <>
       {valdError ? <article className="portal-admin-card"><p className="auth-error" style={{ margin: 0 }}>{valdError}</p></article> : null}
-      {snapshot ? <ForcePlatesDashboard snapshot={snapshot} canManageViews={canManageViews} availableTestTypes={availableTestTypes} /> : null}
+      {snapshot ? <ForcePlatesDashboard snapshot={snapshot} canManageViews={canManageViews && !focusedPlayerName} availableTestTypes={availableTestTypes} /> : null}
       {snapshot ? <article className="portal-admin-card"><p className="portal-muted-text" style={{ margin: 0 }}>Last sync: {lastSyncLabel}</p></article> : null}
     </> : null}
 
-    {tab === 'biomechanics' ? <BiomechanicsHub role={role} schoolCode={schoolCode} isActive /> : null}
-    {tab === 'chart' ? <UniversalViewChart schoolCode={schoolCode} /> : null}
+    {tab === 'biomechanics' ? <BiomechanicsHub role={role} schoolCode={schoolCode} isActive fixedPlayerName={focusedPlayerName || undefined} /> : null}
+    {tab === 'chart' ? <UniversalViewChart schoolCode={schoolCode} fixedPlayerName={focusedPlayerName || undefined} /> : null}
 
     {tab !== 'vald' && tab !== 'biomechanics' && tab !== 'chart' && loading ? <LoadingPanel /> : null}
     {tab !== 'vald' && tab !== 'biomechanics' && tab !== 'chart' && !loading && loadError ? <article className="portal-admin-card"><p className="auth-error" style={{ margin: 0 }}>{loadError}</p></article> : null}
-    {tab === 'sprint' && !loading && !loadError ? <OvrSprintDashboard key={`sprint-${dataVersion}`} initialResults={sprintResults} initialUploads={uploads} canImport={canImport} viewMode="sprint" playerOnly={role === 'player'} /> : null}
-    {tab === 'vbt' && !loading && !loadError ? <OvrVbtDashboard key={`vbt-${dataVersion}`} initialResults={vbtResults} playerOnly={role === 'player'} /> : null}
+    {tab === 'sprint' && !loading && !loadError ? <OvrSprintDashboard key={`sprint-${dataVersion}`} initialResults={sprintResults} initialUploads={uploads} canImport={false} viewMode="sprint" playerOnly={role === 'player' || Boolean(focusedPlayerName)} /> : null}
+    {tab === 'vbt' && !loading && !loadError ? <OvrVbtDashboard key={`vbt-${dataVersion}`} initialResults={vbtResults} playerOnly={role === 'player' || Boolean(focusedPlayerName)} /> : null}
     {tab === 'imports' && !loading && !loadError ? <OvrSprintDashboard key={`imports-${dataVersion}`} initialResults={sprintResults} initialUploads={uploads} canImport={canImport} viewMode="imports" /> : null}
   </>;
 }

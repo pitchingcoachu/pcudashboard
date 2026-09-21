@@ -151,23 +151,17 @@ function resolveSeasonWindow(schoolCode: string, latestAvailableDate: string | n
   if (upper === 'PRO') return { startDate: '2026-03-25', endDate: today };
   if (['LI', 'INDY'].includes(upper)) return { startDate: '2026-04-01', endDate: today };
   if (upper === 'LEAGUE') return { startDate: '2026-02-13', endDate: '2026-06-22' };
-  if (upper === 'CNU') return { startDate: '2026-01-31', endDate: today };
-  if (upper === 'PCU') {
-    const latest = latestAvailableDate && isIsoDate(latestAvailableDate) ? latestAvailableDate : today;
-    return { startDate: latest, endDate: latest };
-  }
-  return { startDate: '2026-02-13', endDate: today };
+  const latest = latestAvailableDate && isIsoDate(latestAvailableDate) ? latestAvailableDate : today;
+  return { startDate: latest, endDate: latest };
 }
 
 function resolveScopedPlayerWindow(schoolCode: string, latestAvailableDate: string | null): { startDate: string; endDate: string } {
   const upper = String(schoolCode ?? '').trim().toUpperCase();
   const latest = latestAvailableDate && isIsoDate(latestAvailableDate) ? latestAvailableDate : todayIso();
-  if (upper === 'PCU') return { startDate: latest, endDate: latest };
-  if (upper === 'CNU') return { startDate: '2026-01-31', endDate: latest };
   if (upper === 'PRO') return { startDate: '2026-03-25', endDate: latest };
   if (['LI', 'INDY'].includes(upper)) return { startDate: '2026-04-01', endDate: todayIso() };
   if (upper === 'LEAGUE') return { startDate: '2026-02-13', endDate: '2026-06-22' };
-  return { startDate: '2026-02-13', endDate: latest };
+  return { startDate: latest, endDate: latest };
 }
 
 function pickLatestDate(values: Array<string | null | undefined>): string | null {

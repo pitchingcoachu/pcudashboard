@@ -9,7 +9,7 @@ export type HomeNavigationItem = {
 };
 
 export type HomeNavigationModule = {
-  key: 'ball-flight' | 'performance' | 'programming' | 'roster' | 'booking' | 'scorebook' | 'nutrition' | 'more';
+  key: 'coach-dashboard' | 'ball-flight' | 'performance' | 'programming' | 'roster' | 'booking' | 'scorebook' | 'nutrition' | 'more';
   title: string;
   description: string;
   href: string;
@@ -18,6 +18,7 @@ export type HomeNavigationModule = {
 };
 
 function ModuleIcon({ name }: { name: HomeNavigationModule['key'] }) {
+  if (name === 'coach-dashboard') return <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 15.5 16 5l12 10.5"/><path d="M7.5 13.5V27h17V13.5"/><path d="M13 27v-8.5h6V27"/></svg>;
   if (name === 'ball-flight') return <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4.5 17C7 8.8 11 5 16 5s9 3.8 11.5 12M4.5 17 16 27.5 27.5 17"/><path d="m16 27.5-6.7-7.2L16 13l6.7 7.3-6.7 7.2Z"/><circle cx="16" cy="20.3" r="1.5"/></svg>;
   if (name === 'performance') return <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 25V15m7 10V9m7 16V13m7 12V5"/><path d="M4 25h24"/></svg>;
   if (name === 'programming') return <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="5" y="7" width="22" height="20" rx="3"/><path d="M10 4v6m12-6v6M5 13h22M10 18h4m4 0h4m-12 5h4"/></svg>;

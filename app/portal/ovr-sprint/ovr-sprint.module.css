@@ -12,6 +12,7 @@
 
 .pageHeadline { display:flex; align-items:center; justify-content:space-between; gap:20px; }
 .dataTabs { display:flex; width:min(100%,920px); gap:6px; padding:5px; overflow-x:auto; border:1px solid rgba(255,255,255,.1); border-radius:16px; background:rgba(0,0,0,.36); }
+.embeddedTabs { position:sticky; z-index:80; top:0; width:100%; margin-bottom:10px; background:rgba(5,5,6,.94); box-shadow:0 10px 28px rgba(0,0,0,.32); backdrop-filter:blur(16px); }
 .dataTabs button { flex:1; min-width:132px; min-height:48px; padding:0 16px; border:0; border-radius:12px; color:rgba(230,223,220,.62); background:transparent; font:inherit; font-size:.82rem; font-weight:950; letter-spacing:.08em; text-transform:uppercase; white-space:nowrap; cursor:pointer; }
 .dataTabs .active { color:#fff; background:rgb(var(--portal-accent-rgb,205,18,57)); box-shadow:0 10px 30px rgba(var(--portal-accent-rgb,205,18,57),.18); }
 .loadingPanel { min-height:260px; display:grid; place-items:center; border:1px solid rgba(255,255,255,.1); border-radius:22px; color:rgba(230,223,220,.62); background:rgba(8,8,10,.86); }
