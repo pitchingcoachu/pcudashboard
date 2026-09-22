@@ -5155,6 +5155,39 @@ body.theme-light .portal-option-email {
   min-height: 0;
 }
 
+.portal-custom-reports-bullpen-chart svg {
+  flex: 1 1 0;
+}
+
+.portal-custom-reports-bullpen-legend {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 18px;
+  padding: 2px 16px 4px;
+  color: var(--text-main);
+  font-size: 0.72rem;
+  font-weight: 750;
+  line-height: 1.25;
+}
+
+.portal-custom-reports-bullpen-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: normal;
+}
+
+.portal-custom-reports-bullpen-legend i {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 9px;
+  border-radius: 50%;
+}
+
 .portal-custom-reports-velocity--main {
   min-height: 430px;
   height: 430px;

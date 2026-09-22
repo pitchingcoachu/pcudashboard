@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { OvrVbtResult } from '../../../lib/ovr-sprint';
 import styles from './ovr-sprint.module.css';
+import { defaultPercentileComparisonWindow } from '../../../lib/percentile-window';
 
 type Props = { initialResults: OvrVbtResult[]; playerOnly?: boolean };
 type ViewTab = 'athlete' | 'leaderboard';
@@ -168,6 +169,8 @@ export default function OvrVbtDashboard({ initialResults, playerOnly = false }: 
   const [displayMode, setDisplayMode] = useState<DisplayMode>('dailyAverage');
   const [chartMode, setChartMode] = useState<'line' | 'bar'>('bar');
   const [percentileGroupId, setPercentileGroupId] = useState<'all' | number>('all');
+  const [percentileComparisonStartDate, setPercentileComparisonStartDate] = useState(() => defaultPercentileComparisonWindow().startDate);
+  const [percentileComparisonEndDate, setPercentileComparisonEndDate] = useState(() => defaultPercentileComparisonWindow().endDate);
   const [percentileGroups, setPercentileGroups] = useState<PercentileGroup[]>([]);
   const [percentiles, setPercentiles] = useState<Partial<Record<MetricKey, PercentileStat>>>({});
   const [percentileLoading, setPercentileLoading] = useState(false);
@@ -232,6 +235,8 @@ export default function OvrVbtDashboard({ initialResults, playerOnly = false }: 
     if (load !== 'All') params.set('load', load);
     if (startDate) params.set('startDate', startDate);
     if (endDate) params.set('endDate', endDate);
+    params.set('comparisonStartDate', percentileComparisonStartDate);
+    params.set('comparisonEndDate', percentileComparisonEndDate);
     fetch(`/api/ovr-sprint/vbt-percentile?${params.toString()}`, { cache: 'no-store' })
       .then((response) => response.json())
       .then((payload: VbtPercentileResponse) => {
@@ -243,7 +248,7 @@ export default function OvrVbtDashboard({ initialResults, playerOnly = false }: 
       .catch(() => { if (active) { setPercentileError('Unable to load VBT percentile data.'); setPercentiles({}); } })
       .finally(() => { if (active) setPercentileLoading(false); });
     return () => { active = false; };
-  }, [athletePlayerId, endDate, exercise, load, percentileGroupId, startDate, tab]);
+  }, [athletePlayerId, endDate, exercise, load, percentileComparisonEndDate, percentileComparisonStartDate, percentileGroupId, startDate, tab]);
   const leaderboard = useMemo(() => {
     const groups = new Map<string, Map<string, number[]>>();
     for (const row of initialResults) {
@@ -282,7 +287,7 @@ export default function OvrVbtDashboard({ initialResults, playerOnly = false }: 
 
     {tab === 'athlete' ? <>
       <section className={styles.chartPanel}>
-        <div className={styles.sectionHeading}><div><p className={styles.eyebrow}>02 · PERFORMANCE SIGNAL</p><h3>{config.label}</h3><p>{exercise === 'All' ? 'All VBT exercises' : exercise} · {startDate || 'First result'} to {endDate || 'Latest result'}</p></div><div className={styles.panelControls}><label><span>Compare against</span><select value={String(percentileGroupId)} onChange={(event) => setPercentileGroupId(event.target.value === 'all' ? 'all' : Number(event.target.value))}><option value="all">All PCU athletes</option>{percentileGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label><span className={styles.liveBadge}><i /> {points.length} {displayMode === 'individual' ? 'reps' : 'dates / exercises'}</span></div></div>
+        <div className={styles.sectionHeading}><div><p className={styles.eyebrow}>02 · PERFORMANCE SIGNAL</p><h3>{config.label}</h3><p>{exercise === 'All' ? 'All VBT exercises' : exercise} · {startDate || 'First result'} to {endDate || 'Latest result'}</p></div><div className={styles.panelControls}><label><span>Compare against</span><select value={String(percentileGroupId)} onChange={(event) => setPercentileGroupId(event.target.value === 'all' ? 'all' : Number(event.target.value))}><option value="all">All PCU athletes</option>{percentileGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label><label><span>Percentile data from</span><input type="date" value={percentileComparisonStartDate} max={percentileComparisonEndDate} onChange={(event) => setPercentileComparisonStartDate(event.target.value)} /></label><label><span>Through</span><input type="date" value={percentileComparisonEndDate} min={percentileComparisonStartDate} onChange={(event) => setPercentileComparisonEndDate(event.target.value)} /></label><span className={styles.liveBadge}><i /> {points.length} {displayMode === 'individual' ? 'reps' : 'dates / exercises'}</span></div></div>
         {percentileApplicable && percentileError ? <p className={styles.error}>{percentileError}</p> : null}
         <div className={styles.statGrid}>
           {signalCardData.map((card, index) => <article key={card.key} className={index === 0 ? styles.featuredStat : undefined}>

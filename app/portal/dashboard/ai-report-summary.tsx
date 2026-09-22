@@ -22,6 +22,8 @@ type ForcePlatePercentileConfig = {
   player: string;
   groupId: string;
   testType: string;
+  comparisonStartDate?: string;
+  comparisonEndDate?: string;
   metrics: Array<{ value: string; label: string; metricName: string; metricUnit: string }>;
 };
 type BiomechanicsPercentileConfig = {
@@ -29,9 +31,12 @@ type BiomechanicsPercentileConfig = {
   groupId: string;
   forceMode: 'force' | 'bw';
   pitchType: string;
+  comparisonStartDate?: string;
+  comparisonEndDate?: string;
   metrics: Array<{ value: string; label: string }>;
 };
-export type AiReportPanel = { id: string; title: string; panelType: string; requestUrl: string; tableColumns: string[]; tableRows: ReportRow[]; chartPoints: object[]; options?: { heatStat?: string; contact2dColorBy?: string; contact3dColorBy?: string; batSpeedColorBy?: string; sprayView?: string; biomechanicsPercentiles?: BiomechanicsPercentiles; forcePlatePercentileConfig?: ForcePlatePercentileConfig; biomechanicsPercentileConfig?: BiomechanicsPercentileConfig } };
+type BaseballPercentileEvidence = { metric: string; metricLabel: string; value: number | null; percentile: number | null; sampleSize: number; poolLabel: string; comparisonWindow: string; rankingDirection: string };
+export type AiReportPanel = { id: string; title: string; panelType: string; requestUrl: string; tableColumns: string[]; tableRows: ReportRow[]; chartPoints: object[]; options?: { heatStat?: string; contact2dColorBy?: string; contact3dColorBy?: string; batSpeedColorBy?: string; sprayView?: string; biomechanicsPercentiles?: BiomechanicsPercentiles; forcePlatePercentileConfig?: ForcePlatePercentileConfig; biomechanicsPercentileConfig?: BiomechanicsPercentileConfig; baseballPercentile?: BaseballPercentileEvidence } };
 type AiReportSummaryProps = { reportType: string; title: string; playerName?: string; reportStart: string; reportEnd: string; panels: AiReportPanel[]; autoGenerate?:boolean; onReady?:(ready:boolean)=>void };
 type MetricField = { key: string; label: string };
 type MetricAggregate = { group: string; metric: string; average: number; minimum: number; maximum: number; sampleSize: number };
@@ -51,6 +56,16 @@ const CHART_METRICS: Record<string, MetricField[]> = {
   'Bat Speed': [{ key: 'bat_speed', label: 'Bat Speed' }],
   'EV and LA': [{ key: 'exit_speed', label: 'Exit Velocity' }, { key: 'angle', label: 'Launch Angle' }],
   'Spray Chart': [{ key: 'direction', label: 'Spray Direction' }, { key: 'distance', label: 'Distance' }],
+  'Nutrition Calorie Trends': [
+    { key: 'calories', label: 'Calories' },
+    { key: 'target_calories', label: 'Calorie Target' },
+  ],
+  'Nutrition Macro Breakdown': [
+    { key: 'protein_g', label: 'Protein' },
+    { key: 'carbs_g', label: 'Carbohydrates' },
+    { key: 'fat_g', label: 'Fat' },
+  ],
+  'Bullpen Script Trend Chart': [{ key: 'value', label: 'Bullpen Script Trend' }],
 };
 
 function shiftDate(value: string, days: number): string { const date = new Date(`${value}T12:00:00Z`); if (Number.isNaN(date.getTime())) return ''; date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10); }
@@ -97,7 +112,10 @@ function playerFromPanelRequests(reportType: string, panels: AiReportPanel[]): s
   return names.size === 1 ? (Array.from(names)[0] ?? '') : '';
 }
 function currentEvidence(panel: AiReportPanel) {
-  if (panel.panelType === 'Summary Table' || panel.panelType === 'Biomechanics Table') {
+  if (panel.panelType === 'Baseball Percentile Tile') {
+    return { kind: 'percentiles' as const, group: panel.options?.baseballPercentile?.poolLabel ?? '', rows: panel.options?.baseballPercentile ? [panel.options.baseballPercentile] : [] };
+  }
+  if (panel.panelType === 'Summary Table' || panel.panelType === 'Biomechanics Table' || panel.panelType === 'Bullpen Script Summary Table') {
     return {
       kind: 'table' as const,
       ...sanitizeTable(panel.tableColumns, panel.tableRows),
@@ -108,14 +126,15 @@ function currentEvidence(panel: AiReportPanel) {
   return { kind: 'chart' as const, aggregates: aggregatePoints(panel.chartPoints, panelMetricFields(panel)) };
 }
 function allowedMetrics(panel: AiReportPanel): string[] {
-  if (panel.panelType === 'Summary Table' || panel.panelType === 'Biomechanics Table') {
+  if (panel.panelType === 'Summary Table' || panel.panelType === 'Biomechanics Table' || panel.panelType === 'Bullpen Script Summary Table') {
     const metadataColumns = new Set(['Name', 'Date', '#', 'Pitch Type', 'Pitch', 'Tags', 'Session']);
     return panel.tableColumns.map(String).filter((column) => column && !metadataColumns.has(column));
   }
-  if (panel.panelType === 'Percentile Summary') return Array.from(new Set([
+  if (panel.panelType === 'Performance Percentile Summary') return Array.from(new Set([
     ...(panel.options?.forcePlatePercentileConfig?.metrics.map((metric) => metric.label) ?? []),
     ...(panel.options?.biomechanicsPercentileConfig?.metrics.map((metric) => metric.label) ?? []),
   ]));
+  if (panel.panelType === 'Baseball Percentile Tile') return panel.options?.baseballPercentile?.metricLabel ? [panel.options.baseballPercentile.metricLabel] : [];
   if (panel.panelType === 'Pitch Usage Pie Chart' || panel.panelType === 'Pitch Usage Bar Chart') return ['Pitch Usage'];
   const metrics = panelMetricFields(panel).map((field) => field.label);
   if (panel.panelType === 'Heatmap' && panel.options?.heatStat) metrics.push(panel.options.heatStat);
@@ -144,6 +163,8 @@ async function loadForcePlatePercentileEvidence(panel: AiReportPanel, reportStar
       start_date: reportStart,
       end_date: reportEnd,
     });
+    if (config.comparisonStartDate) rankParams.set('comparisonStartDate', config.comparisonStartDate);
+    if (config.comparisonEndDate) rankParams.set('comparisonEndDate', config.comparisonEndDate);
     const [rankResponse, overviewResponse] = await Promise.all([
       fetch(`/api/player/force-plate-percentiles?${rankParams.toString()}`, { cache: 'no-store' }),
       fetch(`/api/dashboard/force-plates/overview?${overviewParams.toString()}`, { cache: 'no-store' }),
@@ -166,7 +187,7 @@ async function loadForcePlatePercentileEvidence(panel: AiReportPanel, reportStar
       unit: metric.metricUnit,
       testType: config.testType || 'All',
       group: rankPayload.selectedGroupLabel ?? 'All PCU athletes',
-      comparisonWindow: rankPayload.comparisonWindow ?? 'full_history',
+      comparisonWindow: rankPayload.comparisonWindow ?? 'Last 365 days',
       percentile: rankPayload.stats?.latest?.percentile ?? null,
       sampleSize: rankPayload.stats?.latest?.sampleSize ?? 0,
     };
@@ -186,6 +207,8 @@ async function loadPercentileSummaryEvidence(panel: AiReportPanel, reportStart: 
     startDate: reportStart,
     endDate: reportEnd,
   });
+  if (biomechanicsConfig.comparisonStartDate) params.set('comparisonStartDate', biomechanicsConfig.comparisonStartDate);
+  if (biomechanicsConfig.comparisonEndDate) params.set('comparisonEndDate', biomechanicsConfig.comparisonEndDate);
   if (biomechanicsConfig.pitchType && biomechanicsConfig.pitchType !== 'All') {
     params.set('pitchTypes', JSON.stringify([biomechanicsConfig.pitchType]));
   }
@@ -211,7 +234,7 @@ async function loadPercentileSummaryEvidence(panel: AiReportPanel, reportStart: 
       value: rank.value,
       pitchType,
       group: payload.selectedGroupLabel ?? 'All PCU athletes',
-      comparisonWindow: payload.comparisonWindow ?? 'full_history',
+      comparisonWindow: payload.comparisonWindow ?? 'Last 365 days',
       percentile: rank.percentile,
       sampleSize: rank.sampleSize,
       rankingDirection: rank.rankingDirection ?? 'higher_is_higher',
@@ -248,7 +271,7 @@ function SummaryDatePicker({ label, value, onChange }: { label: string; value: s
 export default function AiReportSummary({ reportType, title, playerName = '', reportStart, reportEnd, panels, autoGenerate=false, onReady }: AiReportSummaryProps) {
   const duration = Math.max(1, Math.round((Date.parse(reportEnd) - Date.parse(reportStart)) / 86_400_000) + 1);
   const [comparisonStart, setComparisonStart] = useState(() => shiftDate(reportStart, -duration)); const [comparisonEnd, setComparisonEnd] = useState(() => shiftDate(reportStart, -1)); const [summary, setSummary] = useState(''); const [loading, setLoading] = useState(false); const [include, setInclude] = useState(true); const [error, setError] = useState('');
-  const reportPanels = useMemo(() => panels.filter((panel) => panel.panelType !== 'Note Section' && (panel.requestUrl || panel.options?.forcePlatePercentileConfig || panel.options?.biomechanicsPercentileConfig)), [panels]);
+  const reportPanels = useMemo(() => panels.filter((panel) => panel.panelType !== 'Note Section' && (panel.requestUrl || panel.options?.forcePlatePercentileConfig || panel.options?.biomechanicsPercentileConfig || panel.options?.baseballPercentile)), [panels]);
   const autoGeneratedKeyRef = useRef('');
   useEffect(() => { setComparisonStart(shiftDate(reportStart, -duration)); setComparisonEnd(shiftDate(reportStart, -1)); setSummary(''); }, [duration, reportEnd, reportStart, reportType, title]);
 
@@ -256,7 +279,7 @@ export default function AiReportSummary({ reportType, title, playerName = '', re
     setLoading(true); setError('');
     try {
       const evidence = await Promise.all(reportPanels.map(async (panel) => {
-        if (panel.panelType === 'Percentile Summary') {
+        if (panel.panelType === 'Performance Percentile Summary') {
           const current = await loadPercentileSummaryEvidence(panel, reportStart, reportEnd);
           return {
             title: panel.title,
@@ -264,6 +287,18 @@ export default function AiReportSummary({ reportType, title, playerName = '', re
             context: panel.requestUrl ? requestContext(panel.requestUrl) : { sessionType: 'All', tableMode: '', pitchTypes: 'All', countFilter: 'All', afterCountFilter: 'All', batterSide: 'All' },
             allowedMetrics: allowedMetrics(panel),
             current,
+            reference: null,
+            comparisons: [],
+            mlbBenchmark: null,
+          };
+        }
+        if (panel.panelType === 'Baseball Percentile Tile') {
+          return {
+            title: panel.title,
+            panelType: panel.panelType,
+            context: panel.requestUrl ? requestContext(panel.requestUrl) : { sessionType: 'All', tableMode: '', pitchTypes: 'All', countFilter: 'All', afterCountFilter: 'All', batterSide: 'All' },
+            allowedMetrics: allowedMetrics(panel),
+            current: currentEvidence(panel),
             reference: null,
             comparisons: [],
             mlbBenchmark: null,

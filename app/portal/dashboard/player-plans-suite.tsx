@@ -9,6 +9,7 @@ import { deliverReportPdf } from '../../../lib/report-pdf-delivery';
 import { SaveReportToProfileButton } from '../components/save-report-to-profile';
 import { dashboardMetricLabel, parseForcePlateFlagMetric } from '../../../lib/dashboard-metric-catalog';
 import { chartableAssessmentFields } from '../../../lib/assessment-questionnaire-metrics';
+import { defaultPercentileComparisonWindow } from '../../../lib/percentile-window';
 
 type Domain = 'Pitching' | 'Hitting' | 'Catching' | 'Force Plates';
 type GoalSlot = 1 | 2 | 3;
@@ -1911,6 +1912,8 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
   const [automationStuffBase, setAutomationStuffBase] = useState<'Fastball' | 'Sinker'>('Fastball');
   const [automationStartDate, setAutomationStartDate] = useState('');
   const [automationEndDate, setAutomationEndDate] = useState('');
+  const [automationPercentileStartDate, setAutomationPercentileStartDate] = useState(() => defaultPercentileComparisonWindow().startDate);
+  const [automationPercentileEndDate, setAutomationPercentileEndDate] = useState(() => defaultPercentileComparisonWindow().endDate);
   const [automationTree, setAutomationTree] = useState<AutomatedTreeData | null>(null);
   const [automationTreeLoading, setAutomationTreeLoading] = useState(false);
   const [automationTreeError, setAutomationTreeError] = useState('');
@@ -3841,6 +3844,8 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
             stuffBase: automationStuffBase,
             startDate: automationStartDate,
             endDate: automationEndDate,
+            comparisonStartDate: automationPercentileStartDate,
+            comparisonEndDate: automationPercentileEndDate,
           }),
         });
         const refreshPayload = (await refreshResponse.json().catch(() => ({}))) as { error?: string };
@@ -4653,6 +4658,14 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
               <label>
                 End Date
                 <NativeDateInput value={automationEndDate} onChange={setAutomationEndDate} ariaLabel="End Date" />
+              </label>
+              <label>
+                Percentile Data From
+                <NativeDateInput value={automationPercentileStartDate} max={automationPercentileEndDate || undefined} onChange={setAutomationPercentileStartDate} ariaLabel="Percentile Data From" />
+              </label>
+              <label>
+                Percentile Data Through
+                <NativeDateInput value={automationPercentileEndDate} min={automationPercentileStartDate || undefined} onChange={setAutomationPercentileEndDate} ariaLabel="Percentile Data Through" />
               </label>
               <label>
                 Automation

@@ -2,6 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
+import { defaultPercentileComparisonWindow } from '../../../../../lib/percentile-window';
 
 type SummaryPercentileRequest = {
   rowKey: string;
@@ -12,6 +13,8 @@ type SummaryPercentileRequest = {
 type Body = {
   requests?: SummaryPercentileRequest[];
   columns?: string[];
+  comparisonStartDate?: string;
+  comparisonEndDate?: string;
 };
 
 function isAllLikeRowValue(value: unknown): boolean {
@@ -70,6 +73,13 @@ export async function POST(request: Request) {
   }
 
   const inputUrl = new URL(request.url);
+  const defaultWindow = defaultPercentileComparisonWindow();
+  const comparisonStartDate = /^\d{4}-\d{2}-\d{2}$/.test(String(body.comparisonStartDate ?? ''))
+    ? String(body.comparisonStartDate)
+    : defaultWindow.startDate;
+  const comparisonEndDate = /^\d{4}-\d{2}-\d{2}$/.test(String(body.comparisonEndDate ?? ''))
+    ? String(body.comparisonEndDate)
+    : defaultWindow.endDate;
   const origin = inputUrl.origin;
   const cookieHeader = cookieStore
     .getAll()
@@ -86,6 +96,8 @@ export async function POST(request: Request) {
 
       const baseUrl = new URL('/api/dashboard/pitching/table-rollup', origin);
       baseUrl.search = query;
+      baseUrl.searchParams.set('start_date', comparisonStartDate);
+      baseUrl.searchParams.set('end_date', comparisonEndDate);
       baseUrl.searchParams.set('custom_columns', columns.join(','));
       baseUrl.searchParams.set('include_chart_points', '0');
       baseUrl.searchParams.set('include_row_pitches', '0');
@@ -115,6 +127,8 @@ export async function POST(request: Request) {
       if (!handedQuery) return;
       const handedUrl = new URL('/api/dashboard/pitching/table-rollup', origin);
       handedUrl.search = handedQuery;
+      handedUrl.searchParams.set('start_date', comparisonStartDate);
+      handedUrl.searchParams.set('end_date', comparisonEndDate);
       handedUrl.searchParams.set('custom_columns', columns.join(','));
       handedUrl.searchParams.set('include_chart_points', '0');
       handedUrl.searchParams.set('include_row_pitches', '0');

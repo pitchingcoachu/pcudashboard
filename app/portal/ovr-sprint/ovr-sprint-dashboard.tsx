@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { OvrSprintImportPreview, OvrSprintResult, OvrSprintUpload } from '../../../lib/ovr-sprint';
 import styles from './ovr-sprint.module.css';
+import { defaultPercentileComparisonWindow } from '../../../lib/percentile-window';
 
 type Props = {
   initialResults: OvrSprintResult[];
@@ -368,6 +369,8 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const [percentileGroupId, setPercentileGroupId] = useState<'all' | number>('all');
+  const [percentileComparisonStartDate, setPercentileComparisonStartDate] = useState(() => defaultPercentileComparisonWindow().startDate);
+  const [percentileComparisonEndDate, setPercentileComparisonEndDate] = useState(() => defaultPercentileComparisonWindow().endDate);
   const [percentileGroups, setPercentileGroups] = useState<PercentileGroup[]>([]);
   const [panelPercentiles, setPanelPercentiles] = useState<Record<string, PercentileEntry>>({});
   const [percentileLoading, setPercentileLoading] = useState(false);
@@ -413,6 +416,8 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
     for (const entry of SPRINT_PANEL_EXERCISES) params.append('exercise', entry);
     if (startDate) params.set('startDate', startDate);
     if (endDate) params.set('endDate', endDate);
+    params.set('comparisonStartDate', percentileComparisonStartDate);
+    params.set('comparisonEndDate', percentileComparisonEndDate);
     fetch(`/api/ovr-sprint/percentile?${params.toString()}`, { cache: 'no-store' })
       .then((response) => response.json())
       .then((payload: PercentileResponse) => {
@@ -424,7 +429,7 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
       .catch(() => { if (active) { setPercentileError('Unable to load percentile data.'); setPanelPercentiles({}); } })
       .finally(() => { if (active) setPercentileLoading(false); });
     return () => { active = false; };
-  }, [tab, athletePlayerId, percentileGroupId, startDate, endDate]);
+  }, [tab, athletePlayerId, percentileComparisonEndDate, percentileComparisonStartDate, percentileGroupId, startDate, endDate]);
 
   // Each card shows the average time from the latest session and compares it
   // with the average of the athlete's prior sessions in the preceding 30 days.
@@ -813,6 +818,8 @@ export default function OvrSprintDashboard({ initialResults, initialUploads, can
               <div><p className={styles.eyebrow}>02 · PERFORMANCE SIGNAL</p><h3>Sprint test summary</h3><p>Latest session average · percentile and prior 30-day trend</p></div>
               <div className={styles.panelControls}>
                 <label><span>Compare against</span><select value={String(percentileGroupId)} onChange={(event) => setPercentileGroupId(event.target.value === 'all' ? 'all' : Number(event.target.value))}><option value="all">All PCU athletes</option>{percentileGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label>
+                <label><span>Percentile data from</span><input type="date" value={percentileComparisonStartDate} max={percentileComparisonEndDate} onChange={(event) => setPercentileComparisonStartDate(event.target.value)} /></label>
+                <label><span>Through</span><input type="date" value={percentileComparisonEndDate} min={percentileComparisonStartDate} onChange={(event) => setPercentileComparisonEndDate(event.target.value)} /></label>
               </div>
             </div>
             {percentileError ? <p className={styles.error}>{percentileError}</p> : null}

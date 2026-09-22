@@ -14,6 +14,7 @@ const PHOENIX='America/Phoenix';
 const MAX_ADVANCE_DAYS=60;
 const dateKey=(date:Date)=>new Intl.DateTimeFormat('en-CA',{timeZone:PHOENIX,year:'numeric',month:'2-digit',day:'2-digit'}).format(date);
 const addDays=(ymd:string,amount:number)=>{const date=new Date(`${ymd}T12:00:00Z`);date.setUTCDate(date.getUTCDate()+amount);return date.toISOString().slice(0,10);};
+const addMonths=(ymd:string,amount:number)=>{const year=Number(ymd.slice(0,4)),month=Number(ymd.slice(5,7))-1;const date=new Date(Date.UTC(year,month+amount,1,12));return `${date.getUTCFullYear()}-${String(date.getUTCMonth()+1).padStart(2,'0')}-01`;};
 const today=()=>dateKey(new Date());
 const dayLabel=(ymd:string)=>new Intl.DateTimeFormat('en-US',{timeZone:'UTC',weekday:'short',month:'short',day:'numeric'}).format(new Date(`${ymd}T12:00:00Z`));
 const timeLabel=(iso:string)=>new Intl.DateTimeFormat('en-US',{timeZone:PHOENIX,hour:'numeric',minute:'2-digit'}).format(new Date(iso));
@@ -52,10 +53,10 @@ export default function SchedulingSuite({role,logoSrc,logoAlt,schoolName}:{role:
   const [manageOverrides,setManageOverrides]=useState<DateOverride[]>([]);
   const isStaff=role!=='player';
   const maxDate=addDays(today(),MAX_ADVANCE_DAYS);
-  const rangeEnd=isStaff?addDays(rangeStart,41):(addDays(rangeStart,13)>maxDate?maxDate:addDays(rangeStart,13));
+  const rangeEnd=addDays(rangeStart,13)>maxDate&&!isStaff?maxDate:addDays(rangeStart,13);
   const load=useCallback(async()=>{
     setLoading(true);setMessage('');
-    try{const response=await fetch(`/api/scheduling?startDate=${rangeStart}&endDate=${rangeEnd}`,{cache:'no-store'});const next=await response.json().catch(()=>({}))as Payload;
+    try{const response=await fetch(`/api/scheduling?startDate=${rangeStart}&endDate=${rangeEnd}&includeOverrides=0`,{cache:'no-store'});const next=await response.json().catch(()=>({}))as Payload;
       if(!response.ok)throw new Error(next.error||'Unable to load scheduling.');setPayload(next);
       setPlayerChoice(current=>current||next.players[0]?.id||0);
       setLeadHoursDraft(current=>current??next.minBookingLeadHours);
@@ -64,15 +65,17 @@ export default function SchedulingSuite({role,logoSrc,logoAlt,schoolName}:{role:
   useEffect(()=>{void load();},[load]);
 
   const monthAnchorStart=`${calendarAnchor.slice(0,7)}-01`;
-  const monthDayCount=new Date(Number(calendarAnchor.slice(0,4)),Number(calendarAnchor.slice(5,7)),0).getDate();
-  const calendarRangeStart=calendarView==='month'?monthAnchorStart:calendarAnchor;
-  const calendarRangeEnd=calendarView==='month'?addDays(monthAnchorStart,monthDayCount-1):calendarView==='week'?addDays(calendarAnchor,6):calendarAnchor;
+  // Keep one buffered month in memory. Day/Week/Month can switch instantly
+  // without racing separate requests, and weeks that cross a month boundary
+  // still have their complete booking data available.
+  const calendarRangeStart=addDays(monthAnchorStart,-7);
+  const calendarRangeEnd=addDays(addMonths(monthAnchorStart,1),6);
   const [calendarPayload,setCalendarPayload]=useState<Payload|null>(null);
   const [calendarLoading,setCalendarLoading]=useState(false);
   const loadCalendar=useCallback(async()=>{
     if(!isStaff||mode!=='calendar')return;
     setCalendarLoading(true);
-    try{const response=await fetch(`/api/scheduling?startDate=${calendarRangeStart}&endDate=${calendarRangeEnd}`,{cache:'no-store'});const next=await response.json().catch(()=>({}))as Payload;
+    try{const response=await fetch(`/api/scheduling?startDate=${calendarRangeStart}&endDate=${calendarRangeEnd}&includePlayers=0&includeSettings=0&includeOverrides=0`,{cache:'no-store'});const next=await response.json().catch(()=>({}))as Payload;
       if(response.ok)setCalendarPayload(next);
     }catch{ /* ignore -- keep prior calendar data on transient failure */ }finally{setCalendarLoading(false);}
   },[isStaff,mode,calendarRangeStart,calendarRangeEnd]);
@@ -83,7 +86,7 @@ export default function SchedulingSuite({role,logoSrc,logoAlt,schoolName}:{role:
   const loadExisting=useCallback(async()=>{
     if(!isStaff||mode!=='manage'||!draft.startDate||!draft.endDate)return;
     setExistingLoading(true);
-    try{const response=await fetch(`/api/scheduling?startDate=${draft.startDate}&endDate=${draft.endDate}`,{cache:'no-store'});const next=await response.json().catch(()=>({}))as Payload;
+    try{const response=await fetch(`/api/scheduling?startDate=${draft.startDate}&endDate=${draft.endDate}&includePlayers=0&includeSettings=0`,{cache:'no-store'});const next=await response.json().catch(()=>({}))as Payload;
       if(response.ok){setExistingSlots(next.slots??[]);setManageOverrides(next.dateOverrides??[]);}
     }catch{ /* ignore -- keep prior summary on transient failure */ }finally{setExistingLoading(false);}
   },[isStaff,mode,draft.startDate,draft.endDate]);
@@ -230,12 +233,12 @@ export default function SchedulingSuite({role,logoSrc,logoAlt,schoolName}:{role:
       <div className="booking-calendar-controls">
         <nav className="booking-tabs" aria-label="Calendar view"><button className={calendarView==='day'?'is-active':''} onClick={()=>setCalendarView('day')}>Day</button><button className={calendarView==='week'?'is-active':''} onClick={()=>setCalendarView('week')}>Week</button><button className={calendarView==='month'?'is-active':''} onClick={()=>setCalendarView('month')}>Month</button></nav>
         <div className="booking-calendar-nav">
-          <button className="booking-arrow" aria-label="Previous" onClick={()=>setCalendarAnchor(addDays(calendarAnchor,calendarView==='month'?-30:calendarView==='week'?-7:-1))}>←</button>
+          <button className="booking-arrow" aria-label="Previous" onClick={()=>setCalendarAnchor(calendarView==='month'?addMonths(calendarAnchor,-1):addDays(calendarAnchor,calendarView==='week'?-7:-1))}>←</button>
           <strong>{fullDate(calendarAnchor)}</strong>
-          <button className="booking-arrow" aria-label="Next" onClick={()=>setCalendarAnchor(addDays(calendarAnchor,calendarView==='month'?30:calendarView==='week'?7:1))}>→</button>
+          <button className="booking-arrow" aria-label="Next" onClick={()=>setCalendarAnchor(calendarView==='month'?addMonths(calendarAnchor,1):addDays(calendarAnchor,calendarView==='week'?7:1))}>→</button>
         </div>
       </div>
-      {calendarLoading&&!calendarPayload?<div className="booking-empty">Loading calendar…</div>:<CalendarView view={calendarView} anchor={calendarAnchor} slots={calendarPayload?.slots??[]}/>}
+      {calendarLoading?<div className="booking-empty">Loading calendar…</div>:<CalendarView view={calendarView} anchor={calendarAnchor} slots={calendarPayload?.slots??[]}/>}
     </div>:<>
       <div className="booking-toolbar"><button className="booking-arrow" aria-label="Previous two weeks" onClick={()=>{const next=addDays(rangeStart,-14);setRangeStart(next);setSelectedDate(next);}}>←</button><div className="booking-days">{days.map(day=><button key={day} className={selectedDate===day?'is-selected':''} onClick={()=>setSelectedDate(day)}><small>{dayLabel(day).split(' ')[0]}</small><strong>{Number(day.slice(-2))}</strong><span>{dayLabel(day).split(' ')[1]}</span></button>)}</div><button className="booking-arrow" aria-label="Next two weeks" disabled={!isStaff&&addDays(rangeStart,14)>maxDate} onClick={()=>{const next=addDays(rangeStart,14);setRangeStart(next);setSelectedDate(next);}}>→</button></div>
       <div className="booking-calendar-head"><div><p>AVAILABLE SESSIONS</p><h2>{fullDate(selectedDate)}</h2></div><select aria-label="Filter by session type" value={typeFilter} onChange={event=>setTypeFilter(event.target.value as 'all'|SessionTypeValue)}><option value="all">All session types</option><option value="regular">Regular Training</option><option value="bullpen">Bullpen</option></select></div>

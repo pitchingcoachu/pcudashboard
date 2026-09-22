@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ValdPlayerSnapshot } from '../../../lib/vald-forceplates';
 import { forcePlateDisplayUnit } from '../../../lib/dashboard-metric-catalog';
+import { defaultPercentileComparisonWindow } from '../../../lib/percentile-window';
 import LeaderboardCorrelationModal from '../dashboard/leaderboard-correlation-modal';
 import styles from './force-plates-dashboard.module.css';
 
@@ -760,6 +761,8 @@ export default function ForcePlatesDashboard({
   const [athleteSearch, setAthleteSearch] = useState('');
   const [athletePickerOpen, setAthletePickerOpen] = useState(false);
   const [percentileGroupId, setPercentileGroupId] = useState('all');
+  const [percentileComparisonStartDate, setPercentileComparisonStartDate] = useState(() => defaultPercentileComparisonWindow().startDate);
+  const [percentileComparisonEndDate, setPercentileComparisonEndDate] = useState(() => defaultPercentileComparisonWindow().endDate);
   const [percentileData, setPercentileData] = useState<PercentileResponse | null>(null);
   const [percentileLoading, setPercentileLoading] = useState(false);
   const [percentileError, setPercentileError] = useState('');
@@ -1035,6 +1038,8 @@ export default function ForcePlatesDashboard({
     });
     if (startDate) params.set('startDate', startDate);
     if (endDate) params.set('endDate', endDate);
+    params.set('comparisonStartDate', percentileComparisonStartDate);
+    params.set('comparisonEndDate', percentileComparisonEndDate);
     setPercentileLoading(true);
     setPercentileError('');
     void fetch(`/api/player/force-plate-percentiles?${params.toString()}`, { cache: 'no-store' })
@@ -1055,7 +1060,7 @@ export default function ForcePlatesDashboard({
     return () => {
       cancelled = true;
     };
-  }, [activeMetricIdentity.name, activeMetricIdentity.unit, endDate, loadingPlayer, percentileGroupId, pointMode, selectedPlayer, selectedTestType, startDate]);
+  }, [activeMetricIdentity.name, activeMetricIdentity.unit, endDate, loadingPlayer, percentileComparisonEndDate, percentileComparisonStartDate, percentileGroupId, pointMode, selectedPlayer, selectedTestType, startDate]);
 
   useEffect(() => {
     if (!selectedPlayer || loadingPlayer || legDisplay === 'selected' || displayedMetricKeys.length < 1) {
@@ -1077,6 +1082,8 @@ export default function ForcePlatesDashboard({
       });
       if (startDate) params.set('startDate', startDate);
       if (endDate) params.set('endDate', endDate);
+      params.set('comparisonStartDate', percentileComparisonStartDate);
+      params.set('comparisonEndDate', percentileComparisonEndDate);
       const response = await fetch(`/api/player/force-plate-percentiles?${params.toString()}`, { cache: 'no-store' });
       const payload = await response.json().catch(() => ({})) as PercentileResponse & { error?: string };
       return [key, response.ok ? payload.stats?.latest : undefined] as const;
@@ -1088,7 +1095,7 @@ export default function ForcePlatesDashboard({
     return () => {
       cancelled = true;
     };
-  }, [displayedMetricKeys, endDate, legDisplay, loadingPlayer, percentileGroupId, pointMode, selectedPlayer, selectedTestType, startDate]);
+  }, [displayedMetricKeys, endDate, legDisplay, loadingPlayer, percentileComparisonEndDate, percentileComparisonStartDate, percentileGroupId, pointMode, selectedPlayer, selectedTestType, startDate]);
 
   // Fixed athlete-summary panels (Jump Height, Peak Power/BM, RSI-Modified,
   // Eccentric Braking RFD/BM, Body Weight): each panel's percentile is fetched
@@ -1110,6 +1117,8 @@ export default function ForcePlatesDashboard({
       });
       if (startDate) params.set('startDate', startDate);
       if (endDate) params.set('endDate', endDate);
+      params.set('comparisonStartDate', percentileComparisonStartDate);
+      params.set('comparisonEndDate', percentileComparisonEndDate);
       return fetch(`/api/player/force-plate-percentiles?${params.toString()}`, { cache: 'no-store' })
         .then((response) => response.json())
         .then((payload: PercentileResponse & { error?: string }) => [panelMetric.label, payload?.stats?.latest] as const)
@@ -1122,7 +1131,7 @@ export default function ForcePlatesDashboard({
     return () => {
       cancelled = true;
     };
-  }, [selectedPlayer, loadingPlayer, percentileGroupId, selectedTestType, pointMode, startDate, endDate]);
+  }, [selectedPlayer, loadingPlayer, percentileComparisonEndDate, percentileComparisonStartDate, percentileGroupId, selectedTestType, pointMode, startDate, endDate]);
 
   // Panel headline: average value on the athlete's most recent test date for
   // that metric (in range), converted to display units (e.g. kg -> lb for
@@ -1857,6 +1866,14 @@ export default function ForcePlatesDashboard({
                 <option key={group.id} value={group.id}>{group.label}</option>
               ))}
             </select>
+          </label>
+          <label>
+            <span>Percentile data from</span>
+            <input type="date" value={percentileComparisonStartDate} max={percentileComparisonEndDate} onChange={(event) => setPercentileComparisonStartDate(event.target.value)} />
+          </label>
+          <label>
+            <span>Percentile data through</span>
+            <input type="date" value={percentileComparisonEndDate} min={percentileComparisonStartDate} onChange={(event) => setPercentileComparisonEndDate(event.target.value)} />
           </label>
           <label>
             <span>From</span>

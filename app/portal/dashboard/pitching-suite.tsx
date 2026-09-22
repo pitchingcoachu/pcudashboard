@@ -20,6 +20,7 @@ import { deliverReportPdf } from '../../../lib/report-pdf-delivery';
 import { SaveReportToProfileButton } from '../components/save-report-to-profile';
 import DashboardGroupFilter from './dashboard-group-filter';
 import { IntendedTargetLocationSvg } from './intended-target-location-graphic';
+import { defaultPercentileComparisonWindow } from '../../../lib/percentile-window';
 import type { LiveFlightPitch } from './live-flight-replay';
 
 const BallFlightPanel = dynamic(() => import('./ball-flight-panel'), {
@@ -5213,6 +5214,8 @@ export default function PitchingSuite({
   const [summaryStatView, setSummaryStatView] = useState<'Stats' | 'Percentile'>('Stats');
   const [leaderboardPercentileScope, setLeaderboardPercentileScope] = useState(DEFAULT_COLLEGE_PERCENTILE_SCOPE);
   const [summaryPercentileScope, setSummaryPercentileScope] = useState(DEFAULT_COLLEGE_PERCENTILE_SCOPE);
+  const [percentileComparisonStartDate, setPercentileComparisonStartDate] = useState(() => defaultPercentileComparisonWindow().startDate);
+  const [percentileComparisonEndDate, setPercentileComparisonEndDate] = useState(() => defaultPercentileComparisonWindow().endDate);
   const [leaderboardViewBy, setLeaderboardViewBy] = useState<'Player' | 'Team'>('Player');
   const [pinnedLeaderboardKeys, setPinnedLeaderboardKeys] = useState<Set<string>>(new Set());
   const [gameLogRows, setGameLogRows] = useState<Array<Record<string, unknown>>>([]);
@@ -6627,6 +6630,8 @@ export default function PitchingSuite({
       const baselineParams = new URLSearchParams(params);
       baselineParams.delete('force_raw');
       baselineParams.set('percentile_baseline', '1');
+      baselineParams.set('comparison_start_date', percentileComparisonStartDate);
+      baselineParams.set('comparison_end_date', percentileComparisonEndDate);
       baselineParams.set('include_chart_points', '0');
       baselineParams.set('include_row_pitches', '0');
       baselineParams.set('include_trend_rows', '0');
@@ -6672,8 +6677,6 @@ export default function PitchingSuite({
       else baselineParams.delete('percentile_pool');
       const useMlbPercentileScope = isPro || (!isPro && activePercentileScope === 'MLB');
       if (useMlbPercentileScope) {
-        baselineParams.set('start_date', '2026-01-01');
-        baselineParams.set('end_date', '2026-12-31');
         baselineParams.set('level', 'MLB');
       } else if (!isPro && activePercentileScope !== 'TEAM') {
         baselineParams.set('level', activePercentileScope);
@@ -7073,6 +7076,8 @@ export default function PitchingSuite({
     leaderboardStatView,
     leaderboardPercentileScope,
     summaryPercentileScope,
+    percentileComparisonStartDate,
+    percentileComparisonEndDate,
     collegePercentileDefault,
     enableTableColors,
     showCellPercentiles,
@@ -7411,6 +7416,8 @@ export default function PitchingSuite({
         body: JSON.stringify({
           requests,
           columns: cols,
+          comparisonStartDate: percentileComparisonStartDate,
+          comparisonEndDate: percentileComparisonEndDate,
         }),
       });
       const payload = (await response.json().catch(() => ({}))) as {
@@ -7455,7 +7462,7 @@ export default function PitchingSuite({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [dashboardPage, splitBy, isPro, summaryPercentileScope, enableTableColors, showCellPercentiles, summaryStatView, percentileBaselineRequestKey, percentileBaselineRows, overview?.table_rows, overview?.table_columns, overview?.available_table_columns, selectedSinglePitcherHandCode, filters?.pitch_types, filters?.school_code, selectedSchoolCode]);
+  }, [dashboardPage, splitBy, isPro, summaryPercentileScope, percentileComparisonStartDate, percentileComparisonEndDate, enableTableColors, showCellPercentiles, summaryStatView, percentileBaselineRequestKey, percentileBaselineRows, overview?.table_rows, overview?.table_columns, overview?.available_table_columns, selectedSinglePitcherHandCode, filters?.pitch_types, filters?.school_code, selectedSchoolCode]);
 
   const sortedGameLogRows = useMemo(
     () => sortTableRows(gameLogRows, gameLogSortColumn, gameLogSortDirection),
@@ -16140,6 +16147,12 @@ export default function PitchingSuite({
                     </label>
                   ) : null}
                   {isLeaderboardPage ? (
+                    <>
+                      <label><span>Percentile Data From</span><NativeDateInput value={percentileComparisonStartDate} max={percentileComparisonEndDate || undefined} onChange={setPercentileComparisonStartDate} /></label>
+                      <label><span>Percentile Data Through</span><NativeDateInput value={percentileComparisonEndDate} min={percentileComparisonStartDate || undefined} onChange={setPercentileComparisonEndDate} /></label>
+                    </>
+                  ) : null}
+                  {isLeaderboardPage ? (
                     <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, flexWrap: 'nowrap', justifySelf: 'end' }}>
                       <div className="portal-color-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '0.32rem 0.55rem' }}>
                         <span className="portal-color-toggle-label">Color Code</span>
@@ -16181,7 +16194,7 @@ export default function PitchingSuite({
                           placeholder="Pitch Types"
                         />
                       </label>
-                      {dashboardPage === 'Summary' ? (
+                      {dashboardPage === 'Summary' || dashboardPage === 'Game Log' || dashboardPage === 'Pitch Log' ? (
                         <label>
                           <span>Stat View</span>
                           <SearchableSingleSelect
@@ -16205,6 +16218,12 @@ export default function PitchingSuite({
                             placeholder={collegePercentileDefault}
                           />
                         </label>
+                      ) : null}
+                      {dashboardPage === 'Summary' ? (
+                        <>
+                          <label><span>Percentile Data From</span><NativeDateInput value={percentileComparisonStartDate} max={percentileComparisonEndDate || undefined} onChange={setPercentileComparisonStartDate} /></label>
+                          <label><span>Percentile Data Through</span><NativeDateInput value={percentileComparisonEndDate} min={percentileComparisonStartDate || undefined} onChange={setPercentileComparisonEndDate} /></label>
+                        </>
                       ) : null}
                       <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                         <div className="portal-color-toggle">

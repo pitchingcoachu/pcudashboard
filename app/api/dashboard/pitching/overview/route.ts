@@ -9,6 +9,7 @@ import { getIntendedZoneDailyStats, getIntendedZonePitchTypeStats, getIntendedZo
 import { isCrossSchoolPlayerSelection } from '../../../../../lib/cross-school-player-data';
 import { fetchDashboardGroupSplit } from '../../../../../lib/dashboard-group-split';
 import { resolveSchoolScopedOrganizationId } from '../../../../../lib/programming-scope';
+import { resolvePercentileComparisonWindow } from '../../../../../lib/percentile-window';
 
 export const maxDuration = 300;
 const PITCHING_OVERVIEW_CACHE_VERSION = 'adv-metrics-v9';
@@ -1211,8 +1212,8 @@ export async function GET(request: Request) {
   // so PRO table-only requests may temporarily bypass their rollup fast path.
   const postEditCacheBust = inputUrl.searchParams.get('_cb')?.trim() ?? '';
   inputUrl.searchParams.delete('_cb');
-  const startDate = inputUrl.searchParams.get('start_date')?.trim() ?? '';
-  const endDate = inputUrl.searchParams.get('end_date')?.trim() ?? '';
+  let startDate = inputUrl.searchParams.get('start_date')?.trim() ?? '';
+  let endDate = inputUrl.searchParams.get('end_date')?.trim() ?? '';
   const pitcher = inputUrl.searchParams.get('pitcher')?.trim() ?? '';
   const teamType = inputUrl.searchParams.get('team_type')?.trim() ?? '';
   const oppHitter = inputUrl.searchParams.get('opp_hitter')?.trim() ?? '';
@@ -1255,6 +1256,11 @@ export async function GET(request: Request) {
   const chartOnly = inputUrl.searchParams.get('chart_only')?.trim() ?? '';
   const forceRaw = inputUrl.searchParams.get('force_raw')?.trim() ?? '';
   const percentileBaseline = isTruthy(inputUrl.searchParams.get('percentile_baseline')?.trim() ?? '');
+  if (percentileBaseline) {
+    const comparisonWindow = resolvePercentileComparisonWindow(inputUrl.searchParams);
+    startDate = comparisonWindow.startDate;
+    endDate = comparisonWindow.endDate;
+  }
   const percentilePool = inputUrl.searchParams.get('percentile_pool')?.trim().toLowerCase() ?? '';
   const useMlbPercentilePool = percentileBaseline && percentilePool === 'mlb';
   const customColumns = percentileBaseline

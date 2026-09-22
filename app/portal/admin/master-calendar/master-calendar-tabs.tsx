@@ -33,6 +33,9 @@ type ThrowingMenuState = {
   y: number;
 };
 
+type CalendarBlockColor = 'none' | 'red' | 'yellow' | 'green';
+const CALENDAR_COLOR_FIELD = '__masterCalendarColor';
+
 const TABS: { key: MasterCalendarTab; label: string }[] = [
   { key: 'overall', label: 'Overall' },
   { key: 'throwing', label: 'Throwing' },
@@ -172,6 +175,7 @@ export default function MasterCalendarTabs({
       for (const field of throwingFieldSchema) {
         writes.push(saveThrowingField(playerId, targetDay, field.key, entry[field.key] ?? ''));
       }
+      writes.push(saveThrowingField(playerId, targetDay, CALENDAR_COLOR_FIELD, entry[CALENDAR_COLOR_FIELD] ?? 'none'));
     });
     await Promise.all(writes);
   }
@@ -190,6 +194,7 @@ export default function MasterCalendarTabs({
       for (const field of throwingFieldSchema) {
         void saveThrowingField(playerId, targetDay, field.key, '');
       }
+      void saveThrowingField(playerId, targetDay, CALENDAR_COLOR_FIELD, 'none');
     });
   }
 
@@ -444,45 +449,63 @@ export default function MasterCalendarTabs({
     }
   }
 
-  function parseIntensityValue(raw: string): number | null {
-    const match = String(raw ?? '').match(/(\d+(?:\.\d+)?)/);
-    if (!match) return null;
-    const value = Number(match[1]);
-    return Number.isFinite(value) ? value : null;
+  function calendarBlockColor(value: string | undefined): CalendarBlockColor {
+    return value === 'red' || value === 'yellow' || value === 'green' ? value : 'none';
   }
 
-  function getThrowingCellHighlightStyle(entry: ThrowingDayEntry): CSSProperties {
-    const intensity = parseIntensityValue(entry?.intensity ?? '');
-    if (intensity == null) return {};
-    // Use a real `border` (not `boxShadow`) here -- html2canvas renders inset
-    // box-shadows thicker/blurrier than the DOM does, so the PDF export's
-    // highlight ring came out visibly heavier than on the web page.
-    if (intensity <= 60) return { background: 'rgba(153, 27, 27, 0.30)', border: '1px solid rgba(239, 68, 68, 0.55)' };
-    if (intensity >= 65 && intensity <= 85) return { background: 'rgba(202, 138, 4, 0.28)', border: '1px solid rgba(250, 204, 21, 0.55)' };
-    if (intensity >= 90) return { background: 'rgba(21, 128, 61, 0.30)', border: '1px solid rgba(74, 222, 128, 0.55)' };
+  function getThrowingCellHighlightStyle(color: CalendarBlockColor): CSSProperties {
+    if (color === 'red') return { background: 'rgba(153, 27, 27, 0.30)', borderColor: 'rgba(239, 68, 68, 0.62)' };
+    if (color === 'yellow') return { background: 'rgba(202, 138, 4, 0.28)', borderColor: 'rgba(250, 204, 21, 0.62)' };
+    if (color === 'green') return { background: 'rgba(21, 128, 61, 0.30)', borderColor: 'rgba(74, 222, 128, 0.62)' };
     return {};
   }
 
   function renderThrowingCell(playerId: number, day: string) {
     const entry = throwing[playerId]?.[day] ?? {};
+    const blockColor = calendarBlockColor(entry[CALENDAR_COLOR_FIELD]);
+    const colorSavingKey = `${playerId}-${day}-${CALENDAR_COLOR_FIELD}`;
     return (
       <div
         className="portal-throwing-cell"
         onDoubleClick={(event) => {
-          if ((event.target as HTMLElement).closest('input, textarea')) return;
+          if ((event.target as HTMLElement).closest('input, textarea, select')) return;
           setThrowingMenu({ playerId, day, x: event.clientX, y: event.clientY });
         }}
         style={{
           display: 'grid',
           gap: '0.28rem',
           borderRadius: 10,
-          border: '1px solid rgba(255, 255, 255, 0.18)',
+          borderWidth: 1,
+          borderStyle: 'solid',
+          borderColor: 'rgba(255, 255, 255, 0.18)',
           padding: '0.4rem',
           minWidth: 170,
           cursor: 'pointer',
-          ...getThrowingCellHighlightStyle(entry),
+          ...getThrowingCellHighlightStyle(blockColor),
         }}
       >
+        <label
+          data-html2canvas-ignore="true"
+          style={{ display: 'grid', gridTemplateColumns: '68px 1fr', alignItems: 'center', gap: '0.3rem', minWidth: 0 }}
+        >
+          <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-main)' }}>Color:</span>
+          <select
+            aria-label={`Color for ${day}`}
+            value={blockColor}
+            disabled={savingThrowingKey === colorSavingKey}
+            onChange={(event) => {
+              const next = calendarBlockColor(event.target.value);
+              updateThrowingFieldText(playerId, day, CALENDAR_COLOR_FIELD, next);
+              void saveThrowingField(playerId, day, CALENDAR_COLOR_FIELD, next);
+            }}
+            style={{ width: '100%', minHeight: 28, padding: '0.2rem 0.4rem', borderRadius: 6, fontSize: '0.75rem', boxSizing: 'border-box' }}
+          >
+            <option value="none">No color</option>
+            <option value="red">Red</option>
+            <option value="yellow">Yellow</option>
+            <option value="green">Green</option>
+          </select>
+        </label>
         {throwingFieldSchema.map((field) => {
           const savingKeyForField = `${playerId}-${day}-${field.key}`;
           return (

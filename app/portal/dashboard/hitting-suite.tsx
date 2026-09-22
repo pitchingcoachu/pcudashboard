@@ -15,6 +15,7 @@ import { dashboardActivityPath, dispatchPortalActivity } from './activity-events
 import DashboardGroupFilter from './dashboard-group-filter';
 import { deliverReportPdf } from '../../../lib/report-pdf-delivery';
 import { SaveReportToProfileButton } from '../components/save-report-to-profile';
+import { defaultPercentileComparisonWindow } from '../../../lib/percentile-window';
 
 type OptionItem = { value: string; label: string };
 type HeatCell = { x: number; y: number; w: number; h: number; value: number; density: number };
@@ -2365,6 +2366,8 @@ export default function HittingSuite({
   const [summaryStatView, setSummaryStatView] = useState<'Stats' | 'Percentile'>('Stats');
   const [leaderboardPercentileScope, setLeaderboardPercentileScope] = useState<'NCAA' | 'TEAM' | 'MLB'>('NCAA');
   const [summaryPercentileScope, setSummaryPercentileScope] = useState<'NCAA' | 'TEAM' | 'MLB'>('NCAA');
+  const [percentileComparisonStartDate, setPercentileComparisonStartDate] = useState(() => defaultPercentileComparisonWindow().startDate);
+  const [percentileComparisonEndDate, setPercentileComparisonEndDate] = useState(() => defaultPercentileComparisonWindow().endDate);
   const [leaderboardViewBy, setLeaderboardViewBy] = useState<'Player' | 'Team'>('Player');
   const [pinnedLeaderboardKeys, setPinnedLeaderboardKeys] = useState<Set<string>>(new Set());
   const leaderboardTableExportRef = useRef<HTMLDivElement | null>(null);
@@ -2851,6 +2854,8 @@ export default function HittingSuite({
     if (shouldLoadPercentileBaseline) {
       const baselineParams = new URLSearchParams(params);
       baselineParams.set('percentile_baseline', '1');
+      baselineParams.set('comparison_start_date', percentileComparisonStartDate);
+      baselineParams.set('comparison_end_date', percentileComparisonEndDate);
       baselineParams.set('include_chart_points', '0');
       baselineParams.delete('chart_only');
       baselineParams.delete('chart_points_limit');
@@ -2877,8 +2882,6 @@ export default function HittingSuite({
       else baselineParams.delete('percentile_pool');
       const useMlbPercentileScope = isPro || (!isPro && activePercentileScope === 'MLB');
       if (useMlbPercentileScope) {
-        baselineParams.set('start_date', '2026-01-01');
-        baselineParams.set('end_date', '2026-12-31');
         baselineParams.set('level', 'MLB');
       }
       setPercentileBaselineRequestKey(`/api/dashboard/hitting/overview?${baselineParams.toString()}`);
@@ -3135,7 +3138,7 @@ export default function HittingSuite({
       window.clearTimeout(timeoutId);
       controller.abort();
     };
-  }, [appliedFilterVersion, canLoadOverview, startDate, endDate, effectiveHitter, selectedGroupIds, teamType, level, oppPitcher, hand, batterSide, venue, sessionType, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax, dashboardPage, isPro, isPlayerRole, isLeague, enableTableColors, enableGameLogColors, leaderboardPercentileScope, summaryPercentileScope, showCellPercentiles, summaryStatView, filters?.school_code, selectedSchoolCode]);
+  }, [appliedFilterVersion, canLoadOverview, startDate, endDate, effectiveHitter, selectedGroupIds, teamType, level, oppPitcher, hand, batterSide, venue, sessionType, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax, dashboardPage, isPro, isPlayerRole, isLeague, enableTableColors, enableGameLogColors, leaderboardPercentileScope, summaryPercentileScope, percentileComparisonStartDate, percentileComparisonEndDate, showCellPercentiles, summaryStatView, filters?.school_code, selectedSchoolCode]);
 
   useEffect(() => {
     if (!percentileBaselineRequestKey) {
@@ -3286,6 +3289,8 @@ export default function HittingSuite({
         body: JSON.stringify({
           requests,
           columns: cols,
+          comparisonStartDate: percentileComparisonStartDate,
+          comparisonEndDate: percentileComparisonEndDate,
         }),
       });
       const payload = (await response.json().catch(() => ({}))) as {
@@ -3318,7 +3323,7 @@ export default function HittingSuite({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [dashboardPage, splitBy, isPro, summaryPercentileScope, enableTableColors, showCellPercentiles, summaryStatView, percentileBaselineRequestKey, percentileBaselineRows, overview?.table_rows, overview?.table_columns, overview?.available_table_columns]);
+  }, [dashboardPage, splitBy, isPro, summaryPercentileScope, percentileComparisonStartDate, percentileComparisonEndDate, enableTableColors, showCellPercentiles, summaryStatView, percentileBaselineRequestKey, percentileBaselineRows, overview?.table_rows, overview?.table_columns, overview?.available_table_columns]);
 
   const sortedGameLogRows = useMemo(
     () => sortTableRows(gameLogRows, gameLogSortColumn, gameLogSortDirection),
@@ -5603,6 +5608,12 @@ export default function HittingSuite({
               </label>
             ) : null}
             {isLeaderboardPage ? (
+              <>
+                <label>Percentile Data From<NativeDateInput value={percentileComparisonStartDate} max={percentileComparisonEndDate || undefined} onChange={setPercentileComparisonStartDate} /></label>
+                <label>Percentile Data Through<NativeDateInput value={percentileComparisonEndDate} min={percentileComparisonStartDate || undefined} onChange={setPercentileComparisonEndDate} /></label>
+              </>
+            ) : null}
+            {isLeaderboardPage ? (
               <div
                 style={{
                   display: 'flex',
@@ -5693,7 +5704,7 @@ export default function HittingSuite({
                     placeholder={SPLIT_BY_DEFAULT}
                   />
                 </label>
-                {dashboardPage === 'Summary' ? (
+                {dashboardPage === 'Summary' || dashboardPage === 'Game Log' ? (
                   <label>
                     Stat View
                     <SearchableSingleSelect
@@ -5721,6 +5732,12 @@ export default function HittingSuite({
                       placeholder="NCAA"
                     />
                   </label>
+                ) : null}
+                {dashboardPage === 'Summary' ? (
+                  <>
+                    <label>Percentile Data From<NativeDateInput value={percentileComparisonStartDate} max={percentileComparisonEndDate || undefined} onChange={setPercentileComparisonStartDate} /></label>
+                    <label>Percentile Data Through<NativeDateInput value={percentileComparisonEndDate} min={percentileComparisonStartDate || undefined} onChange={setPercentileComparisonEndDate} /></label>
+                  </>
                 ) : null}
                 <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                   <div className="portal-color-toggle">

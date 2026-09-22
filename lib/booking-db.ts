@@ -297,6 +297,8 @@ export async function listBookingSlots(input: {
          COUNT(b.id)::int AS spillover_count
        FROM booking_slots s JOIN session_bookings b ON b.slot_id=s.id AND b.status IN ('booked','attended')
        WHERE s.organization_id=$1 AND s.session_type='bullpen'
+         AND s.starts_at >= (($2::date AT TIME ZONE 'America/Phoenix') + INTERVAL '1 hour')
+         AND s.starts_at < (((($3::date + 1) AT TIME ZONE 'America/Phoenix')) + INTERVAL '1 hour')
        GROUP BY 1
      )
      SELECT base.id, base.session_type, base.starts_at, base.capacity, base.location, base.status, base.closed_by_override, base.my_booking_id, base.attendees,

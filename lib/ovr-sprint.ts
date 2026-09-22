@@ -596,6 +596,8 @@ export async function getOvrVbtPercentiles(input: {
   groupId: number | 'all';
   startDate?: string | null;
   endDate?: string | null;
+  comparisonStartDate?: string | null;
+  comparisonEndDate?: string | null;
 }): Promise<OvrVbtPercentileResult> {
   await ensureSchema();
   const params: unknown[] = [input.organizationId, clean(input.schoolCode).toUpperCase(), clean(input.exercise)];
@@ -642,7 +644,11 @@ export async function getOvrVbtPercentiles(input: {
   };
   const summaries = new Map<number, Record<OvrVbtMetricKey, number | null>>();
   for (const [playerId, rows] of byPlayer) {
-    summaries.set(playerId, summarizeLatest(rows));
+    const comparisonRows = rows.filter((row) =>
+      (!input.comparisonStartDate || row.result_date >= input.comparisonStartDate) &&
+      (!input.comparisonEndDate || row.result_date <= input.comparisonEndDate)
+    );
+    summaries.set(playerId, summarizeLatest(comparisonRows));
   }
   let groupLabel = 'All PCU athletes';
   if (input.groupId !== 'all') {
@@ -705,6 +711,8 @@ export async function getOvrSprintPercentile(input: {
   groupId: number | 'all';
   startDate?: string | null;
   endDate?: string | null;
+  comparisonStartDate?: string | null;
+  comparisonEndDate?: string | null;
 }): Promise<Map<string, OvrSprintPercentileResult>> {
   await ensureSchema();
   const schoolCode = clean(input.schoolCode).toUpperCase();
@@ -748,7 +756,13 @@ export async function getOvrSprintPercentile(input: {
   for (const exercise of exercises) {
     const byPlayer = byExercise.get(exercise) ?? new Map<number, Array<{ date: string; sprintNumber: number; value: number }>>();
     const summaries = new Map<number, PlayerSummary>();
-    for (const [playerId, rows] of byPlayer) summaries.set(playerId, summarizePlayer(rows, invert));
+    for (const [playerId, rows] of byPlayer) {
+      const comparisonRows = rows.filter((row) =>
+        (!input.comparisonStartDate || row.date >= input.comparisonStartDate) &&
+        (!input.comparisonEndDate || row.date <= input.comparisonEndDate)
+      );
+      summaries.set(playerId, summarizePlayer(comparisonRows, invert));
+    }
     const targetRows = (byPlayer.get(input.playerId) ?? []).filter((row) =>
       (!input.startDate || row.date >= input.startDate) && (!input.endDate || row.date <= input.endDate)
     );

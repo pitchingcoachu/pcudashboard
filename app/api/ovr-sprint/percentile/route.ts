@@ -5,6 +5,7 @@ import { resolveDashboardSchoolCode } from '../../../../lib/dashboard-access';
 import { resolveProgrammingOrganizationId } from '../../../../lib/programming-scope';
 import { getPlayerForUser } from '../../../../lib/training-db';
 import { getOvrSprintPercentile, listOvrSprintGroups } from '../../../../lib/ovr-sprint';
+import { resolvePercentileComparisonWindow } from '../../../../lib/percentile-window';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -41,6 +42,7 @@ export async function GET(request: Request) {
     const groupId: number | 'all' = groupIdRaw === 'all' || !groupIdRaw ? 'all' : Number(groupIdRaw);
     const startDate = url.searchParams.get('startDate');
     const endDate = url.searchParams.get('endDate');
+    const comparisonWindow = resolvePercentileComparisonWindow(url.searchParams);
 
     if (!Number.isFinite(playerId) || playerId <= 0 || !exercises.length) {
       return NextResponse.json({ error: 'Valid playerId and at least one exercise are required.' }, { status: 400 });
@@ -65,13 +67,16 @@ export async function GET(request: Request) {
         groupId,
         startDate,
         endDate,
+        comparisonStartDate: comparisonWindow.startDate,
+        comparisonEndDate: comparisonWindow.endDate,
       }),
     ]);
 
     return NextResponse.json({
       groups,
       selectedGroupId: groupId,
-      comparisonWindow: 'full_history',
+      comparisonWindow: comparisonWindow.label,
+      comparisonDateWindow: { startDate: comparisonWindow.startDate, endDate: comparisonWindow.endDate },
       selectedWindow: { startDate: startDate || null, endDate: endDate || null },
       results: Object.fromEntries(resultByExercise),
     }, { headers: { 'cache-control': 'private, no-store' } });

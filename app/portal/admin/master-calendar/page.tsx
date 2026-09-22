@@ -160,6 +160,7 @@ export default async function MasterCalendarPage({ searchParams }: MasterCalenda
       const entry = (byDate[day] ?? {}) as Record<string, unknown>;
       const normalized: Record<string, string> = {};
       for (const field of throwingFieldSchema) normalized[field.key] = String(entry[field.key] ?? '');
+      normalized.__masterCalendarColor = String(entry.__masterCalendarColor ?? 'none');
       out[day] = normalized;
     }
     throwingByPlayerPlain[playerId] = out;

@@ -46,12 +46,15 @@ export async function GET(request:Request){
   const url=new URL(request.url); const today=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Phoenix',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
   const startDate=validDate(url.searchParams.get('startDate')??'')?url.searchParams.get('startDate')!:today;
   const endDate=validDate(url.searchParams.get('endDate')??'')?url.searchParams.get('endDate')!:startDate;
+  const includePlayers=url.searchParams.get('includePlayers')!=='0';
+  const includeSettings=url.searchParams.get('includeSettings')!=='0';
+  const includeOverrides=url.searchParams.get('includeOverrides')!=='0';
   try{
     const [slots,players,minBookingLeadHours,dateOverrides]=await Promise.all([
       listBookingSlots({organizationId:auth.organizationId,startDate,endDate,playerId:Number(auth.session.playerId??0)||null,staff:auth.staff}),
-      auth.staff?listBookingPlayers(auth.organizationId):Promise.resolve([]),
-      getMinBookingLeadHours(auth.organizationId),
-      listBookingDateOverrides({organizationId:auth.organizationId,startDate:auth.staff?today:startDate,endDate:auth.staff?'9999-12-31':endDate}),
+      auth.staff&&includePlayers?listBookingPlayers(auth.organizationId):Promise.resolve([]),
+      includeSettings?getMinBookingLeadHours(auth.organizationId):Promise.resolve(0),
+      includeOverrides?listBookingDateOverrides({organizationId:auth.organizationId,startDate:auth.staff?today:startDate,endDate:auth.staff?'9999-12-31':endDate}):Promise.resolve([]),
     ]);
     return NextResponse.json({role:auth.staff?'staff':'player',slots,players,timeZone:'America/Phoenix',minBookingLeadHours,dateOverrides});
   }catch(error){return NextResponse.json({error:error instanceof Error?error.message:'Unable to load scheduling data.'},{status:500});}

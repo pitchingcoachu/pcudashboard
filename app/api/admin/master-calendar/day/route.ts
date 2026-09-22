@@ -62,6 +62,7 @@ export async function GET(request: Request) {
       const dayEntry = (throwingState.byDate?.[date] ?? {}) as Record<string, unknown>;
       const throwing: Record<string, string> = {};
       for (const field of fieldSchema) throwing[field.key] = String(dayEntry[field.key] ?? '');
+      throwing.__masterCalendarColor = String(dayEntry.__masterCalendarColor ?? 'none');
       const workoutNames = items
         .filter((row) => row.dayDate === date && row.itemType === 'workout')
         .map((row) => row.itemName)

@@ -13649,18 +13649,16 @@ export async function listNutritionAdherenceForOrg(input: {
       SELECT
         p.id AS player_id,
         p.full_name AS player_name,
-        COUNT(DISTINCT nl.log_date) AS days_logged,
+        COUNT(daily.log_date) AS days_logged,
         AVG(daily.total_calories) AS avg_calories,
         nt.calories AS target_calories
       FROM players p
-      LEFT JOIN nutrition_logs nl
-        ON nl.player_id = p.id AND nl.log_date >= $2::date AND nl.log_date <= $3::date
       LEFT JOIN (
         SELECT player_id, log_date, SUM(calories) AS total_calories
         FROM nutrition_logs
         WHERE log_date >= $2::date AND log_date <= $3::date
         GROUP BY player_id, log_date
-      ) daily ON daily.player_id = p.id AND daily.log_date = nl.log_date
+      ) daily ON daily.player_id = p.id
       LEFT JOIN nutrition_targets nt ON nt.player_id = p.id
       WHERE p.organization_id = $1
         AND LOWER(COALESCE(NULLIF(TRIM(p.status), ''), 'active')) = 'active'

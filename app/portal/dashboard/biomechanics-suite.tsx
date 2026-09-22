@@ -7,6 +7,7 @@ import NativeDateInput from '../components/native-date-input';
 import { resolveSchoolBrand } from '../../../lib/school-brand';
 import { deliverReportPdf } from '../../../lib/report-pdf-delivery';
 import { SaveReportToProfileButton } from '../components/save-report-to-profile';
+import { defaultPercentileComparisonWindow } from '../../../lib/percentile-window';
 
 const BIOMECH_RECORDING_MIME_OPTIONS = [
   { mimeType: 'video/mp4;codecs=h264,aac', extension: 'mp4' },
@@ -1391,6 +1392,8 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true, f
   const [appliedTags, setAppliedTags] = useState<string[]>(['All']);
   const [appliedPitchTypes, setAppliedPitchTypes] = useState<string[]>(['All']);
   const [percentileGroupId, setPercentileGroupId] = useState<string>('all');
+  const [percentileComparisonStartDate, setPercentileComparisonStartDate] = useState(() => defaultPercentileComparisonWindow().startDate);
+  const [percentileComparisonEndDate, setPercentileComparisonEndDate] = useState(() => defaultPercentileComparisonWindow().endDate);
   const [percentileGroups, setPercentileGroups] = useState<Array<{ id: string; label: string }>>([]);
   const [biomechanicsPercentiles, setBiomechanicsPercentiles] = useState<BiomechanicsPercentilePayload | null>(null);
   const [percentileLoading, setPercentileLoading] = useState<boolean>(false);
@@ -1855,6 +1858,8 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true, f
     });
     if (appliedStartDate) params.set('startDate', appliedStartDate);
     if (appliedEndDate) params.set('endDate', appliedEndDate);
+    params.set('comparisonStartDate', percentileComparisonStartDate);
+    params.set('comparisonEndDate', percentileComparisonEndDate);
     const selectedTypes = appliedPitchTypes.filter((value) => value && value !== 'All');
     if (selectedTypes.length) params.set('pitchTypes', JSON.stringify(selectedTypes));
     const timer = window.setTimeout(() => {
@@ -1878,7 +1883,7 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true, f
       active = false;
       window.clearTimeout(timer);
     };
-  }, [appliedEndDate, appliedForceMode, appliedPitchTypes, appliedPitchers, appliedStartDate, hasAppliedFilters, isLoading, isSingleAppliedPlayer, percentileGroupId]);
+  }, [appliedEndDate, appliedForceMode, appliedPitchTypes, appliedPitchers, appliedStartDate, hasAppliedFilters, isLoading, isSingleAppliedPlayer, percentileComparisonEndDate, percentileComparisonStartDate, percentileGroupId]);
   const summaryRowsByPitchType = useMemo(() => {
     if (!isSingleAppliedPlayer || pageTab !== 'summary') return sortedRows;
     const selectedPlayerRaw = (appliedPitchers ?? []).find((value) => String(value ?? '').trim().toUpperCase() !== 'ALL') ?? '';
@@ -2706,7 +2711,8 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true, f
                 Latest session in the selected range · change versus prior 30-day average
               </p>
             </div>
-            <label data-html2canvas-ignore="true" style={{ display: 'grid', gap: 4, minWidth: 220 }}>
+            <div data-html2canvas-ignore="true" style={{ display: 'flex', gap: 8, alignItems: 'end', flexWrap: 'wrap' }}>
+            <label style={{ display: 'grid', gap: 4, minWidth: 220 }}>
               <span style={{ fontSize: 12, color: '#94a3b8' }}>Compare Against</span>
               <select
                 className="portal-select"
@@ -2719,6 +2725,9 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true, f
                 {percentileGroups.map((group) => <option key={group.id} value={group.id}>{group.label}</option>)}
               </select>
             </label>
+            <label style={{ display: 'grid', gap: 4 }}><span style={{ fontSize: 12, color: '#94a3b8' }}>Percentile Data From</span><NativeDateInput value={percentileComparisonStartDate} max={percentileComparisonEndDate} onChange={setPercentileComparisonStartDate} /></label>
+            <label style={{ display: 'grid', gap: 4 }}><span style={{ fontSize: 12, color: '#94a3b8' }}>Through</span><NativeDateInput value={percentileComparisonEndDate} min={percentileComparisonStartDate} onChange={setPercentileComparisonEndDate} /></label>
+            </div>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 10 }}>
             {BIOMECH_PERFORMANCE_SIGNALS.map(({ key, label }) => {
@@ -3080,7 +3089,7 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true, f
         ) : null}
         {pageTab === 'summary' && isSingleAppliedPlayer && showTablePercentiles && biomechanicsPercentiles?.selectedGroupLabel ? (
           <div style={{ margin: '0.55rem 0 0.25rem', color: '#94a3b8', fontSize: 12 }}>
-            Percentiles compare the selected date-range values with full-history data from {biomechanicsPercentiles.selectedGroupLabel}.
+            Percentiles compare the selected date-range values with {biomechanicsPercentiles.comparisonWindow || 'the last 365 days'} from {biomechanicsPercentiles.selectedGroupLabel}.
           </div>
         ) : null}
         <div
@@ -3202,7 +3211,7 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true, f
                           <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
                             <span>{value}</span>
                             <span
-                              title={`Compared with ${rank.sampleSize} athlete${rank.sampleSize === 1 ? '' : 's'} using their full available history`}
+                              title={`Compared with ${rank.sampleSize} athlete${rank.sampleSize === 1 ? '' : 's'} using ${biomechanicsPercentiles?.comparisonWindow || 'the last 365 days'}`}
                               style={{ ...percentileBadgeStyle(rank.percentile), borderWidth: 1, borderStyle: 'solid', borderRadius: 999, padding: '1px 5px', fontSize: 10, fontWeight: 800, whiteSpace: 'nowrap' }}
                             >
                               {percentileOrdinal(rank.percentile)}

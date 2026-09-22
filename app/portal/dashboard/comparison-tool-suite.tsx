@@ -6,6 +6,7 @@ import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
 import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 import { calcPitchValue } from './pitch-value';
 import NativeDateInput from '../components/native-date-input';
+import { defaultPercentileComparisonWindow } from '../../../lib/percentile-window';
 
 type Domain = 'Pitching' | 'Hitting' | 'Catching';
 type ChartType = 'Heatmap' | 'Pitch Chart' | 'Velocity Chart' | 'Movement Plot' | 'Release Plot';
@@ -1183,6 +1184,8 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
   const [enableTableColors, setEnableTableColors] = useState(true);
   const [showCellPercentiles, setShowCellPercentiles] = useState(false);
   const [percentileScope, setPercentileScope] = useState<'NCAA' | 'TEAM' | 'MLB'>('NCAA');
+  const [percentileComparisonStartDate, setPercentileComparisonStartDate] = useState(() => defaultPercentileComparisonWindow().startDate);
+  const [percentileComparisonEndDate, setPercentileComparisonEndDate] = useState(() => defaultPercentileComparisonWindow().endDate);
   const [percentileBaselineRows, setPercentileBaselineRows] = useState<Array<Record<string, string | number | null>>>([]);
   const [loadingPercentileBaseline, setLoadingPercentileBaseline] = useState(false);
   const [customTables, setCustomTables] = useState<CustomTableConfig[]>([]);
@@ -1438,12 +1441,12 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
     const baselineSplitBy = state.splitBy === 'All' ? baselineSplitByForDomain(state.domain) : state.splitBy;
     params.set('split_by', baselineSplitBy);
     params.set('percentile_baseline', '1');
+    params.set('comparison_start_date', percentileComparisonStartDate);
+    params.set('comparison_end_date', percentileComparisonEndDate);
     params.set('include_chart_points', '0');
     if (!isProSchool && activeScope === 'MLB') params.set('percentile_pool', 'mlb');
     const useMlbPercentileScope = isProSchool || activeScope === 'MLB';
     if (useMlbPercentileScope) {
-      params.set('start_date', '2026-01-01');
-      params.set('end_date', '2026-12-31');
       params.set('level', 'MLB');
     }
     const requestKey = `${domainOverviewEndpoint(state.domain)}?${params.toString()}`;
@@ -1490,6 +1493,8 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
     state.tableMode,
     state.splitBy,
     percentileScope,
+    percentileComparisonStartDate,
+    percentileComparisonEndDate,
     filters?.school_code,
     customTables,
   ]);
@@ -2644,6 +2649,8 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
               <SearchableSingleSelect options={MOVEMENT_VIEWS.map((value) => ({ value, label: value }))} value={state.movementView} onChange={(next) => setState((current) => ({ ...current, movementView: next as MovementView }))} />
             </label>
           ) : null}
+          <label style={{ display: 'grid', gap: 4, minWidth: 0 }}><span>Percentile Data From</span><NativeDateInput value={percentileComparisonStartDate} max={percentileComparisonEndDate || undefined} onChange={setPercentileComparisonStartDate} /></label>
+          <label style={{ display: 'grid', gap: 4, minWidth: 0 }}><span>Percentile Data Through</span><NativeDateInput value={percentileComparisonEndDate} min={percentileComparisonStartDate || undefined} onChange={setPercentileComparisonEndDate} /></label>
           <label style={{ display: 'grid', gap: 4 }}>
             <span>Team</span>
             <SearchableSingleSelect options={teamOptions} value={state.teamType} onChange={(next) => setState((current) => ({ ...current, teamType: next, player: ['All'] }))} placeholder="All" />

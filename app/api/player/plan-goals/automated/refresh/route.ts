@@ -6,6 +6,7 @@ import { ensureAuthDbReady, getDbPool } from '../../../../../../lib/auth-db';
 import { getPlayerByIdInOrganization } from '../../../../../../lib/training-db';
 import { resolveDashboardSchoolCode } from '../../../../../../lib/dashboard-access';
 import { upsertAutomationRollup, type AutomationRollupPayload } from '../../../../../../lib/player-plan-automation-rollup';
+import { defaultPercentileComparisonWindow } from '../../../../../../lib/percentile-window';
 
 export const maxDuration = 300;
 const AUTOMATION_RULES_VERSION = 'fixed-thresholds-v4';
@@ -409,6 +410,8 @@ export async function POST(request: Request) {
     stuffBase?: 'Fastball' | 'Sinker' | string;
     startDate?: string;
     endDate?: string;
+    comparisonStartDate?: string;
+    comparisonEndDate?: string;
   };
   const playerId = Number(body.playerId ?? 0);
   const percentileSource: 'NCAA' | 'MLB' = body.percentileSource === 'MLB' ? 'MLB' : 'NCAA';
@@ -452,6 +455,9 @@ export async function POST(request: Request) {
   const stuffBase = stuffBaseRaw === 'sinker' ? 'Sinker' : 'Fastball';
   const startDate = String(body.startDate ?? '').trim();
   const endDate = String(body.endDate ?? '').trim();
+  const defaultComparisonWindow = defaultPercentileComparisonWindow();
+  const comparisonStartDate = /^\d{4}-\d{2}-\d{2}$/.test(String(body.comparisonStartDate ?? '')) ? String(body.comparisonStartDate) : defaultComparisonWindow.startDate;
+  const comparisonEndDate = /^\d{4}-\d{2}-\d{2}$/.test(String(body.comparisonEndDate ?? '')) ? String(body.comparisonEndDate) : defaultComparisonWindow.endDate;
 
   const mkParams = (splitBy: string, columns: string[]) => {
     const p = new URLSearchParams();
@@ -847,6 +853,8 @@ export async function POST(request: Request) {
       if (primaryMetric === 'FPS%') pPitch.set('count_filter', '0-0');
 
       const pPitchBase = mkParams('Pitch Types', ['#', 'InZone%']);
+      pPitchBase.set('start_date', comparisonStartDate);
+      pPitchBase.set('end_date', comparisonEndDate);
       pPitchBase.set('batter_side', side);
       if (primaryMetric === 'FPS%') pPitchBase.set('count_filter', '0-0');
 
@@ -913,6 +921,8 @@ export async function POST(request: Request) {
       const rPitch = mkParams('Pitch Types', pitchCols);
       rPitch.set('batter_side', side);
       const rPitchBase = mkParams('Pitch Types', pitchCols);
+      rPitchBase.set('start_date', comparisonStartDate);
+      rPitchBase.set('end_date', comparisonEndDate);
       rPitchBase.set('batter_side', side);
 
       const [pitchRows, pitchBaseRows] = await Promise.all([fetchRollupForPitcher(rPitch), fetchRollup(request, rPitchBase)]);

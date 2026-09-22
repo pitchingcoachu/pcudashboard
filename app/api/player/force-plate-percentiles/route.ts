@@ -6,6 +6,7 @@ import { loadPerformanceDailyRollups } from '../../../../lib/performance-rollups
 import { canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
 import { getPlayerForUser, listPlayerChoicesByOrganization } from '../../../../lib/training-db';
 import { fetchValdProfileGroupDirectory, fetchValdProfileNamesForGroup } from '../../../../lib/vald-forceplates';
+import { resolvePercentileComparisonWindow } from '../../../../lib/percentile-window';
 
 function normalizeName(value: string): string {
   const raw = String(value ?? '').trim();
@@ -130,6 +131,7 @@ export async function GET(request: Request) {
   const queryNames = Array.from(new Set([...cohortNames, canonicalPlayer]));
   const startDate = String(url.searchParams.get('startDate') ?? '').trim();
   const endDate = String(url.searchParams.get('endDate') ?? '').trim();
+  const comparisonWindow = resolvePercentileComparisonWindow(url.searchParams);
   const rollups = await loadPerformanceDailyRollups({
     organizationId,
     schoolCode: 'PCU',
@@ -150,14 +152,15 @@ export async function GET(request: Request) {
     ? populationRows.filter((row) => normalizeName(row.playerName) === normalizeName(canonicalPlayer)
         && (!startDate || row.dateShort >= startDate) && (!endDate || row.dateShort <= endDate))
     : null;
+  const comparisonRows = populationRows.filter((row) => row.dateShort >= comparisonWindow.startDate && row.dateShort <= comparisonWindow.endDate);
   const rowsByPlayer = new Map<string, ForcePlatePercentileRow[]>();
-  for (const row of populationRows) {
+  for (const row of comparisonRows) {
     const key = normalizeName(row.playerName);
     const current = rowsByPlayer.get(key) ?? [];
     current.push(row);
     rowsByPlayer.set(key, current);
   }
-  const selected = summarize(filteredSelectedRows ?? rowsByPlayer.get(normalizeName(canonicalPlayer)) ?? [], mode);
+  const selected = summarize(filteredSelectedRows ?? populationRows.filter((row) => normalizeName(row.playerName) === normalizeName(canonicalPlayer)), mode);
   const population = cohortNames.map((name) => summarize(rowsByPlayer.get(normalizeName(name)) ?? [], mode));
   const invert = isLowerBetterMetric(metricUnit);
   const stats = {
@@ -177,7 +180,8 @@ export async function GET(request: Request) {
     })),
     selectedGroupId: validGroup?.id ?? 'all',
     selectedGroupLabel: validGroup ? (validGroup.categoryName ? `${validGroup.categoryName} · ${validGroup.name}` : validGroup.name) : 'All PCU athletes',
-    comparisonWindow: 'full_history',
+    comparisonWindow: comparisonWindow.label,
+    comparisonDateWindow: { startDate: comparisonWindow.startDate, endDate: comparisonWindow.endDate },
     selectedWindow: { startDate: startDate || null, endDate: endDate || null },
     stats,
   }, { headers: { 'cache-control': 'private, no-store' } });

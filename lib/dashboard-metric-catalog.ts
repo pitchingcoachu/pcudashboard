@@ -111,7 +111,7 @@ export function dashboardMetricOptions(domain: DashboardMetricDomain): string[] 
 export function dashboardMetricLabel(metricInput: string): string {
   const metric = canonicalFlagMetric(metricInput);
   const forcePlateMetric = parseForcePlateFlagMetric(metric);
-  if (forcePlateMetric) return `${forcePlateMetric.metricName}${forcePlateMetric.metricUnit ? ` (${forcePlateMetric.metricUnit})` : ''}`;
+  if (forcePlateMetric) return `${forcePlateMetric.metricName}${forcePlateMetric.metricUnit ? ` (${forcePlateDisplayUnit(forcePlateMetric.metricUnit, forcePlateMetric.metricName)})` : ''}`;
   const ovrSprintMetric = parseOvrSprintFlagMetric(metric);
   if (ovrSprintMetric) return `${ovrSprintMetric.exercise} — ${ovrSprintMetric.metric === 'speedMph' ? 'Total Speed' : 'Total Time'}`;
   const biomechanicsMetric = parseBiomechanicsFlagMetric(metric);
@@ -129,17 +129,30 @@ export function dashboardMetricLabel(metricInput: string): string {
   return metric;
 }
 
-export function forcePlateDisplayUnit(unitInput: string): string {
+function isKilogramBodyWeight(metricNameInput: string, unitInput: string): boolean {
+  const metricName = String(metricNameInput ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ');
+  const unit = String(unitInput ?? '').trim().toLowerCase();
+  return /\b(body weight|bodyweight|athlete weight)\b/.test(metricName) && (unit === 'kg' || unit === 'kilo' || unit === 'kilogram' || unit === 'kilograms');
+}
+
+export function forcePlateDisplayUnit(unitInput: string, metricNameInput = ''): string {
   const unit = String(unitInput ?? '').trim();
+  if (isKilogramBodyWeight(metricNameInput, unit)) return 'lb';
   if (/^Newton Per Second Per Kilo$/i.test(unit)) return 'N/(s·kg)';
   return unit;
 }
 
-export function formatForcePlateMetricValue(metric: string, value: unknown): string {
+export function forcePlateDisplayValue(metric: string, value: unknown): number | null {
   const parsedMetric = parseForcePlateFlagMetric(metric);
   const numericValue = typeof value === 'number' ? value : Number(value);
-  if (!parsedMetric || !Number.isFinite(numericValue)) return value === null || value === undefined || value === '' ? '—' : String(value);
-  return numericValue.toFixed(1);
+  if (!parsedMetric || !Number.isFinite(numericValue)) return null;
+  return isKilogramBodyWeight(parsedMetric.metricName, parsedMetric.metricUnit) ? numericValue * 2.20462262185 : numericValue;
+}
+
+export function formatForcePlateMetricValue(metric: string, value: unknown): string {
+  const displayValue = forcePlateDisplayValue(metric, value);
+  if (displayValue === null) return value === null || value === undefined || value === '' ? '—' : String(value);
+  return displayValue.toFixed(1);
 }
 
 export function metricSampleColumn(domain: DashboardMetricDomain, metricInput: string): 'P' | 'PA' {

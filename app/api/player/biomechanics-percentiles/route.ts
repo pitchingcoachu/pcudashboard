@@ -5,6 +5,7 @@ import { loadPerformanceDailyRollups } from '../../../../lib/performance-rollups
 import { canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
 import { getPlayerForUser, listPlayerChoicesByOrganization, listPlayerSummariesByOrganization } from '../../../../lib/training-db';
 import { fetchValdProfileGroupDirectory, fetchValdProfileNamesForGroup } from '../../../../lib/vald-forceplates';
+import { resolvePercentileComparisonWindow } from '../../../../lib/percentile-window';
 
 export const maxDuration = 120;
 
@@ -221,6 +222,7 @@ export async function GET(request: Request) {
   const pitchTypes = parsePitchTypes(String(url.searchParams.get('pitchTypes') ?? ''));
   const startDate = String(url.searchParams.get('startDate') ?? '').trim();
   const endDate = String(url.searchParams.get('endDate') ?? '').trim();
+  const comparisonWindow = resolvePercentileComparisonWindow(url.searchParams);
   const forceMode = url.searchParams.get('forceMode') === 'bw' ? 'bw' : 'force';
   const rollups = await loadPerformanceDailyRollups({
     organizationId,
@@ -234,7 +236,11 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Biomechanics rollups are not ready yet.' }, { status: 503 });
   }
   const columns = BIOMECHANICS_COLUMNS;
-  const populationSummaries = summarizeByPlayerAndPitchType(populationRows, columns);
+  const comparisonRows = populationRows.filter((row) => {
+    const date = String(row.Date ?? '').slice(0, 10);
+    return date >= comparisonWindow.startDate && date <= comparisonWindow.endDate;
+  });
+  const populationSummaries = summarizeByPlayerAndPitchType(comparisonRows, columns);
   const startMs = startDate ? Date.parse(`${startDate}T00:00:00Z`) : null;
   const endMs = endDate ? Date.parse(`${endDate}T23:59:59.999Z`) : null;
   const selectedWindowRows = populationRows.filter((row) => {
@@ -296,7 +302,7 @@ export async function GET(request: Request) {
       ? ((latest.value - baseline) / Math.abs(baseline)) * 100
       : null;
     const population = cohortNames.flatMap((name) => {
-      const value = latestSessionMetric(rowsForPlayer(populationRows, name), definition.column).value;
+      const value = latestSessionMetric(rowsForPlayer(comparisonRows, name), definition.column).value;
       return value === null ? [] : [value];
     });
     const rank = latest.value === null
@@ -326,7 +332,8 @@ export async function GET(request: Request) {
     })),
     selectedGroupId: validGroup?.id ?? 'all',
     selectedGroupLabel,
-    comparisonWindow: 'full_history',
+    comparisonWindow: comparisonWindow.label,
+    comparisonDateWindow: { startDate: comparisonWindow.startDate, endDate: comparisonWindow.endDate },
     selectedWindow: { startDate: startDate || null, endDate: endDate || null },
     columns,
     rows,

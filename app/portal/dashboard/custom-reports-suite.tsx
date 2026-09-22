@@ -16,7 +16,8 @@ import { DirectionHeatmap, type DirectionBreakdown } from './intended-zone-stats
 import { IntendedTargetMapMini } from './intended-target-map-mini';
 import { deliverReportPdf } from '../../../lib/report-pdf-delivery';
 import { ReportActionsDropdown, type AutomationPanelSeed } from '../components/save-report-to-profile';
-import { dashboardMetricLabel, dashboardMetricOptions, forcePlateDisplayUnit, forcePlateFlagMetric, formatForcePlateMetricValue, parseForcePlateFlagMetric } from '../../../lib/dashboard-metric-catalog';
+import { dashboardMetricLabel, dashboardMetricOptions, forcePlateDisplayUnit, forcePlateDisplayValue, forcePlateFlagMetric, formatForcePlateMetricValue, parseForcePlateFlagMetric } from '../../../lib/dashboard-metric-catalog';
+import { defaultPercentileComparisonWindow } from '../../../lib/percentile-window';
 
 type OptionItem = { value: string; label: string };
 type ReportType = 'Pitching' | 'Hitting' | 'Catching' | 'Force Plates';
@@ -72,15 +73,24 @@ type PanelType =
   | 'Metric Bar Chart'
   | 'Force Plate Line Chart'
   | 'Force Plate Bar Chart'
+  | 'Force Plate Data Table'
+  | 'OVR Data Line Chart'
+  | 'OVR Data Bar Chart'
+  | 'OVR Data Table'
   | 'OVR Sprint Line Chart'
   | 'OVR Sprint Bar Chart'
-  | 'Percentile Summary'
+  | 'Performance Percentile Summary'
+  | 'Baseball Percentile Tile'
   | 'Biomechanics Table'
   | 'Biomechanics Force Chart'
   | 'Assessment Line Chart'
   | 'Assessment Bar Chart'
   | 'Questionnaire Line Chart'
-  | 'Questionnaire Bar Chart';
+  | 'Questionnaire Bar Chart'
+  | 'Nutrition Calorie Trends'
+  | 'Nutrition Macro Breakdown'
+  | 'Bullpen Script Trend Chart'
+  | 'Bullpen Script Summary Table';
 type FilterToken =
   | 'Dates'
   | 'Level'
@@ -226,6 +236,21 @@ type OverviewLitePayload = {
     xwoba_n?: number | null;
     ev_sum?: number | null;
     ev_n?: number | null;
+    calories?: number | null;
+    protein_g?: number | null;
+    carbs_g?: number | null;
+    fat_g?: number | null;
+    target_calories?: number | null;
+    target_protein_g?: number | null;
+    target_carbs_g?: number | null;
+    target_fat_g?: number | null;
+    metric?: string | null;
+    value?: number | null;
+    series?: string | null;
+    count?: number | null;
+    ball_type?: string | null;
+    drill?: string | null;
+    ball_weight?: string | null;
   }>;
   heatmap_points?: Array<{
     session_date?: string | null;
@@ -252,6 +277,31 @@ type OverviewLitePayload = {
       sampleSize: number;
       rankingDirection?: 'higher_is_higher' | 'lower_is_better' | 'handedness_normalized';
     }>>;
+  };
+  baseball_percentile?: {
+    domain: 'pitching' | 'hitting' | 'catching';
+    metric: string;
+    metricLabel: string;
+    player: string;
+    value: number | null;
+    percentile: number | null;
+    sampleSize: number;
+    pool: string;
+    poolLabel: string;
+    comparisonWindow: string;
+    rankingDirection: 'higher_is_better' | 'lower_is_better';
+  };
+  metric_options?: Array<{ value: string; label: string }>;
+  selected_metric?: string;
+  metric_label?: string;
+  metric_unit?: string;
+  table_metric_options?: Array<{ value: string; label: string }>;
+  filter_options?: {
+    scripts?: string[];
+    pitchTypes?: string[];
+    ballTypes?: string[];
+    drills?: string[];
+    ballWeights?: string[];
   };
 };
 
@@ -384,6 +434,9 @@ type CellConfig = {
   chartBenchmarkLabel: string;
   ovrSprintExercises: string[];
   ovrSprintMetric: 'totalTime' | 'speedMph';
+  ovrDataSource: 'sprint' | 'vbt';
+  ovrVbtExercises: string[];
+  ovrVbtMetric: 'loadLbs' | 'targetMin' | 'targetMax' | 'avgVelocity' | 'peakVelocity' | 'avgPower' | 'peakPower' | 'romInches' | 'durationSeconds' | 'tpvSeconds' | 'eaIndex';
   percentileSummaryForceMetrics: string[];
   percentileSummaryForceTestType: string;
   percentileSummaryForceLegDisplay: ForcePlateLegDisplay;
@@ -391,6 +444,8 @@ type CellConfig = {
   percentileSummaryBiomechanicsMetrics: string[];
   percentileSummaryBiomechanicsPitchType: string;
   percentileSummaryGroupId: string;
+  percentileComparisonStartDate: string;
+  percentileComparisonEndDate: string;
   biomechanicsTableMode: string;
   biomechanicsPitchKey: string;
   biomechanicsChartMode: 'Force' | 'Moments';
@@ -399,6 +454,16 @@ type CellConfig = {
   questionnaireId: string;
   questionnaireQuestionId: string;
   questionnaireQuestionLabel: string;
+  bullpenMetric: string;
+  bullpenVelocityMode: 'average' | 'individual';
+  bullpenScript: string;
+  bullpenPitchType: string;
+  bullpenBallType: string;
+  bullpenDrill: string;
+  bullpenBallWeight: string;
+  bullpenTableMetrics: string[];
+  baseballPercentileMetric: string;
+  baseballPercentilePool: 'ORG' | 'D1' | 'D2' | 'D3' | 'NAIA' | 'JUCO' | 'MLB' | 'AAA';
 };
 
 type ReportPayload = {
@@ -465,18 +530,25 @@ const PITCHING_PANEL_TYPES: PanelType[] = [
   'Metric Line Chart',
   'Metric Bar Chart',
   'Summary Table',
+  'Baseball Percentile Tile',
   'Spray Chart',
   'Force Plate Line Chart',
   'Force Plate Bar Chart',
-  'OVR Sprint Line Chart',
-  'OVR Sprint Bar Chart',
-  'Percentile Summary',
+  'Force Plate Data Table',
+  'OVR Data Line Chart',
+  'OVR Data Bar Chart',
+  'OVR Data Table',
+  'Performance Percentile Summary',
   'Biomechanics Table',
   'Biomechanics Force Chart',
   'Assessment Line Chart',
   'Assessment Bar Chart',
   'Questionnaire Line Chart',
   'Questionnaire Bar Chart',
+  'Nutrition Calorie Trends',
+  'Nutrition Macro Breakdown',
+  'Bullpen Script Trend Chart',
+  'Bullpen Script Summary Table',
   'Note Section',
 ];
 const HITTING_PANEL_TYPES: PanelType[] = [
@@ -494,16 +566,21 @@ const HITTING_PANEL_TYPES: PanelType[] = [
   'Metric Line Chart',
   'Metric Bar Chart',
   'Summary Table',
+  'Baseball Percentile Tile',
   'Spray Chart',
   'Force Plate Line Chart',
   'Force Plate Bar Chart',
-  'OVR Sprint Line Chart',
-  'OVR Sprint Bar Chart',
-  'Percentile Summary',
+  'Force Plate Data Table',
+  'OVR Data Line Chart',
+  'OVR Data Bar Chart',
+  'OVR Data Table',
+  'Performance Percentile Summary',
   'Assessment Line Chart',
   'Assessment Bar Chart',
   'Questionnaire Line Chart',
   'Questionnaire Bar Chart',
+  'Nutrition Calorie Trends',
+  'Nutrition Macro Breakdown',
   'Note Section',
 ];
 const CATCHING_PANEL_TYPES: PanelType[] = [
@@ -512,10 +589,13 @@ const CATCHING_PANEL_TYPES: PanelType[] = [
   'Metric Line Chart',
   'Metric Bar Chart',
   'Summary Table',
+  'Baseball Percentile Tile',
   'Assessment Line Chart',
   'Assessment Bar Chart',
   'Questionnaire Line Chart',
   'Questionnaire Bar Chart',
+  'Nutrition Calorie Trends',
+  'Nutrition Macro Breakdown',
   'Note Section',
 ];
 const FORCE_PLATE_PANEL_TYPES: PanelType[] = [
@@ -524,13 +604,29 @@ const FORCE_PLATE_PANEL_TYPES: PanelType[] = [
   'Metric Bar Chart',
   'Force Plate Line Chart',
   'Force Plate Bar Chart',
-  'Percentile Summary',
+  'Force Plate Data Table',
+  'Performance Percentile Summary',
   'Summary Table',
   'Assessment Line Chart',
   'Assessment Bar Chart',
   'Questionnaire Line Chart',
   'Questionnaire Bar Chart',
+  'Nutrition Calorie Trends',
+  'Nutrition Macro Breakdown',
   'Note Section',
+];
+const OVR_VBT_METRIC_OPTIONS: Array<{ value: CellConfig['ovrVbtMetric']; label: string }> = [
+  { value: 'loadLbs', label: 'Load (lb)' },
+  { value: 'targetMin', label: 'Target Minimum' },
+  { value: 'targetMax', label: 'Target Maximum' },
+  { value: 'avgVelocity', label: 'Average Velocity (m/s)' },
+  { value: 'peakVelocity', label: 'Peak Velocity (m/s)' },
+  { value: 'avgPower', label: 'Average Power (Watts)' },
+  { value: 'peakPower', label: 'Peak Power (Watts)' },
+  { value: 'romInches', label: 'Range of Motion (in)' },
+  { value: 'durationSeconds', label: 'Duration (s)' },
+  { value: 'tpvSeconds', label: 'Time to Peak Velocity (s)' },
+  { value: 'eaIndex', label: 'EA Index' },
 ];
 const FILTER_TOKENS: FilterToken[] = [
   'Dates',
@@ -983,6 +1079,7 @@ function ReportTrendChart({
   formatBenchmark,
   noDataMessage,
   onHover,
+  tickDecimals = 1,
 }: {
   rows: Array<{ date: string; value: number }>;
   label: string;
@@ -992,6 +1089,7 @@ function ReportTrendChart({
   formatBenchmark: (value: number) => string;
   noDataMessage: string;
   onHover: (value: { x: number; y: number; text: string; bg?: string } | null) => void;
+  tickDecimals?: number;
 }) {
   if (!rows.length) return <p className="portal-muted-text">{noDataMessage}</p>;
   const width = 720, height = 390, left = 64, right = 24, top = 28, bottom = rows.length > 5 ? 92 : 66;
@@ -1010,7 +1108,7 @@ function ReportTrendChart({
   const path = rows.map((row, index) => `${index ? 'L' : 'M'} ${px(index)} ${py(row.value)}`).join(' ');
   const barWidth = Math.min(48, plotWidth / Math.max(1, rows.length) * 0.65);
   return <div className="portal-custom-reports-velocity"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${label} ${kind} graph`}>
-    {ticks.map((tick) => <g key={tick}><line x1={left} y1={py(tick)} x2={width - right} y2={py(tick)} stroke="rgba(148,163,184,.18)"/><text x={left - 8} y={py(tick) + 4} textAnchor="end" fontSize="11" fill="currentColor">{tick.toFixed(1)}</text></g>)}
+    {ticks.map((tick) => <g key={tick}><line x1={left} y1={py(tick)} x2={width - right} y2={py(tick)} stroke="rgba(148,163,184,.18)"/><text x={left - 8} y={py(tick) + 4} textAnchor="end" fontSize="11" fill="currentColor">{tick.toFixed(tickDecimals)}</text></g>)}
     <line x1={left} y1={height - bottom} x2={width - right} y2={height - bottom} stroke="rgba(148,163,184,.55)"/>
     {kind === 'line' ? <path d={path} fill="none" stroke="#e11d48" strokeWidth="3"/> : null}
     {rows.map((row, index) => kind === 'bar'
@@ -1046,7 +1144,10 @@ function ForcePlateReportChart({
 }) {
   const rows = groupPointsByDate(points
     .filter((point) => String(point.metric ?? '') === metric)
-    .map((point) => ({ date: String(point.session_date ?? '').trim(), value: Number(point.value) })));
+    .flatMap((point) => {
+      const value = forcePlateDisplayValue(metric, point.value);
+      return value === null ? [] : [{ date: String(point.session_date ?? '').trim(), value }];
+    }));
   return (
     <ReportTrendChart
       rows={rows}
@@ -1068,6 +1169,8 @@ function ForcePlateLegComparisonPanel({
   player,
   testType,
   groupId,
+  comparisonStartDate,
+  comparisonEndDate,
   kind,
   benchmarkValue,
   benchmarkLabel,
@@ -1080,6 +1183,8 @@ function ForcePlateLegComparisonPanel({
   player: string;
   testType: string;
   groupId: string;
+  comparisonStartDate: string;
+  comparisonEndDate: string;
   kind: 'line' | 'bar';
   benchmarkValue?: string;
   benchmarkLabel?: string;
@@ -1129,6 +1234,8 @@ function ForcePlateLegComparisonPanel({
         testType: testType || 'All',
         mode: 'average',
       });
+      params.set('comparisonStartDate', comparisonStartDate);
+      params.set('comparisonEndDate', comparisonEndDate);
       const response = await fetch(`/api/player/force-plate-percentiles?${params.toString()}`, { cache: 'no-store' });
       const payload = await response.json().catch(() => ({})) as {
         groups?: Array<{ id: string; categoryName?: string; name: string }>;
@@ -1146,7 +1253,7 @@ function ForcePlateLegComparisonPanel({
       if (active) setPercentilesLoading(false);
     });
     return () => { active = false; };
-  }, [groupId, metricSignature, normalizedPlayer, onGroupsLoaded, testType]);
+  }, [comparisonEndDate, comparisonStartDate, groupId, metricSignature, normalizedPlayer, onGroupsLoaded, testType]);
 
   if (!series.length) return <p className="portal-muted-text">No left/right force-plate data for the current filters.</p>;
   const dates = Array.from(new Set(series.flatMap((entry) => entry.rows.map((row) => row.date)))).sort((a, b) => a.localeCompare(b));
@@ -1205,38 +1312,90 @@ function ForcePlateLegComparisonPanel({
   );
 }
 
-function OvrSprintReportChart({
+function OvrDataReportChart({
   points,
-  exercise,
+  exercises,
   metric,
+  metricLabel,
+  metricUnit,
+  source,
   kind,
   benchmarkValue,
   benchmarkLabel,
   onHover,
 }: {
   points: Array<Record<string, unknown>>;
-  exercise: string;
-  metric: 'totalTime' | 'speedMph';
+  exercises: string[];
+  metric: string;
+  metricLabel: string;
+  metricUnit?: string;
+  source: 'sprint' | 'vbt';
   kind: 'line' | 'bar';
   benchmarkValue?: string;
   benchmarkLabel?: string;
   onHover: (value: { x: number; y: number; text: string; bg?: string } | null) => void;
 }) {
-  const label = metric === 'speedMph' ? 'Speed (mph)' : 'Total Time (s)';
-  const rows = groupPointsByDate(points
-    .filter((point) => String(point.exercise ?? '') === exercise && String(point.metric ?? '') === metric)
-    .map((point) => ({ date: String(point.session_date ?? '').trim(), value: Number(point.value) })));
+  const label = metricLabel || metric;
+  const colors = ['#e11d48', '#38bdf8', '#34d399', '#f59e0b', '#a78bfa', '#f472b6', '#facc15'];
+  const series = exercises.map((exercise, index) => ({
+    exercise,
+    color: colors[index % colors.length],
+    rows: groupPointsByDate(points
+      .filter((point) => String(point.exercise ?? '') === exercise && String(point.metric ?? '') === metric)
+      .map((point) => ({ date: String(point.session_date ?? '').trim(), value: Number(point.value) }))),
+  })).filter((entry) => entry.rows.length);
+  if (!series.length) return <p className="portal-muted-text">No OVR {source === 'vbt' ? 'VBT' : 'Sprint'} data for the current filters.</p>;
+  if (series.length === 1) {
+    return (
+      <ReportTrendChart
+        rows={series[0].rows}
+        label={`${series[0].exercise} · ${label}`}
+        kind={kind}
+        benchmarkValue={benchmarkValue}
+        benchmarkLabel={benchmarkLabel}
+        formatBenchmark={(value) => `${value.toFixed(metric === 'loadLbs' ? 1 : 2)}${metricUnit ? ` ${metricUnit}` : ''}`}
+        noDataMessage={`No OVR ${source === 'vbt' ? 'VBT' : 'Sprint'} data for the current filters.`}
+        onHover={onHover}
+        tickDecimals={source === 'sprint' && metric === 'totalTime' ? 2 : 1}
+      />
+    );
+  }
+  const dates = Array.from(new Set(series.flatMap((entry) => entry.rows.map((row) => row.date)))).sort((a, b) => a.localeCompare(b));
+  const values = series.flatMap((entry) => entry.rows.map((row) => row.value));
+  const benchmark = Number(String(benchmarkValue ?? '').trim());
+  const hasBenchmark = String(benchmarkValue ?? '').trim() !== '' && Number.isFinite(benchmark);
+  if (hasBenchmark) values.push(benchmark);
+  const rawMin = Math.min(...values), rawMax = Math.max(...values);
+  const padding = rawMin === rawMax ? Math.max(1, Math.abs(rawMax) * 0.08) : (rawMax - rawMin) * 0.1;
+  const min = rawMin - padding, max = rawMax + padding;
+  const width = 720, height = 410, left = 64, right = 24, top = 28, bottom = dates.length > 5 ? 92 : 66;
+  const plotWidth = width - left - right;
+  const lineX = (date: string) => dates.length === 1 ? left + plotWidth / 2 : left + dates.indexOf(date) / (dates.length - 1) * plotWidth;
+  const barX = (date: string) => left + ((dates.indexOf(date) + 0.5) / dates.length) * plotWidth;
+  const x = (date: string) => kind === 'bar' ? barX(date) : lineX(date);
+  const y = (value: number) => top + (max - value) / Math.max(0.000001, max - min) * (height - top - bottom);
+  const ticks = Array.from({ length: 5 }, (_, index) => min + index / 4 * (max - min));
+  const dateSlotWidth = plotWidth / Math.max(1, dates.length);
+  const barWidth = Math.max(3, Math.min(30, dateSlotWidth * 0.72 / series.length));
+  const labelStep = Math.max(1, Math.ceil(dates.length / 8));
+  const formattedValue = (value: number) => `${value.toFixed(metric === 'loadLbs' ? 1 : 2)}${metricUnit ? ` ${metricUnit}` : ''}`;
   return (
-    <ReportTrendChart
-      rows={rows}
-      label={`${exercise} · ${label}`}
-      kind={kind}
-      benchmarkValue={benchmarkValue}
-      benchmarkLabel={benchmarkLabel}
-      formatBenchmark={(value) => `${value.toFixed(2)} ${metric === 'speedMph' ? 'mph' : 's'}`}
-      noDataMessage="No OVR Sprint data for the current filters."
-      onHover={onHover}
-    />
+    <div>
+      <div className="portal-custom-reports-velocity">
+        <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${label} comparison by exercise`}>
+          {ticks.map((tick) => <g key={tick}><line x1={left} y1={y(tick)} x2={width - right} y2={y(tick)} stroke="rgba(148,163,184,.18)"/><text x={left - 8} y={y(tick) + 4} textAnchor="end" fontSize="11" fill="currentColor">{tick.toFixed(source === 'sprint' && metric === 'totalTime' ? 2 : 1)}</text></g>)}
+          <line x1={left} y1={height - bottom} x2={width - right} y2={height - bottom} stroke="rgba(148,163,184,.55)"/>
+          {hasBenchmark ? <g><line x1={left} y1={y(benchmark)} x2={width - right} y2={y(benchmark)} stroke="#f8fafc" strokeWidth="2" strokeDasharray="8 6"/><text x={width - right - 4} y={y(benchmark) - 7} textAnchor="end" fontSize="11" fontWeight="800" fill="#f8fafc">{benchmarkLabel?.trim() || 'Goal'} · {formattedValue(benchmark)}</text></g> : null}
+          {kind === 'line' ? series.map((entry) => <path key={entry.exercise} d={entry.rows.map((row, index) => `${index ? 'L' : 'M'} ${x(row.date)} ${y(row.value)}`).join(' ')} fill="none" stroke={entry.color} strokeWidth="3"/>) : null}
+          {series.flatMap((entry, seriesIndex) => entry.rows.map((row) => kind === 'bar'
+            ? <rect key={`${entry.exercise}-${row.date}`} x={x(row.date) + (seriesIndex - (series.length - 1) / 2) * barWidth - barWidth / 2} y={y(row.value)} width={barWidth} height={height - bottom - y(row.value)} rx="3" fill={entry.color} onMouseMove={(event) => onHover({ x: event.clientX, y: event.clientY, text: `${fmtShortDate(row.date)}\n${entry.exercise}\n${label}: ${formattedValue(row.value)}`, bg: entry.color })} onMouseLeave={() => onHover(null)}/>
+            : <circle key={`${entry.exercise}-${row.date}`} cx={x(row.date)} cy={y(row.value)} r="5" fill={entry.color} onMouseMove={(event) => onHover({ x: event.clientX, y: event.clientY, text: `${fmtShortDate(row.date)}\n${entry.exercise}\n${label}: ${formattedValue(row.value)}`, bg: entry.color })} onMouseLeave={() => onHover(null)}/>))}
+          {dates.map((date, index) => index % labelStep === 0 || index === dates.length - 1 ? <text key={date} x={x(date)} y={height - bottom + 18} textAnchor={dates.length > 5 ? 'end' : 'middle'} transform={dates.length > 5 ? `rotate(-35 ${x(date)} ${height - bottom + 18})` : undefined} fontSize="10" fill="currentColor">{fmtShortDate(date)}</text> : null)}
+          <text x={width / 2} y={height - 8} textAnchor="middle" fontSize="12" fill="currentColor">Date</text>
+        </svg>
+      </div>
+      <div className="portal-custom-reports-leg-legend">{series.map((entry) => <span key={entry.exercise}><i style={{ background: entry.color }}/>{entry.exercise}</span>)}</div>
+    </div>
   );
 }
 
@@ -1300,6 +1459,229 @@ function QuestionnaireReportChart({
   );
 }
 
+type NutritionReportPoint = {
+  date: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  targetCalories: number | null;
+  targetProtein: number | null;
+  targetCarbs: number | null;
+  targetFat: number | null;
+};
+
+function nutritionReportPoints(points: Array<Record<string, unknown>>): NutritionReportPoint[] {
+  return points.flatMap((point) => {
+    const date = String(point.session_date ?? '').trim();
+    if (!date) return [];
+    const optionalNumber = (value: unknown) => {
+      const numeric = Number(value);
+      return value === null || value === undefined || value === '' || !Number.isFinite(numeric) ? null : numeric;
+    };
+    return [{
+      date,
+      calories: optionalNumber(point.calories) ?? 0,
+      protein: optionalNumber(point.protein_g) ?? 0,
+      carbs: optionalNumber(point.carbs_g) ?? 0,
+      fat: optionalNumber(point.fat_g) ?? 0,
+      targetCalories: optionalNumber(point.target_calories),
+      targetProtein: optionalNumber(point.target_protein_g),
+      targetCarbs: optionalNumber(point.target_carbs_g),
+      targetFat: optionalNumber(point.target_fat_g),
+    }];
+  }).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function NutritionCalorieReportChart({
+  points,
+  onHover,
+}: {
+  points: Array<Record<string, unknown>>;
+  onHover: (value: { x: number; y: number; text: string; bg?: string } | null) => void;
+}) {
+  const rows = nutritionReportPoints(points);
+  if (!rows.length) return <p className="portal-muted-text">No calorie logs for this athlete in the selected date range.</p>;
+  const width = 720, height = 390, left = 66, right = 24, top = 32, bottom = 66;
+  const target = rows.find((row) => row.targetCalories !== null)?.targetCalories ?? null;
+  const max = Math.max(500, ...rows.map((row) => row.calories), target ?? 0) * 1.12;
+  const plotWidth = width - left - right;
+  const x = (index: number) => rows.length === 1 ? left + plotWidth / 2 : left + index / (rows.length - 1) * plotWidth;
+  const y = (value: number) => height - bottom - (value / max) * (height - top - bottom);
+  const line = rows.map((row, index) => `${index ? 'L' : 'M'} ${x(index)} ${y(row.calories)}`).join(' ');
+  const area = `${line} L ${x(rows.length - 1)} ${height - bottom} L ${x(0)} ${height - bottom} Z`;
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => Math.round(max * ratio));
+  const labelStep = Math.max(1, Math.ceil(rows.length / 8));
+  return <div className="portal-custom-reports-velocity">
+    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Calories logged by day" onMouseLeave={() => onHover(null)}>
+      {ticks.map((tick) => <g key={tick}><line x1={left} x2={width - right} y1={y(tick)} y2={y(tick)} stroke="rgba(148,163,184,.18)"/><text x={left - 9} y={y(tick) + 4} textAnchor="end" fontSize="11" fill="currentColor">{tick.toLocaleString()}</text></g>)}
+      <line x1={left} x2={left} y1={top} y2={height - bottom} stroke="rgba(148,163,184,.55)"/>
+      <line x1={left} x2={width - right} y1={height - bottom} y2={height - bottom} stroke="rgba(148,163,184,.55)"/>
+      {target !== null ? <g><line x1={left} x2={width - right} y1={y(target)} y2={y(target)} stroke="#f8fafc" strokeWidth="2" strokeDasharray="8 6" opacity=".9"/><text x={width - right - 4} y={y(target) - 8} textAnchor="end" fontSize="11" fontWeight="800" fill="#f8fafc" paintOrder="stroke" stroke="rgba(0,0,0,.82)" strokeWidth="4">TARGET · {Math.round(target).toLocaleString()} cal</text></g> : null}
+      <path d={area} fill="#e5bb7a" opacity=".14"/>
+      <path d={line} fill="none" stroke="#e5bb7a" strokeWidth="3.5" strokeLinejoin="round" strokeLinecap="round"/>
+      {rows.map((row, index) => <circle key={row.date} cx={x(index)} cy={y(row.calories)} r="5" fill="#e5bb7a" stroke="#09090b" strokeWidth="2" onMouseMove={(event) => onHover({ x: event.clientX, y: event.clientY, text: `${fmtShortDate(row.date)}\n${Math.round(row.calories).toLocaleString()} calories`, bg: '#b98745' })}/>)}
+      {rows.map((row, index) => index % labelStep === 0 || index === rows.length - 1 ? <text key={`date-${row.date}`} x={x(index)} y={height - bottom + 20} textAnchor="middle" fontSize="10" fill="currentColor">{fmtShortDate(row.date)}</text> : null)}
+      <text x="16" y={height / 2} textAnchor="middle" transform={`rotate(-90 16 ${height / 2})`} fontSize="12" fontWeight="700" fill="currentColor">Calories</text>
+      <text x={width / 2} y={height - 10} textAnchor="middle" fontSize="12" fontWeight="700" fill="currentColor">Date</text>
+    </svg>
+  </div>;
+}
+
+const NUTRITION_MACRO_SERIES = [
+  { key: 'protein' as const, label: 'Protein', color: '#ef6a78' },
+  { key: 'carbs' as const, label: 'Carbohydrates', color: '#e5bb7a' },
+  { key: 'fat' as const, label: 'Fat', color: '#58c7ad' },
+];
+
+function NutritionMacroReportChart({
+  points,
+  onHover,
+}: {
+  points: Array<Record<string, unknown>>;
+  onHover: (value: { x: number; y: number; text: string; bg?: string } | null) => void;
+}) {
+  const rows = nutritionReportPoints(points);
+  if (!rows.length) return <p className="portal-muted-text">No macro logs for this athlete in the selected date range.</p>;
+  const width = 720, height = 390, left = 62, right = 22, top = 48, bottom = 68;
+  const max = Math.max(25, ...rows.flatMap((row) => [row.protein, row.carbs, row.fat])) * 1.15;
+  const plotWidth = width - left - right;
+  const groupWidth = plotWidth / rows.length;
+  const barWidth = Math.min(20, Math.max(3, (groupWidth - 5) / 3));
+  const y = (value: number) => height - bottom - (value / max) * (height - top - bottom);
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => Math.round(max * ratio));
+  const labelStep = Math.max(1, Math.ceil(rows.length / 8));
+  return <div className="portal-custom-reports-velocity">
+    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Daily protein carbohydrates and fat" onMouseLeave={() => onHover(null)}>
+      {ticks.map((tick) => <g key={tick}><line x1={left} x2={width - right} y1={y(tick)} y2={y(tick)} stroke="rgba(148,163,184,.18)"/><text x={left - 9} y={y(tick) + 4} textAnchor="end" fontSize="11" fill="currentColor">{tick}g</text></g>)}
+      <line x1={left} x2={left} y1={top} y2={height - bottom} stroke="rgba(148,163,184,.55)"/>
+      <line x1={left} x2={width - right} y1={height - bottom} y2={height - bottom} stroke="rgba(148,163,184,.55)"/>
+      {rows.flatMap((row, index) => {
+        const center = left + groupWidth * index + groupWidth / 2;
+        return NUTRITION_MACRO_SERIES.map((macro, macroIndex) => {
+          const value = row[macro.key];
+          const barX = center + (macroIndex - 1) * (barWidth + 2) - barWidth / 2;
+          return <rect key={`${row.date}-${macro.key}`} x={barX} y={y(value)} width={barWidth} height={height - bottom - y(value)} rx="3" fill={macro.color} onMouseMove={(event) => onHover({ x: event.clientX, y: event.clientY, text: `${fmtShortDate(row.date)}\n${macro.label}: ${Math.round(value)}g`, bg: macro.color })}/>;
+        });
+      })}
+      {rows.map((row, index) => index % labelStep === 0 || index === rows.length - 1 ? <text key={`date-${row.date}`} x={left + groupWidth * index + groupWidth / 2} y={height - bottom + 20} textAnchor="middle" fontSize="10" fill="currentColor">{fmtShortDate(row.date)}</text> : null)}
+      <text x="15" y={height / 2} textAnchor="middle" transform={`rotate(-90 15 ${height / 2})`} fontSize="12" fontWeight="700" fill="currentColor">Grams</text>
+      <text x={width / 2} y={height - 10} textAnchor="middle" fontSize="12" fontWeight="700" fill="currentColor">Date</text>
+      {NUTRITION_MACRO_SERIES.map((macro, index) => <g key={macro.key} transform={`translate(${width / 2 - 145 + index * 135},18)`}><circle cx="0" cy="0" r="5" fill={macro.color}/><text x="10" y="4" fontSize="11" fontWeight="700" fill="currentColor">{macro.label}</text></g>)}
+    </svg>
+  </div>;
+}
+
+const BULLPEN_CHART_COLORS = ['#60a5fa', '#f59e0b', '#22c55e', '#e11d48', '#a78bfa', '#14b8a6', '#f97316', '#38bdf8'];
+
+function bullpenLegendLabel(series: string): string {
+  const factors = String(series ?? '')
+    .split('/')
+    .map((factor) => factor.trim())
+    .filter((factor) => factor && !/^5(?:\.0+)?\s*oz$/i.test(factor));
+  return factors.join(' / ') || 'Baseball';
+}
+
+function BullpenScriptReportChart({
+  points,
+  metric,
+  metricLabel,
+  velocityMode,
+  onHover,
+}: {
+  points: Array<Record<string, unknown>>;
+  metric: string;
+  metricLabel: string;
+  velocityMode: 'average' | 'individual';
+  onHover: (value: { x: number; y: number; text: string; bg?: string } | null) => void;
+}) {
+  const rows = points.flatMap((point) => {
+    const date = String(point.session_date ?? '').trim();
+    const value = Number(point.value);
+    if (!date || !Number.isFinite(value)) return [];
+    return [{
+      date,
+      value,
+      series: String(point.series ?? 'All').trim() || 'All',
+      count: Number(point.count ?? 0),
+      pitchNumber: Number(point.pitch_number ?? 0),
+    }];
+  });
+  if (!rows.length) return <p className="portal-muted-text">No bullpen-script data for this athlete and date range.</p>;
+  const dates = Array.from(new Set(rows.map((row) => row.date))).sort((a, b) => a.localeCompare(b));
+  const series = Array.from(new Set(rows.map((row) => row.series))).sort((a, b) => a.localeCompare(b));
+  const colorBySeries = new Map(series.map((name, index) => [name, BULLPEN_CHART_COLORS[index % BULLPEN_CHART_COLORS.length]] as const));
+  const width = 720, height = 390, left = 62, right = 22, top = 20, bottom = 68;
+  const plotWidth = width - left - right;
+  const isPercent = metric !== 'velocity';
+  const isBubble = metric.startsWith('bubble:');
+  const minRaw = isPercent ? 0 : Math.min(...rows.map((row) => row.value));
+  const maxRaw = isPercent ? 100 : Math.max(...rows.map((row) => row.value));
+  const min = isPercent ? 0 : Math.max(0, Math.floor(minRaw - 2));
+  const max = isPercent ? 100 : Math.ceil(maxRaw + 2);
+  const y = (value: number) => top + (max - value) / Math.max(1, max - min) * (height - top - bottom);
+  const ticks = isPercent ? [0, 25, 50, 75, 100] : [min, min + (max - min) / 2, max];
+  const dateBand = plotWidth / Math.max(1, dates.length);
+  const labelStep = Math.max(1, Math.ceil(dates.length / 8));
+  const valueLabel = (value: number) => metric === 'velocity' ? `${value.toFixed(1)} mph` : `${value.toFixed(1)}%`;
+  return <div className="portal-custom-reports-velocity portal-custom-reports-bullpen-chart">
+    <div className="portal-custom-reports-bullpen-legend" aria-label="Chart legend">
+      {series.map((name) => (
+        <span key={name} title={bullpenLegendLabel(name)}>
+          <i style={{ background: colorBySeries.get(name) }} />
+          {bullpenLegendLabel(name)}
+        </span>
+      ))}
+    </div>
+    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${metricLabel} bullpen-script chart`} onMouseLeave={() => onHover(null)}>
+      {ticks.map((tick) => <g key={tick}><line x1={left} x2={width - right} y1={y(tick)} y2={y(tick)} stroke="rgba(148,163,184,.18)"/><text x={left - 9} y={y(tick) + 4} textAnchor="end" fontSize="11" fill="currentColor">{metric === 'velocity' ? tick.toFixed(1) : `${Math.round(tick)}%`}</text></g>)}
+      <line x1={left} x2={left} y1={top} y2={height - bottom} stroke="rgba(148,163,184,.55)"/>
+      <line x1={left} x2={width - right} y1={height - bottom} y2={height - bottom} stroke="rgba(148,163,184,.55)"/>
+      {isBubble ? dates.flatMap((date, dateIndex) => {
+        const dateRows = rows.filter((row) => row.date === date);
+        const center = left + dateBand * dateIndex + dateBand / 2;
+        const barWidth = Math.min(50, dateBand * 0.62);
+        let accumulated = 0;
+        return dateRows.map((row) => {
+          const bottomValue = accumulated;
+          accumulated += row.value;
+          const color = colorBySeries.get(row.series) ?? '#94a3b8';
+          return <rect key={`${date}-${row.series}`} x={center - barWidth / 2} y={y(accumulated)} width={barWidth} height={Math.max(1, y(bottomValue) - y(accumulated))} fill={color} onMouseMove={(event) => onHover({ x: event.clientX, y: event.clientY, text: `${fmtShortDate(date)}\n${row.series}: ${valueLabel(row.value)}\n${row.count} pitches`, bg: color })}/>;
+        });
+      }) : metric === 'two-thirds' ? series.flatMap((seriesName) => {
+        const seriesRows = rows.filter((row) => row.series === seriesName).sort((a, b) => a.date.localeCompare(b.date));
+        const color = colorBySeries.get(seriesName) ?? '#60a5fa';
+        const x = (date: string) => left + dateBand * dates.indexOf(date) + dateBand / 2;
+        return [
+          <polyline key={`${seriesName}-line`} points={seriesRows.map((row) => `${x(row.date)},${y(row.value)}`).join(' ')} fill="none" stroke={color} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round"/>,
+          ...seriesRows.map((row) => <circle key={`${seriesName}-${row.date}`} cx={x(row.date)} cy={y(row.value)} r="5" fill={color} stroke="#f8fafc" strokeWidth="1.2" onMouseMove={(event) => onHover({ x: event.clientX, y: event.clientY, text: `${fmtShortDate(row.date)}\n${metricLabel}: ${valueLabel(row.value)}\n${row.count} pitches`, bg: color })}/>),
+        ];
+      }) : metric === 'velocity' && velocityMode === 'individual' ? dates.flatMap((date, dateIndex) => {
+        const dateRows = rows.filter((row) => row.date === date).sort((a, b) => a.pitchNumber - b.pitchNumber);
+        const center = left + dateBand * dateIndex + dateBand / 2;
+        const gap = Math.min(12, dateBand / Math.max(2, dateRows.length));
+        return dateRows.map((row, index) => {
+          const pointX = center + (index - (dateRows.length - 1) / 2) * gap;
+          const color = colorBySeries.get(row.series) ?? '#60a5fa';
+          return <circle key={`${date}-${row.pitchNumber}-${index}`} cx={pointX} cy={y(row.value)} r="5" fill={color} stroke="#f8fafc" strokeWidth="1.2" onMouseMove={(event) => onHover({ x: event.clientX, y: event.clientY, text: `${fmtShortDate(date)} · Pitch ${row.pitchNumber}\n${row.series}\n${valueLabel(row.value)}`, bg: color })}/>;
+        });
+      }) : dates.flatMap((date, dateIndex) => {
+        const dateRows = rows.filter((row) => row.date === date);
+        const center = left + dateBand * dateIndex + dateBand / 2;
+        const barWidth = Math.min(34, dateBand * 0.72 / Math.max(1, dateRows.length));
+        return dateRows.map((row, index) => {
+          const color = colorBySeries.get(row.series) ?? '#60a5fa';
+          const barX = center + (index - (dateRows.length - 1) / 2) * (barWidth + 2) - barWidth / 2;
+          return <rect key={`${date}-${row.series}`} x={barX} y={y(row.value)} width={barWidth} height={height - bottom - y(row.value)} rx="3" fill={color} onMouseMove={(event) => onHover({ x: event.clientX, y: event.clientY, text: `${fmtShortDate(date)}\n${row.series}\n${metricLabel}: ${valueLabel(row.value)}\n${row.count} pitches`, bg: color })}/>;
+        });
+      })}
+      {dates.map((date, index) => index % labelStep === 0 || index === dates.length - 1 ? <text key={date} x={left + dateBand * index + dateBand / 2} y={height - bottom + 20} textAnchor="middle" fontSize="10" fill="currentColor">{fmtShortDate(date)}</text> : null)}
+      <text x="15" y={height / 2} textAnchor="middle" transform={`rotate(-90 15 ${height / 2})`} fontSize="12" fontWeight="700" fill="currentColor">{metricLabel}</text>
+      <text x={width / 2} y={height - 10} textAnchor="middle" fontSize="12" fontWeight="700" fill="currentColor">Date</text>
+    </svg>
+  </div>;
+}
+
 // Ported from the Force Plate / OVR Sprint dashboard pages (same red/yellow/
 // green thirds and ordinal formatting used there).
 function ordinalLabel(value: number): string {
@@ -1313,6 +1695,21 @@ function percentileTierClassName(percentile: number): string {
   if (percentile < 34) return 'portal-custom-reports-percentile-low';
   if (percentile < 67) return 'portal-custom-reports-percentile-mid';
   return 'portal-custom-reports-percentile-high';
+}
+
+function baseballPercentileMetricPresentation(metric: string, metricLabel: string, value: number | null): { label: string; value: string; unit: string } {
+  const catchingLabels: Record<string, { label: string; unit: string }> = {
+    ExchangeTime: { label: 'Exchange Time', unit: 's' },
+    PopTime: { label: 'Pop Time', unit: 's' },
+    Velo: { label: 'Velo', unit: 'mph' },
+  };
+  const explicit = catchingLabels[metric];
+  const unitMatch = metricLabel.match(/\s*\((mph|in|ft|rpm|°)\)\s*$/i);
+  const label = explicit?.label || (unitMatch ? metricLabel.slice(0, unitMatch.index).trim() : metricLabel);
+  const unit = explicit?.unit || unitMatch?.[1] || '';
+  if (value === null) return { label, value: '—', unit };
+  if (metric === 'ExchangeTime' || metric === 'PopTime') return { label, value: value.toFixed(2), unit };
+  return { label, value: formatTableDisplayValue(metric, value), unit };
 }
 
 function forcePlateTestTypeLabel(value: string): string {
@@ -1330,6 +1727,13 @@ function forcePlateMetricLeg(metricValue: string): 'left' | 'right' | null {
 function forcePlateMetricBaseName(metricValue: string): string {
   const parsed = parseForcePlateFlagMetric(metricValue);
   return parsed?.metricName.replace(/\s+-\s+(Left|Right)$/i, '').trim() ?? '';
+}
+
+function forcePlateOptionDisplayLabel(metricValue: string, fallbackLabel: string): string {
+  const parsed = parseForcePlateFlagMetric(metricValue);
+  if (!parsed) return fallbackLabel;
+  const unit = forcePlateDisplayUnit(parsed.metricUnit, parsed.metricName);
+  return `${parsed.metricName}${unit ? ` (${unit})` : ''}`;
 }
 
 function resolveForcePlateLegMetrics(
@@ -1479,6 +1883,19 @@ function PercentileSummaryConfigFields({
         value={config.percentileSummaryGroupId || 'all'}
         onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), percentileSummaryGroupId: next || 'all' } }))}
       />
+      <label>Percentile Data From</label>
+      <NativeDateInput
+        value={config.percentileComparisonStartDate}
+        max={config.percentileComparisonEndDate || undefined}
+        onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), percentileComparisonStartDate: next } }))}
+      />
+      <label>Percentile Data Through</label>
+      <NativeDateInput
+        value={config.percentileComparisonEndDate}
+        min={config.percentileComparisonStartDate || undefined}
+        onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), percentileComparisonEndDate: next } }))}
+      />
+      <span className="portal-muted-text">Defaults to the rolling last 365 days and only changes the comparison population.</span>
     </>
   );
 }
@@ -1664,6 +2081,8 @@ function PercentileSummaryPanel({
   biomechanicsPitchType,
   biomechanicsForceMode,
   groupId,
+  comparisonStartDate,
+  comparisonEndDate,
   compactMetricLabels,
   forcePlateMetricOptions,
   onGroupsLoaded,
@@ -1679,6 +2098,8 @@ function PercentileSummaryPanel({
   biomechanicsPitchType: string;
   biomechanicsForceMode: 'force' | 'bw';
   groupId: string;
+  comparisonStartDate: string;
+  comparisonEndDate: string;
   compactMetricLabels: boolean;
   forcePlateMetricOptions: Array<{ value: string; label: string; testTypes?: string[] }>;
   onGroupsLoaded: (groups: PercentileGroupOption[]) => void;
@@ -1718,6 +2139,8 @@ function PercentileSummaryPanel({
         const params = new URLSearchParams({ player: normalizedPlayer, metricName, metricUnit, groupId, testType: forceTestType || 'All', mode: 'average' });
         if (startDate) params.set('startDate', startDate);
         if (endDate) params.set('endDate', endDate);
+        params.set('comparisonStartDate', comparisonStartDate);
+        params.set('comparisonEndDate', comparisonEndDate);
         const overviewParams = new URLSearchParams({ player: normalizedPlayer, metrics: metricValue, test_type: forceTestType || 'All' });
         if (startDate) overviewParams.set('start_date', startDate);
         if (endDate) overviewParams.set('end_date', endDate);
@@ -1734,8 +2157,8 @@ function PercentileSummaryPanel({
           .filter((point) => String((point as Record<string, unknown>).metric ?? '') === metricValue)
           .flatMap((point) => {
             const date = String(point.session_date ?? '').trim();
-            const value = Number((point as Record<string, unknown>).value);
-            return date && Number.isFinite(value) ? [{ date, value }] : [];
+            const value = forcePlateDisplayValue(metricValue, (point as Record<string, unknown>).value);
+            return date && value !== null ? [{ date, value }] : [];
           });
         const { latestValue, trendPct, favorable } = trendFromRows(rows, /^(millisecond|second|ms|s)$/i.test(metricUnit.trim()));
         const panelLabel = metricName.replace(/\s+-\s+(Left|Right)$/i, '').trim();
@@ -1743,7 +2166,7 @@ function PercentileSummaryPanel({
           key: `force:${metricValue}`,
           label: compactMetricLabels ? compactForcePlatePanelLabel(panelLabel) : panelLabel,
           leg,
-          unit: forcePlateDisplayUnit(metricUnit),
+          unit: forcePlateDisplayUnit(metricUnit, metricName),
           value: latestValue,
           percentile: statsPayload.stats?.latest ?? null,
           trendPct,
@@ -1761,12 +2184,18 @@ function PercentileSummaryPanel({
       if (ovrExerciseValues.length) {
         const filtersResponse = await fetch('/api/dashboard/ovr-sprint/filters', { cache: 'no-store' });
         const filtersPayload = await filtersResponse.json().catch(() => ({})) as { player_ids?: Array<{ id: number; name: string }> };
-        const playerEntry = (filtersPayload.player_ids ?? []).find((entry) => normalizeNameKey(entry.name) === normalizeNameKey(normalizedPlayer));
-        if (playerEntry) {
-          const percentileParams = new URLSearchParams({ playerId: String(playerEntry.id), metric: 'totalTime', groupId });
+        const selectedPlayerKey = normalizeNameKey(toFirstLast(normalizedPlayer));
+        const playerEntry = (filtersPayload.player_ids ?? []).find((entry) => normalizeNameKey(toFirstLast(entry.name)) === selectedPlayerKey);
+        if (!filtersResponse.ok) throw new Error('Unable to load OVR Sprint player options.');
+        if (!playerEntry) throw new Error(`No matched OVR Sprint player was found for ${toFirstLast(normalizedPlayer)}.`);
+        {
+          const ovrGroupId = groupId === 'all' || /^\d+$/.test(groupId) ? groupId : 'all';
+          const percentileParams = new URLSearchParams({ playerId: String(playerEntry.id), metric: 'totalTime', groupId: ovrGroupId });
           for (const exercise of ovrExerciseValues) percentileParams.append('exercise', exercise);
           if (startDate) percentileParams.set('startDate', startDate);
           if (endDate) percentileParams.set('endDate', endDate);
+          percentileParams.set('comparisonStartDate', comparisonStartDate);
+          percentileParams.set('comparisonEndDate', comparisonEndDate);
           const overviewParams = new URLSearchParams({ player: normalizedPlayer, exercises: ovrExerciseValues.join(','), metric: 'totalTime' });
           if (startDate) overviewParams.set('start_date', startDate);
           if (endDate) overviewParams.set('end_date', endDate);
@@ -1774,8 +2203,10 @@ function PercentileSummaryPanel({
             fetch(`/api/ovr-sprint/percentile?${percentileParams.toString()}`, { cache: 'no-store' }),
             fetch(`/api/dashboard/ovr-sprint/overview?${overviewParams.toString()}`, { cache: 'no-store' }),
           ]);
-          const statsPayload = await statsResponse.json().catch(() => ({})) as { groups?: Array<{ id: number; name: string }>; results?: Record<string, { stats: { latest: PercentileStatValue } }> };
-          const overviewPayload = await overviewResponse.json().catch(() => ({})) as OverviewLitePayload;
+          const statsPayload = await statsResponse.json().catch(() => ({})) as { error?: string; groups?: Array<{ id: number; name: string }>; results?: Record<string, { stats: { latest: PercentileStatValue } }> };
+          const overviewPayload = await overviewResponse.json().catch(() => ({})) as OverviewLitePayload & { error?: string };
+          if (!statsResponse.ok) throw new Error(statsPayload.error ?? 'Unable to load OVR Sprint percentiles.');
+          if (!overviewResponse.ok) throw new Error(overviewPayload.error ?? 'Unable to load OVR Sprint trend data.');
           if (Array.isArray(statsPayload.groups)) {
             groups = statsPayload.groups.map((group) => ({ id: String(group.id), label: group.name }));
           }
@@ -1793,6 +2224,7 @@ function PercentileSummaryPanel({
               label: exercise,
               unit: 's',
               value: latestValue,
+              formattedValue: latestValue === null ? undefined : latestValue.toFixed(2),
               percentile: statsPayload.results?.[exercise]?.stats.latest ?? null,
               trendPct,
               favorable,
@@ -1809,6 +2241,8 @@ function PercentileSummaryPanel({
         });
         if (startDate) params.set('startDate', startDate);
         if (endDate) params.set('endDate', endDate);
+        params.set('comparisonStartDate', comparisonStartDate);
+        params.set('comparisonEndDate', comparisonEndDate);
         if (biomechanicsPitchType && biomechanicsPitchType !== 'All') {
           params.set('pitchTypes', JSON.stringify([biomechanicsPitchType]));
         }
@@ -1861,7 +2295,7 @@ function PercentileSummaryPanel({
     return () => {
       active = false;
     };
-  }, [biomechanicsForceMode, biomechanicsMetricSignature, biomechanicsPitchType, compactMetricLabels, endDate, forceMetricSignature, forcePlateMetricOptions, forceTestType, groupId, normalizedPlayer, onBiomechanicsPitchTypesLoaded, onGroupsLoaded, ovrExerciseSignature, startDate]);
+  }, [biomechanicsForceMode, biomechanicsMetricSignature, biomechanicsPitchType, compactMetricLabels, comparisonEndDate, comparisonStartDate, endDate, forceMetricSignature, forcePlateMetricOptions, forceTestType, groupId, normalizedPlayer, onBiomechanicsPitchTypesLoaded, onGroupsLoaded, ovrExerciseSignature, startDate]);
 
   if (error) return <p className="portal-muted-text">{error}</p>;
   if (!tiles.length && !loading) return <p className="portal-muted-text">Choose at least one VALD metric, OVR Sprint exercise, or AxioForce metric.</p>;
@@ -3027,6 +3461,7 @@ function Contact3DChart({
 }
 
 function emptyCell(): CellConfig {
+  const percentileWindow = defaultPercentileComparisonWindow();
   return {
     panelType: 'Summary Table',
     player: 'All',
@@ -3070,6 +3505,9 @@ function emptyCell(): CellConfig {
     chartBenchmarkLabel: '',
     ovrSprintExercises: [],
     ovrSprintMetric: 'totalTime',
+    ovrDataSource: 'sprint',
+    ovrVbtExercises: [],
+    ovrVbtMetric: 'avgVelocity',
     percentileSummaryForceMetrics: [],
     percentileSummaryForceTestType: 'All',
     percentileSummaryForceLegDisplay: 'selected',
@@ -3077,6 +3515,8 @@ function emptyCell(): CellConfig {
     percentileSummaryBiomechanicsMetrics: [],
     percentileSummaryBiomechanicsPitchType: 'All',
     percentileSummaryGroupId: 'all',
+    percentileComparisonStartDate: percentileWindow.startDate,
+    percentileComparisonEndDate: percentileWindow.endDate,
     biomechanicsTableMode: 'Summary',
     biomechanicsPitchKey: '',
     biomechanicsChartMode: 'Force',
@@ -3085,6 +3525,16 @@ function emptyCell(): CellConfig {
     questionnaireId: '',
     questionnaireQuestionId: '',
     questionnaireQuestionLabel: '',
+    bullpenMetric: 'velocity',
+    bullpenVelocityMode: 'average',
+    bullpenScript: 'All',
+    bullpenPitchType: 'All',
+    bullpenBallType: 'All',
+    bullpenDrill: 'All',
+    bullpenBallWeight: 'All',
+    bullpenTableMetrics: [],
+    baseballPercentileMetric: '',
+    baseballPercentilePool: 'ORG',
   };
 }
 
@@ -3105,6 +3555,9 @@ function normalizeCellConfig(input: Partial<CellConfig> | undefined): CellConfig
     zoneLocations: input?.zoneLocations?.length ? input.zoneLocations : base.zoneLocations,
     ovrSprintExercises: input?.ovrSprintExercises?.length ? input.ovrSprintExercises : base.ovrSprintExercises,
     ovrSprintMetric: input?.ovrSprintMetric === 'speedMph' ? 'speedMph' : base.ovrSprintMetric,
+    ovrDataSource: input?.ovrDataSource === 'vbt' ? 'vbt' : base.ovrDataSource,
+    ovrVbtExercises: input?.ovrVbtExercises?.length ? input.ovrVbtExercises : base.ovrVbtExercises,
+    ovrVbtMetric: OVR_VBT_METRIC_OPTIONS.some((option) => option.value === input?.ovrVbtMetric) ? input!.ovrVbtMetric! : base.ovrVbtMetric,
     percentileSummaryForceMetrics: input?.percentileSummaryForceMetrics?.length ? input.percentileSummaryForceMetrics : base.percentileSummaryForceMetrics,
     percentileSummaryForceTestType: input?.percentileSummaryForceTestType || base.percentileSummaryForceTestType,
     percentileSummaryForceLegDisplay: ['left', 'right', 'both'].includes(String(input?.percentileSummaryForceLegDisplay)) ? input!.percentileSummaryForceLegDisplay! : base.percentileSummaryForceLegDisplay,
@@ -3116,6 +3569,12 @@ function normalizeCellConfig(input: Partial<CellConfig> | undefined): CellConfig
     biomechanicsPitchKey: input?.biomechanicsPitchKey || base.biomechanicsPitchKey,
     biomechanicsChartMode: input?.biomechanicsChartMode === 'Moments' ? 'Moments' : base.biomechanicsChartMode,
     biomechanicsForceMode: input?.biomechanicsForceMode === 'bw' ? 'bw' : base.biomechanicsForceMode,
+    bullpenVelocityMode: input?.bullpenVelocityMode === 'individual' ? 'individual' : base.bullpenVelocityMode,
+    bullpenTableMetrics: input?.bullpenTableMetrics?.length ? input.bullpenTableMetrics : base.bullpenTableMetrics,
+    baseballPercentileMetric: input?.baseballPercentileMetric || base.baseballPercentileMetric,
+    baseballPercentilePool: ['ORG', 'D1', 'D2', 'D3', 'NAIA', 'JUCO', 'MLB', 'AAA'].includes(String(input?.baseballPercentilePool))
+      ? input!.baseballPercentilePool!
+      : base.baseballPercentilePool,
   };
   merged.panelType = normalizePanelType(merged.panelType);
   merged.heatStat = normalizeHeatmapStatValue(merged.heatStat);
@@ -3144,6 +3603,9 @@ function normalizeCellConfig(input: Partial<CellConfig> | undefined): CellConfig
 function normalizePanelType(value: string): PanelType {
   const normalized = (value ?? '').trim();
   if (!normalized) return '';
+  if (normalized === 'Percentile Summary') return 'Performance Percentile Summary';
+  if (normalized === 'OVR Sprint Line Chart') return 'OVR Data Line Chart';
+  if (normalized === 'OVR Sprint Bar Chart') return 'OVR Data Bar Chart';
   if (normalized === 'Table') return 'Summary Table';
   if (normalized === 'HeatMap') return 'Heatmap';
   if (normalized === 'Notes') return 'Note Section';
@@ -4296,6 +4758,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const [forcePlateMetricOptions, setForcePlateMetricOptions] = useState<Array<{ value: string; label: string; testTypes?: string[] }>>([]);
   const [forcePlateTestTypes, setForcePlateTestTypes] = useState<string[]>([]);
   const [ovrSprintExerciseOptions, setOvrSprintExerciseOptions] = useState<Array<{ value: string; label: string }>>([]);
+  const [ovrVbtExerciseOptions, setOvrVbtExerciseOptions] = useState<Array<{ value: string; label: string }>>([]);
   const [assessmentFieldOptions, setAssessmentFieldOptions] = useState<Array<{ value: string; label: string }>>([]);
   const [questionnaireCatalog, setQuestionnaireCatalog] = useState<Array<{ questionnaireId: number; questionnaireName: string; questions: Array<{ id: string; prompt: string }> }>>([]);
   const [percentileSummaryGroups, setPercentileSummaryGroups] = useState<PercentileGroupOption[]>([]);
@@ -4534,9 +4997,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   );
   const availablePanelTypes = useMemo(
     () => panelOptionsForReportType(reportType).filter((panelType) => {
-      if ((panelType === 'Force Plate Line Chart' || panelType === 'Force Plate Bar Chart') && !canUseForcePlatePanels) return false;
-      if ((panelType === 'OVR Sprint Line Chart' || panelType === 'OVR Sprint Bar Chart') && !canUseOvrSprintPanels) return false;
-      if (panelType === 'Percentile Summary' && !canUsePercentileSummary) return false;
+      if ((panelType === 'Force Plate Line Chart' || panelType === 'Force Plate Bar Chart' || panelType === 'Force Plate Data Table') && !canUseForcePlatePanels) return false;
+      if ((panelType === 'OVR Data Line Chart' || panelType === 'OVR Data Bar Chart' || panelType === 'OVR Data Table') && !canUseOvrSprintPanels) return false;
+      if (panelType === 'Performance Percentile Summary' && !canUsePercentileSummary) return false;
       if ((panelType === 'Biomechanics Table' || panelType === 'Biomechanics Force Chart') && !canUseBiomechanicsPanels) return false;
       return true;
     }),
@@ -4984,10 +5447,12 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           reportType === 'Force Plates' ||
           normalized.panelType === 'Force Plate Line Chart' ||
           normalized.panelType === 'Force Plate Bar Chart' ||
+          normalized.panelType === 'Force Plate Data Table' ||
           (normalized.panelType === 'Summary Table' && normalized.tableMode === 'Force Plate Data');
         const usesOvrSprintData =
-          normalized.panelType === 'OVR Sprint Line Chart' ||
-          normalized.panelType === 'OVR Sprint Bar Chart';
+          normalized.panelType === 'OVR Data Line Chart' ||
+          normalized.panelType === 'OVR Data Bar Chart' ||
+          normalized.panelType === 'OVR Data Table';
         const usesBiomechanicsData =
           normalized.panelType === 'Biomechanics Table' ||
           normalized.panelType === 'Biomechanics Force Chart';
@@ -5199,7 +5664,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         const payload = (await response.json().catch(() => ({}))) as ForcePlateFiltersPayload & { error?: string };
         if (!response.ok) throw new Error(payload.error ?? 'Failed to load force-plate metrics.');
         if (!active) return;
-        const metrics = Array.isArray(payload.metrics) ? payload.metrics : [];
+        const metrics = Array.isArray(payload.metrics)
+          ? payload.metrics.map((option) => ({ ...option, label: forcePlateOptionDisplayLabel(option.value, option.label) }))
+          : [];
         setForcePlateMetricOptions(metrics);
         setForcePlateTestTypes(['All', ...Array.from(new Set((payload.test_types ?? []).filter(Boolean)))]);
         const firstMetric = metrics[0]?.value ?? '';
@@ -5209,6 +5676,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             const isForcePlatePanel =
               config.panelType === 'Force Plate Line Chart' ||
               config.panelType === 'Force Plate Bar Chart' ||
+              config.panelType === 'Force Plate Data Table' ||
               (config.panelType === 'Summary Table' && config.tableMode === 'Force Plate Data');
             return [cellId, isForcePlatePanel && !config.forcePlateMetrics.length
               ? { ...config, forcePlateMetrics: [firstMetric], forcePlateTestType: 'All' }
@@ -5229,6 +5697,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     const activeSchool = String(schoolCode || initialSchoolCode).trim().toUpperCase();
     if (activeSchool !== 'PCU' || !['Pitching', 'Hitting'].includes(reportType)) {
       setOvrSprintExerciseOptions([]);
+      setOvrVbtExerciseOptions([]);
       return;
     }
 
@@ -5236,18 +5705,25 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     async function loadOvrSprintCatalog() {
       try {
         const response = await fetch('/api/dashboard/ovr-sprint/filters', { cache: 'no-store' });
-        const payload = (await response.json().catch(() => ({}))) as { exercises?: Array<{ value: string; label: string }>; error?: string };
+        const payload = (await response.json().catch(() => ({}))) as { exercises?: Array<{ value: string; label: string }>; vbt_exercises?: Array<{ value: string; label: string }>; error?: string };
         if (!response.ok) throw new Error(payload.error ?? 'Failed to load OVR Sprint exercises.');
         if (!active) return;
         const exercises = Array.isArray(payload.exercises) ? payload.exercises : [];
+        const vbtExercises = Array.isArray(payload.vbt_exercises) ? payload.vbt_exercises : [];
         setOvrSprintExerciseOptions(exercises);
+        setOvrVbtExerciseOptions(vbtExercises);
         const firstExercise = exercises[0]?.value ?? '';
-        if (firstExercise) {
+        const firstVbtExercise = vbtExercises[0]?.value ?? '';
+        if (firstExercise || firstVbtExercise) {
           setCellConfigs((current) => Object.fromEntries(Object.entries(current).map(([cellId, rawConfig]) => {
             const config = normalizeCellConfig(rawConfig);
-            const isOvrSprintPanel = config.panelType === 'OVR Sprint Line Chart' || config.panelType === 'OVR Sprint Bar Chart';
-            return [cellId, isOvrSprintPanel && !config.ovrSprintExercises.length
-              ? { ...config, ovrSprintExercises: [firstExercise] }
+            const isOvrPanel = config.panelType === 'OVR Data Line Chart' || config.panelType === 'OVR Data Bar Chart' || config.panelType === 'OVR Data Table';
+            return [cellId, isOvrPanel
+              ? {
+                  ...config,
+                  ovrSprintExercises: !config.ovrSprintExercises.length && firstExercise ? [firstExercise] : config.ovrSprintExercises,
+                  ovrVbtExercises: !config.ovrVbtExercises.length && firstVbtExercise ? [firstVbtExercise] : config.ovrVbtExercises,
+                }
               : config];
           })));
         }
@@ -5517,13 +5993,169 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             reportType === 'Force Plates' ||
             normalizedPanelType === 'Force Plate Line Chart' ||
             normalizedPanelType === 'Force Plate Bar Chart' ||
+            normalizedPanelType === 'Force Plate Data Table' ||
             (normalizedPanelType === 'Summary Table' && config.tableMode === 'Force Plate Data');
-          const usesOvrSprintData =
-            normalizedPanelType === 'OVR Sprint Line Chart' ||
-            normalizedPanelType === 'OVR Sprint Bar Chart';
+        const usesOvrSprintData =
+            normalizedPanelType === 'OVR Data Line Chart' ||
+            normalizedPanelType === 'OVR Data Bar Chart' ||
+            normalizedPanelType === 'OVR Data Table';
           const usesBiomechanicsTable = normalizedPanelType === 'Biomechanics Table';
           const usesAssessmentData = normalizedPanelType === 'Assessment Line Chart' || normalizedPanelType === 'Assessment Bar Chart';
           const usesQuestionnaireData = normalizedPanelType === 'Questionnaire Line Chart' || normalizedPanelType === 'Questionnaire Bar Chart';
+          const usesNutritionData = normalizedPanelType === 'Nutrition Calorie Trends' || normalizedPanelType === 'Nutrition Macro Breakdown';
+          const usesBullpenScriptData = normalizedPanelType === 'Bullpen Script Trend Chart' || normalizedPanelType === 'Bullpen Script Summary Table';
+          const usesBaseballPercentile = normalizedPanelType === 'Baseball Percentile Tile';
+          if (usesBaseballPercentile) {
+            if (reportType === 'Force Plates') {
+              commitCellResult(cellId, {}, { status: 'ready', message: 'Baseball percentile tiles are available for pitching, hitting, and catching reports.' });
+              return;
+            }
+            if (!normalizedPlayer || normalizeNameKey(normalizedPlayer) === 'all') {
+              commitCellResult(cellId, {}, { status: 'ready', message: 'Choose a specific athlete for this percentile tile.' });
+              return;
+            }
+            const metric = config.baseballPercentileMetric || metricChartOptions[0]?.value || '';
+            if (!metric) {
+              commitCellResult(cellId, {}, { status: 'ready', message: 'Choose a baseball metric.' });
+              return;
+            }
+            const domain = reportType === 'Hitting' ? 'hitting' : reportType === 'Catching' ? 'catching' : 'pitching';
+            const percentileParams = new URLSearchParams({
+              domain,
+              player: normalizedPlayer,
+              metric,
+              pool: config.baseballPercentilePool || 'ORG',
+            });
+            if (reportTeam && reportTeam !== 'All') percentileParams.set('team', reportTeam);
+            if (startDate) percentileParams.set('start_date', startDate);
+            if (endDate) percentileParams.set('end_date', endDate);
+            percentileParams.set('comparison_start_date', config.percentileComparisonStartDate);
+            percentileParams.set('comparison_end_date', config.percentileComparisonEndDate);
+            const percentileFilters = config.filterSelect ?? ['Dates', 'Session Type', 'Pitch Types'];
+            if (percentileFilters.includes('Session Type') && config.sessionType && config.sessionType !== 'All') {
+              percentileParams.set('session_type', config.sessionType);
+            }
+            const percentilePitchTypes = useGlobalPitchTypes
+              ? selectedValues(globalPitchTypes)
+              : percentileFilters.includes('Pitch Types')
+                ? selectedValues(config.pitchTypes)
+                : [];
+            if (percentilePitchTypes.length) percentileParams.set('pitch_types', percentilePitchTypes.join(','));
+            if (percentileFilters.includes('Ball Type')) {
+              const ballTypes = selectedValues(config.ballTypes).filter((value) => value.toLowerCase() !== 'all');
+              if (ballTypes.length) percentileParams.set('ball_types', ballTypes.join(';'));
+            }
+            const percentileBatterSide = mergeSingleGlobalFilter(
+              useGlobalBatterSide ? globalBatterSide : 'All',
+              !useGlobalBatterSide && percentileFilters.includes('Batter Hand') ? config.batterSide : ''
+            );
+            if (percentileBatterSide === '__NO_MATCH__') percentileParams.set('pitch_types', '__NO_MATCH__');
+            else if (percentileBatterSide) percentileParams.set('batter_side', percentileBatterSide);
+            const percentilePitcherHand = mergeSingleGlobalFilter(
+              useGlobalPitcherHand ? globalPitcherHand : 'All',
+              !useGlobalPitcherHand && percentileFilters.includes('Pitcher Hand') ? config.pitcherHand : ''
+            );
+            if (percentilePitcherHand === '__NO_MATCH__') percentileParams.set('pitch_types', '__NO_MATCH__');
+            else if (percentilePitcherHand) percentileParams.set('hand', percentilePitcherHand);
+            if (percentileFilters.includes('Pitch Results')) {
+              const pitchResults = selectedValues(config.pitchResults);
+              if (pitchResults.length) percentileParams.set('pitch_results', pitchResults.join(','));
+            }
+            if (reportType === 'Pitching' && percentileFilters.includes('QP Locations') && config.qpLocations && config.qpLocations !== 'All') percentileParams.set('qp_locations', config.qpLocations);
+            if (percentileFilters.includes('In Zone') && config.inZone && config.inZone !== 'All') percentileParams.set('in_zone', config.inZone);
+            if (percentileFilters.includes('Count')) {
+              const counts = selectedValues(config.countFilter);
+              if (counts.length) percentileParams.set('count_filter', counts.join(','));
+            }
+            if (percentileFilters.includes('After Count')) {
+              const counts = selectedValues(config.afterCountFilter);
+              if (counts.length) percentileParams.set('after_count_filter', counts.join(','));
+            }
+            if (percentileFilters.includes('Zone Location')) {
+              const zones = selectedValues(config.zoneLocations);
+              if (zones.length) percentileParams.set('zone_locations', zones.join(','));
+            }
+            if (percentileFilters.includes('Velo Min/Max')) {
+              if ((config.veloMin ?? '').trim()) percentileParams.set('velo_min', String(config.veloMin).trim());
+              if ((config.veloMax ?? '').trim()) percentileParams.set('velo_max', String(config.veloMax).trim());
+            }
+            if (percentileFilters.includes('IVB Min/Max')) {
+              if ((config.ivbMin ?? '').trim()) percentileParams.set('ivb_min', String(config.ivbMin).trim());
+              if ((config.ivbMax ?? '').trim()) percentileParams.set('ivb_max', String(config.ivbMax).trim());
+            }
+            if (percentileFilters.includes('HB Min/Max')) {
+              if ((config.hbMin ?? '').trim()) percentileParams.set('hb_min', String(config.hbMin).trim());
+              if ((config.hbMax ?? '').trim()) percentileParams.set('hb_max', String(config.hbMax).trim());
+            }
+            const percentileKey = `/api/dashboard/baseball-percentile?${percentileParams.toString()}`;
+            if (active) setCellRequestUrls((current) => current[cellId] === percentileKey ? current : { ...current, [cellId]: percentileKey });
+            const cached = cellsCacheRef.current.get(percentileKey);
+            if (cached && Date.now() - cached.at < 60_000) {
+              commitCellResult(cellId, cached.payload, { status: 'ready' });
+              return;
+            }
+            const response = await fetch(percentileKey, { cache: 'no-store', signal: controller.signal });
+            const baseballPercentile = await response.json().catch(() => ({})) as NonNullable<OverviewLitePayload['baseball_percentile']> & { error?: string };
+            if (!response.ok) throw new Error(baseballPercentile.error ?? 'Failed to load baseball percentile data.');
+            const percentilePayload: OverviewLitePayload = { baseball_percentile: baseballPercentile };
+            cellsCacheRef.current.set(percentileKey, { at: Date.now(), payload: percentilePayload });
+            commitCellResult(cellId, percentilePayload, { status: 'ready' });
+            return;
+          }
+          if (usesBullpenScriptData) {
+            if (!normalizedPlayer || normalizeNameKey(normalizedPlayer) === 'all') {
+              commitCellResult(cellId, {}, { status: 'ready', message: 'Choose a specific athlete for bullpen-script panels.' });
+              return;
+            }
+            const bullpenParams = new URLSearchParams({
+              player: normalizedPlayer,
+              metric: config.bullpenMetric || 'velocity',
+              velocity_mode: config.bullpenVelocityMode || 'average',
+            });
+            if (startDate) bullpenParams.set('start_date', startDate);
+            if (endDate) bullpenParams.set('end_date', endDate);
+            if (config.bullpenScript && config.bullpenScript !== 'All') bullpenParams.set('script', config.bullpenScript);
+            if (config.bullpenPitchType && config.bullpenPitchType !== 'All') bullpenParams.set('pitch_type', config.bullpenPitchType);
+            if (config.bullpenBallType && config.bullpenBallType !== 'All') bullpenParams.set('ball_type', config.bullpenBallType);
+            if (config.bullpenDrill && config.bullpenDrill !== 'All') bullpenParams.set('drill', config.bullpenDrill);
+            if (config.bullpenBallWeight && config.bullpenBallWeight !== 'All') bullpenParams.set('ball_weight', config.bullpenBallWeight);
+            if (config.bullpenTableMetrics.length) bullpenParams.set('table_metrics', config.bullpenTableMetrics.join(','));
+            const bullpenKey = `/api/dashboard/bullpen-scripts/overview?${bullpenParams.toString()}`;
+            if (active) setCellRequestUrls((current) => current[cellId] === bullpenKey ? current : { ...current, [cellId]: bullpenKey });
+            const cached = cellsCacheRef.current.get(bullpenKey);
+            if (cached && Date.now() - cached.at < 60_000) {
+              commitCellResult(cellId, cached.payload, { status: 'ready' });
+              return;
+            }
+            const response = await fetch(bullpenKey, { cache: 'no-store', signal: controller.signal });
+            const payload = (await response.json().catch(() => ({}))) as OverviewLitePayload & { error?: string };
+            if (!response.ok) throw new Error(payload.error ?? 'Failed to load bullpen-script report data.');
+            cellsCacheRef.current.set(bullpenKey, { at: Date.now(), payload });
+            commitCellResult(cellId, payload, { status: 'ready' });
+            return;
+          }
+          if (usesNutritionData) {
+            if (!normalizedPlayer || normalizeNameKey(normalizedPlayer) === 'all') {
+              commitCellResult(cellId, {}, { status: 'ready', message: 'Choose a specific athlete for nutrition charts.' });
+              return;
+            }
+            const nutritionParams = new URLSearchParams({ player: normalizedPlayer });
+            if (startDate) nutritionParams.set('start_date', startDate);
+            if (endDate) nutritionParams.set('end_date', endDate);
+            const nutritionKey = `/api/dashboard/nutrition/overview?${nutritionParams.toString()}`;
+            if (active) setCellRequestUrls((current) => current[cellId] === nutritionKey ? current : { ...current, [cellId]: nutritionKey });
+            const cached = cellsCacheRef.current.get(nutritionKey);
+            if (cached && Date.now() - cached.at < 60_000) {
+              commitCellResult(cellId, cached.payload, { status: 'ready' });
+              return;
+            }
+            const response = await fetch(nutritionKey, { cache: 'no-store', signal: controller.signal });
+            const payload = (await response.json().catch(() => ({}))) as OverviewLitePayload & { error?: string };
+            if (!response.ok) throw new Error(payload.error ?? 'Failed to load nutrition report data.');
+            cellsCacheRef.current.set(nutritionKey, { at: Date.now(), payload });
+            commitCellResult(cellId, payload, { status: 'ready' });
+            return;
+          }
           if (usesForcePlateData) {
             const selectedMetricsBase = isMetricChart && reportType !== 'Force Plates' && config.metricChartMetric
               ? [config.metricChartMetric]
@@ -5563,19 +6195,23 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             return;
           }
           if (usesOvrSprintData) {
-            const selectedExercises = config.ovrSprintExercises?.length
-              ? config.ovrSprintExercises
-              : ovrSprintExerciseOptions[0]?.value
-                ? [ovrSprintExerciseOptions[0].value]
+            const isVbt = config.ovrDataSource === 'vbt';
+            const sourceOptions = isVbt ? ovrVbtExerciseOptions : ovrSprintExerciseOptions;
+            const configuredExercises = isVbt ? config.ovrVbtExercises : config.ovrSprintExercises;
+            const selectedExercises = configuredExercises?.length
+              ? configuredExercises
+              : sourceOptions[0]?.value
+                ? [sourceOptions[0].value]
                 : [];
             if (!selectedExercises.length) {
-              commitCellResult(cellId, {}, { status: 'ready', message: 'Choose at least one sprint exercise.' });
+              commitCellResult(cellId, {}, { status: 'ready', message: `Choose at least one ${isVbt ? 'VBT' : 'sprint'} exercise.` });
               return;
             }
             const ovrParams = new URLSearchParams({
+              source: isVbt ? 'vbt' : 'sprint',
               player: normalizedPlayer || 'All',
               exercises: selectedExercises.join(','),
-              metric: config.ovrSprintMetric || 'totalTime',
+              metric: isVbt ? config.ovrVbtMetric || 'avgVelocity' : config.ovrSprintMetric || 'totalTime',
             });
             if (startDate) ovrParams.set('start_date', startDate);
             if (endDate) ovrParams.set('end_date', endDate);
@@ -5588,7 +6224,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             }
             const response = await fetch(ovrKey, { cache: 'no-store', signal: controller.signal });
             const payload = (await response.json().catch(() => ({}))) as OverviewLitePayload & { error?: string };
-            if (!response.ok) throw new Error(payload.error ?? 'Failed to load OVR Sprint report data.');
+            if (!response.ok) throw new Error(payload.error ?? 'Failed to load OVR report data.');
             cellsCacheRef.current.set(ovrKey, { at: Date.now(), payload });
             commitCellResult(cellId, payload, { status: 'ready' });
             return;
@@ -5655,6 +6291,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             });
             if (startDate) rankParams.set('startDate', startDate);
             if (endDate) rankParams.set('endDate', endDate);
+            rankParams.set('comparisonStartDate', config.percentileComparisonStartDate);
+            rankParams.set('comparisonEndDate', config.percentileComparisonEndDate);
             if (biomechanicsPitchTypes.length) rankParams.set('pitchTypes', JSON.stringify(biomechanicsPitchTypes));
             const loadBiomechanicsPercentiles = async () => {
               if (!normalizedPlayer || normalizeNameKey(normalizedPlayer) === 'all') return null;
@@ -5681,7 +6319,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
               return {
                 selectedGroupId: payload.selectedGroupId ?? 'all',
                 selectedGroupLabel: payload.selectedGroupLabel ?? 'All PCU athletes',
-                comparisonWindow: payload.comparisonWindow ?? 'full_history',
+                comparisonWindow: payload.comparisonWindow ?? 'Last 365 days',
                 rows: payload.rows ?? {},
               };
             };
@@ -6066,6 +6704,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           if (shouldLoadPercentileBaseline) {
             const baselineParams = new URLSearchParams(params);
             baselineParams.set('percentile_baseline', '1');
+            baselineParams.set('start_date', config.percentileComparisonStartDate);
+            baselineParams.set('end_date', config.percentileComparisonEndDate);
+            baselineParams.set('comparison_start_date', config.percentileComparisonStartDate);
+            baselineParams.set('comparison_end_date', config.percentileComparisonEndDate);
             baselineParams.set('include_chart_points', '0');
             baselineParams.delete('chart_only');
             baselineParams.delete('chart_points_limit');
@@ -6442,6 +7084,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     customTables,
     defaultTableMode,
     forcePlateMetricOptions,
+    ovrSprintExerciseOptions,
+    ovrVbtExerciseOptions,
   ]);
 
   // Fetches "Intended Target Miss" panel data. Kept as its own small,
@@ -8330,8 +8974,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                     contentType === 'Metric Bar Chart' ||
                     contentType === 'Force Plate Line Chart' ||
                     contentType === 'Force Plate Bar Chart' ||
-                    contentType === 'OVR Sprint Line Chart' ||
-                    contentType === 'OVR Sprint Bar Chart' ||
+                    contentType === 'OVR Data Line Chart' ||
+                    contentType === 'OVR Data Bar Chart' ||
                     contentType === 'Assessment Line Chart' ||
                     contentType === 'Assessment Bar Chart' ||
                     contentType === 'Questionnaire Line Chart' ||
@@ -8342,20 +8986,28 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                     reportType === 'Force Plates' ||
                     contentType === 'Force Plate Line Chart' ||
                     contentType === 'Force Plate Bar Chart' ||
+                    contentType === 'Force Plate Data Table' ||
                     (contentType === 'Summary Table' && config.tableMode === 'Force Plate Data');
                   const usesOvrSprintData =
-                    contentType === 'OVR Sprint Line Chart' ||
-                    contentType === 'OVR Sprint Bar Chart';
+                    contentType === 'OVR Data Line Chart' ||
+                    contentType === 'OVR Data Bar Chart' ||
+                    contentType === 'OVR Data Table';
                   const resolvedForcePlateMetrics = resolveForcePlateLegMetrics(
                     config.forcePlateMetrics,
                     config.forcePlateLegDisplay || 'selected',
                     forcePlateMetricOptions
                   );
-                  const isPercentileSummary = contentType === 'Percentile Summary';
+                  const isPercentileSummary = contentType === 'Performance Percentile Summary';
+                  const isBaseballPercentile = contentType === 'Baseball Percentile Tile';
                   const usesBiomechanicsTable = contentType === 'Biomechanics Table';
                   const isBiomechanicsChart = contentType === 'Biomechanics Force Chart';
-                  const filterTokenOptions = (usesForcePlateData || usesOvrSprintData || usesBiomechanicsTable || isBiomechanicsChart || isAssessmentChart || isQuestionnaireChart ? ['Dates'] as FilterToken[] : FILTER_TOKENS.filter((entry) => entry !== 'Level' || isLeagueSchool)).map((entry) => ({ value: entry, label: entry }));
-                  const splitByOptions = (usesForcePlateData ? ['Date', 'Test Type', 'Player'] : usesOvrSprintData ? ['Date', 'Exercise', 'Player'] : (usesBiomechanicsTable || isBiomechanicsChart || isAssessmentChart || isQuestionnaireChart) ? ['Date', 'Player'] : availableSplitByOptions).map((entry) => ({ value: entry, label: splitByLabel(entry) }));
+                  const isNutritionChart = contentType === 'Nutrition Calorie Trends' || contentType === 'Nutrition Macro Breakdown';
+                  const isBullpenScriptPanel = contentType === 'Bullpen Script Trend Chart' || contentType === 'Bullpen Script Summary Table';
+                  const effectiveBullpenMetric = payload.metric_options?.some((option) => option.value === config.bullpenMetric)
+                    ? config.bullpenMetric
+                    : payload.selected_metric || config.bullpenMetric || 'velocity';
+                  const filterTokenOptions = (usesForcePlateData || usesOvrSprintData || usesBiomechanicsTable || isBiomechanicsChart || isAssessmentChart || isQuestionnaireChart || isNutritionChart || isBullpenScriptPanel ? ['Dates'] as FilterToken[] : FILTER_TOKENS.filter((entry) => entry !== 'Level' || (isLeagueSchool && !isBaseballPercentile))).map((entry) => ({ value: entry, label: entry }));
+                  const splitByOptions = (usesForcePlateData ? ['Date', 'Test Type', 'Player'] : usesOvrSprintData ? ['Date', 'Exercise', 'Player'] : (usesBiomechanicsTable || isBiomechanicsChart || isAssessmentChart || isQuestionnaireChart || isNutritionChart || isBullpenScriptPanel || isBaseballPercentile) ? ['Date', 'Player'] : availableSplitByOptions).map((entry) => ({ value: entry, label: splitByLabel(entry) }));
                   const isNote = contentType === 'Note Section';
                   const isSummaryTable = contentType === 'Summary Table';
                   const isLocation = contentType === 'Location Plot';
@@ -8545,10 +9197,13 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                           onChange={(next) => setCellConfigs((current) => {
                             const existing = normalizeCellConfig(current[cellId]);
                             const panelType = normalizePanelType(next as PanelType) || 'Summary Table';
-                            const isForceChart = panelType === 'Force Plate Line Chart' || panelType === 'Force Plate Bar Chart';
+                            const isForceChart = panelType === 'Force Plate Line Chart' || panelType === 'Force Plate Bar Chart' || panelType === 'Force Plate Data Table';
                             const isMetricChart = panelType === 'Metric Line Chart' || panelType === 'Metric Bar Chart';
-                            const isOvrChart = panelType === 'OVR Sprint Line Chart' || panelType === 'OVR Sprint Bar Chart';
+                            const isOvrChart = panelType === 'OVR Data Line Chart' || panelType === 'OVR Data Bar Chart' || panelType === 'OVR Data Table';
                             const isAssessmentChartType = panelType === 'Assessment Line Chart' || panelType === 'Assessment Bar Chart';
+                            const isNutritionChartType = panelType === 'Nutrition Calorie Trends' || panelType === 'Nutrition Macro Breakdown';
+                            const isBullpenScriptPanelType = panelType === 'Bullpen Script Trend Chart' || panelType === 'Bullpen Script Summary Table';
+                            const isBaseballPercentileType = panelType === 'Baseball Percentile Tile';
                             return {
                               ...current,
                               [cellId]: {
@@ -8567,10 +9222,23 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                   isOvrChart && !existing.ovrSprintExercises.length && ovrSprintExerciseOptions[0]?.value
                                     ? [ovrSprintExerciseOptions[0].value]
                                     : existing.ovrSprintExercises,
+                                ovrVbtExercises:
+                                  isOvrChart && !existing.ovrVbtExercises.length && ovrVbtExerciseOptions[0]?.value
+                                    ? [ovrVbtExerciseOptions[0].value]
+                                    : existing.ovrVbtExercises,
                                 assessmentFieldId:
                                   isAssessmentChartType && !existing.assessmentFieldId && assessmentFieldOptions[0]?.value
                                     ? assessmentFieldOptions[0].value
                                     : existing.assessmentFieldId,
+                                baseballPercentileMetric:
+                                  isBaseballPercentileType && !existing.baseballPercentileMetric && metricChartOptions[0]?.value
+                                    ? metricChartOptions[0].value
+                                    : existing.baseballPercentileMetric,
+                                filterSelect: isNutritionChartType || isBullpenScriptPanelType
+                                  ? ['Dates']
+                                  : isBaseballPercentileType
+                                    ? Array.from(new Set(['Dates', 'Session Type', 'Pitch Types', ...existing.filterSelect])).filter((token) => token !== 'Level') as FilterToken[]
+                                    : existing.filterSelect,
                               },
                             };
                           })}
@@ -8655,6 +9323,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                         [cellId]: { ...(current[cellId] ?? emptyCell()), percentileSummaryGroupId: next || 'all' },
                                       }))}
                                     />
+                                    <label>Percentile Data From</label>
+                                    <NativeDateInput value={config.percentileComparisonStartDate} max={config.percentileComparisonEndDate || undefined} onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), percentileComparisonStartDate: next } }))} />
+                                    <label>Percentile Data Through</label>
+                                    <NativeDateInput value={config.percentileComparisonEndDate} min={config.percentileComparisonStartDate || undefined} onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), percentileComparisonEndDate: next } }))} />
                                   </>
                                 ) : null}
                               </>
@@ -8679,18 +9351,39 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                         ) : null}
                         {usesOvrSprintData && !isNote ? (
                           <>
-                            <label>Sprint Exercises</label>
-                            <SearchableMultiSelect
-                              options={ovrSprintExerciseOptions}
-                              values={config.ovrSprintExercises}
-                              onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), ovrSprintExercises: next } }))}
+                            <label>OVR Data Type</label>
+                            <SearchableSingleSelect
+                              options={[{ value: 'sprint', label: 'Sprint' }, { value: 'vbt', label: 'VBT' }]}
+                              value={config.ovrDataSource || 'sprint'}
+                              onChange={(next) => setCellConfigs((current) => ({
+                                ...current,
+                                [cellId]: { ...(current[cellId] ?? emptyCell()), ovrDataSource: next === 'vbt' ? 'vbt' : 'sprint' },
+                              }))}
                             />
-                            <span className="portal-muted-text">Charts use the first selected exercise.</span>
+                            <label>{config.ovrDataSource === 'vbt' ? 'VBT Exercises' : 'Sprint Tests'}</label>
+                            <SearchableMultiSelect
+                              options={config.ovrDataSource === 'vbt' ? ovrVbtExerciseOptions : ovrSprintExerciseOptions}
+                              values={config.ovrDataSource === 'vbt' ? config.ovrVbtExercises : config.ovrSprintExercises}
+                              onChange={(next) => setCellConfigs((current) => ({
+                                ...current,
+                                [cellId]: config.ovrDataSource === 'vbt'
+                                  ? { ...(current[cellId] ?? emptyCell()), ovrVbtExercises: next }
+                                  : { ...(current[cellId] ?? emptyCell()), ovrSprintExercises: next },
+                              }))}
+                            />
+                            {contentType !== 'OVR Data Table' ? <span className="portal-muted-text">Each selected test or exercise is displayed as its own chart series.</span> : null}
                             <label>Metric</label>
                             <SearchableSingleSelect
-                              options={[{ value: 'totalTime', label: 'Total Time' }, { value: 'speedMph', label: 'Speed (mph)' }]}
-                              value={config.ovrSprintMetric || 'totalTime'}
-                              onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), ovrSprintMetric: next === 'speedMph' ? 'speedMph' : 'totalTime' } }))}
+                              options={config.ovrDataSource === 'vbt'
+                                ? OVR_VBT_METRIC_OPTIONS
+                                : [{ value: 'totalTime', label: 'Total Time (s)' }, { value: 'speedMph', label: 'Speed (mph)' }]}
+                              value={config.ovrDataSource === 'vbt' ? config.ovrVbtMetric : config.ovrSprintMetric}
+                              onChange={(next) => setCellConfigs((current) => ({
+                                ...current,
+                                [cellId]: config.ovrDataSource === 'vbt'
+                                  ? { ...(current[cellId] ?? emptyCell()), ovrVbtMetric: (OVR_VBT_METRIC_OPTIONS.find((option) => option.value === next)?.value ?? 'avgVelocity') }
+                                  : { ...(current[cellId] ?? emptyCell()), ovrSprintMetric: next === 'speedMph' ? 'speedMph' : 'totalTime' },
+                              }))}
                             />
                           </>
                         ) : null}
@@ -8705,6 +9398,53 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                             percentileGroups={percentileSummaryGroups}
                             setCellConfigs={setCellConfigs}
                           />
+                        ) : null}
+                        {isBaseballPercentile ? (
+                          <>
+                            <label>Baseball Metric</label>
+                            <SearchableSingleSelect
+                              options={metricChartOptions}
+                              value={config.baseballPercentileMetric || metricChartOptions[0]?.value || ''}
+                              onChange={(next) => setCellConfigs((current) => ({
+                                ...current,
+                                [cellId]: { ...(current[cellId] ?? emptyCell()), baseballPercentileMetric: next },
+                              }))}
+                            />
+                            <label>Percentile Comparison</label>
+                            <SearchableSingleSelect
+                              options={[
+                                { value: 'ORG', label: 'Current Team / Organization' },
+                                { value: 'D1', label: 'NCAA Division I' },
+                                { value: 'D2', label: 'NCAA Division II' },
+                                { value: 'D3', label: 'NCAA Division III' },
+                                { value: 'NAIA', label: 'NAIA' },
+                                { value: 'JUCO', label: 'JUCO' },
+                                { value: 'MLB', label: 'MLB' },
+                                { value: 'AAA', label: 'Triple-A (AAA)' },
+                              ]}
+                              value={config.baseballPercentilePool || 'ORG'}
+                              onChange={(next) => setCellConfigs((current) => ({
+                                ...current,
+                                [cellId]: {
+                                  ...(current[cellId] ?? emptyCell()),
+                                  baseballPercentilePool: (['ORG', 'D1', 'D2', 'D3', 'NAIA', 'JUCO', 'MLB', 'AAA'].includes(next) ? next : 'ORG') as CellConfig['baseballPercentilePool'],
+                                },
+                              }))}
+                            />
+                            <label>Percentile Data From</label>
+                            <NativeDateInput
+                              value={config.percentileComparisonStartDate}
+                              max={config.percentileComparisonEndDate || undefined}
+                              onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), percentileComparisonStartDate: next } }))}
+                            />
+                            <label>Percentile Data Through</label>
+                            <NativeDateInput
+                              value={config.percentileComparisonEndDate}
+                              min={config.percentileComparisonStartDate || undefined}
+                              onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), percentileComparisonEndDate: next } }))}
+                            />
+                            <span className="portal-muted-text">The athlete uses the report date range. Rankings default to the last 365 days and use the comparison range above.</span>
+                          </>
                         ) : null}
                         {usesBiomechanicsTable && !isNote ? (
                           <>
@@ -8777,6 +9517,90 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                 }));
                               }}
                             />
+                          </>
+                        ) : null}
+                        {isBullpenScriptPanel ? (
+                          <>
+                            {contentType === 'Bullpen Script Trend Chart' ? (
+                              <>
+                                <label>Trend Metric</label>
+                                <SearchableSingleSelect
+                                  options={(payload.metric_options?.length ? payload.metric_options : [
+                                    { value: 'velocity', label: 'Average Velocity' },
+                                    { value: 'strike', label: 'Strike %' },
+                                    { value: 'two-thirds', label: '2/3%' },
+                                  ])}
+                                  value={effectiveBullpenMetric}
+                                  onChange={(next) => setCellConfigs((current) => ({
+                                    ...current,
+                                    [cellId]: { ...(current[cellId] ?? emptyCell()), bullpenMetric: next || 'velocity' },
+                                  }))}
+                                />
+                                {effectiveBullpenMetric === 'velocity' ? (
+                                  <>
+                                    <label>Velocity View</label>
+                                    <SearchableSingleSelect
+                                      options={[{ value: 'average', label: 'Average' }, { value: 'individual', label: 'Individual Pitches' }]}
+                                      value={config.bullpenVelocityMode || 'average'}
+                                      onChange={(next) => setCellConfigs((current) => ({
+                                        ...current,
+                                        [cellId]: { ...(current[cellId] ?? emptyCell()), bullpenVelocityMode: next === 'individual' ? 'individual' : 'average' },
+                                      }))}
+                                    />
+                                  </>
+                                ) : null}
+                              </>
+                            ) : (
+                              <>
+                                <label>Table Metrics</label>
+                                <SearchableMultiSelect
+                                  options={payload.table_metric_options ?? []}
+                                  values={config.bullpenTableMetrics.length ? config.bullpenTableMetrics : (payload.table_metric_options ?? []).map((option) => option.value)}
+                                  onChange={(next) => setCellConfigs((current) => ({
+                                    ...current,
+                                    [cellId]: { ...(current[cellId] ?? emptyCell()), bullpenTableMetrics: next },
+                                  }))}
+                                />
+                              </>
+                            )}
+                            <label>Script</label>
+                            <SearchableSingleSelect
+                              options={['All', ...(payload.filter_options?.scripts ?? [])].map((value) => ({ value, label: value }))}
+                              value={config.bullpenScript || 'All'}
+                              onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), bullpenScript: next || 'All' } }))}
+                            />
+                            <label>Pitch Type</label>
+                            <SearchableSingleSelect
+                              options={['All', ...(payload.filter_options?.pitchTypes ?? [])].map((value) => ({ value, label: value }))}
+                              value={config.bullpenPitchType || 'All'}
+                              onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), bullpenPitchType: next || 'All' } }))}
+                            />
+                            <label>Ball Type</label>
+                            <SearchableSingleSelect
+                              options={['All', ...(payload.filter_options?.ballTypes ?? [])].map((value) => ({ value, label: value }))}
+                              value={config.bullpenBallType || 'All'}
+                              onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), bullpenBallType: next || 'All' } }))}
+                            />
+                            {(payload.filter_options?.drills?.length ?? 0) > 0 ? (
+                              <>
+                                <label>Drill</label>
+                                <SearchableSingleSelect
+                                  options={['All', ...(payload.filter_options?.drills ?? [])].map((value) => ({ value, label: value }))}
+                                  value={config.bullpenDrill || 'All'}
+                                  onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), bullpenDrill: next || 'All' } }))}
+                                />
+                              </>
+                            ) : null}
+                            {(payload.filter_options?.ballWeights?.length ?? 0) > 0 ? (
+                              <>
+                                <label>Ball Weight</label>
+                                <SearchableSingleSelect
+                                  options={['All', ...(payload.filter_options?.ballWeights ?? [])].map((value) => ({ value, label: value }))}
+                                  value={config.bullpenBallWeight || 'All'}
+                                  onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), bullpenBallWeight: next || 'All' } }))}
+                                />
+                              </>
+                            ) : null}
                           </>
                         ) : null}
                         {(contentType === 'Metric Line Chart' || contentType === 'Metric Bar Chart') && reportType !== 'Force Plates' ? (
@@ -8892,6 +9716,14 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                 }))
                               }
                             />
+                            {reportType !== 'Catching' ? (
+                              <>
+                                <label>Percentile Data From</label>
+                                <NativeDateInput value={config.percentileComparisonStartDate} max={config.percentileComparisonEndDate || undefined} onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), percentileComparisonStartDate: next } }))} />
+                                <label>Percentile Data Through</label>
+                                <NativeDateInput value={config.percentileComparisonEndDate} min={config.percentileComparisonStartDate || undefined} onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), percentileComparisonEndDate: next } }))} />
+                              </>
+                            ) : null}
                           </>
                         ) : null}
                         {contentType === 'Release Plot' ? (
@@ -10889,6 +11721,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                               player={inheritedPlayer || resolvedInheritedName || config.player}
                               testType={config.forcePlateTestType || 'All'}
                               groupId={config.percentileSummaryGroupId || 'all'}
+                              comparisonStartDate={config.percentileComparisonStartDate}
+                              comparisonEndDate={config.percentileComparisonEndDate}
                               kind={contentType === 'Metric Bar Chart' ? 'bar' : 'line'}
                               benchmarkValue={config.chartBenchmarkValue}
                               benchmarkLabel={config.chartBenchmarkLabel}
@@ -10926,6 +11760,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                             player={inheritedPlayer || resolvedInheritedName || config.player}
                             testType={config.forcePlateTestType || 'All'}
                             groupId={config.percentileSummaryGroupId || 'all'}
+                            comparisonStartDate={config.percentileComparisonStartDate}
+                            comparisonEndDate={config.percentileComparisonEndDate}
                             kind={contentType === 'Force Plate Bar Chart' ? 'bar' : 'line'}
                             benchmarkValue={config.chartBenchmarkValue}
                             benchmarkLabel={config.chartBenchmarkLabel}
@@ -10943,12 +11779,15 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                             onHover={setChartHover}
                           />
                         )
-                      ) : contentType === 'OVR Sprint Line Chart' || contentType === 'OVR Sprint Bar Chart' ? (
-                        <OvrSprintReportChart
+                      ) : contentType === 'OVR Data Line Chart' || contentType === 'OVR Data Bar Chart' ? (
+                        <OvrDataReportChart
                           points={chartPoints as unknown as Array<Record<string, unknown>>}
-                          exercise={config.ovrSprintExercises[0] ?? ''}
-                          metric={config.ovrSprintMetric || 'totalTime'}
-                          kind={contentType === 'OVR Sprint Bar Chart' ? 'bar' : 'line'}
+                          source={config.ovrDataSource || 'sprint'}
+                          exercises={config.ovrDataSource === 'vbt' ? config.ovrVbtExercises : config.ovrSprintExercises}
+                          metric={config.ovrDataSource === 'vbt' ? config.ovrVbtMetric : config.ovrSprintMetric}
+                          metricLabel={payload.metric_label || payload.metric_options?.find((option) => option.value === payload.selected_metric)?.label || 'Metric'}
+                          metricUnit={payload.metric_unit}
+                          kind={contentType === 'OVR Data Bar Chart' ? 'bar' : 'line'}
                           benchmarkValue={config.chartBenchmarkValue}
                           benchmarkLabel={config.chartBenchmarkLabel}
                           onHover={setChartHover}
@@ -10971,7 +11810,65 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                           benchmarkLabel={config.chartBenchmarkLabel}
                           onHover={setChartHover}
                         />
-                      ) : contentType === 'Percentile Summary' ? (
+                      ) : contentType === 'Nutrition Calorie Trends' ? (
+                        <NutritionCalorieReportChart
+                          points={chartPoints as unknown as Array<Record<string, unknown>>}
+                          onHover={setChartHover}
+                        />
+                      ) : contentType === 'Nutrition Macro Breakdown' ? (
+                        <NutritionMacroReportChart
+                          points={chartPoints as unknown as Array<Record<string, unknown>>}
+                          onHover={setChartHover}
+                        />
+                      ) : contentType === 'Bullpen Script Trend Chart' ? (
+                        <BullpenScriptReportChart
+                          points={chartPoints as unknown as Array<Record<string, unknown>>}
+                          metric={effectiveBullpenMetric}
+                          metricLabel={payload.metric_options?.find((option) => option.value === effectiveBullpenMetric)?.label || (effectiveBullpenMetric === 'strike' ? 'Strike %' : effectiveBullpenMetric === 'two-thirds' ? '2/3%' : 'Average Velocity')}
+                          velocityMode={config.bullpenVelocityMode || 'average'}
+                          onHover={setChartHover}
+                        />
+                      ) : contentType === 'Baseball Percentile Tile' ? (
+                        payload.baseball_percentile ? (
+                          (() => {
+                            const presentation = baseballPercentileMetricPresentation(
+                              payload.baseball_percentile!.metric,
+                              payload.baseball_percentile!.metricLabel,
+                              payload.baseball_percentile!.value
+                            );
+                            return <div className="portal-custom-reports-kpi-grid">
+                              <div className="portal-custom-reports-kpi-card">
+                              <div className="portal-custom-reports-kpi-label-row">
+                                <div className="portal-custom-reports-kpi-title-stack">
+                                  <span className="portal-custom-reports-kpi-metric-title" title={presentation.label}>
+                                    {presentation.label}
+                                  </span>
+                                </div>
+                                {payload.baseball_percentile.percentile != null ? (
+                                  <span
+                                    className={`portal-custom-reports-percentile-badge ${percentileTierClassName(payload.baseball_percentile.percentile)}`}
+                                    title={`Compared with ${payload.baseball_percentile.sampleSize} athlete${payload.baseball_percentile.sampleSize === 1 ? '' : 's'} using ${payload.baseball_percentile.comparisonWindow || 'the selected comparison range'} of ${payload.baseball_percentile.poolLabel} data`}
+                                  >
+                                    {ordinalLabel(payload.baseball_percentile.percentile)} percentile
+                                  </span>
+                                ) : (
+                                  <span className="portal-custom-reports-percentile-badge portal-custom-reports-percentile-unavailable">No rank</span>
+                                )}
+                              </div>
+                              <strong className="portal-custom-reports-kpi-value-row">
+                                <span className="portal-custom-reports-kpi-value">{presentation.value}</span>
+                                {presentation.unit ? <small title={presentation.unit}>{presentation.unit}</small> : null}
+                              </strong>
+                              <small className="portal-muted-text">
+                                vs. {payload.baseball_percentile.poolLabel} · {payload.baseball_percentile.comparisonWindow || 'last 365 days'} · {payload.baseball_percentile.sampleSize} athlete{payload.baseball_percentile.sampleSize === 1 ? '' : 's'}
+                              </small>
+                              </div>
+                            </div>;
+                          })()
+                        ) : (
+                          <p className="portal-muted-text">No qualifying percentile data.</p>
+                        )
+                      ) : contentType === 'Performance Percentile Summary' ? (
                         <PercentileSummaryPanel
                           player={inheritedPlayer || resolvedInheritedName || config.player}
                           startDate={useGlobalDates ? globalStartDate : config.dateStart || globalStartDate}
@@ -10987,6 +11884,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                           biomechanicsPitchType={config.percentileSummaryBiomechanicsPitchType || 'All'}
                           biomechanicsForceMode={config.biomechanicsForceMode || 'force'}
                           groupId={config.percentileSummaryGroupId || 'all'}
+                          comparisonStartDate={config.percentileComparisonStartDate}
+                          comparisonEndDate={config.percentileComparisonEndDate}
                           compactMetricLabels={!(config.showControls ?? true)}
                           forcePlateMetricOptions={forcePlateMetricOptions}
                           onGroupsLoaded={setPercentileSummaryGroups}
@@ -10999,11 +11898,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                           chartMode={config.biomechanicsChartMode || 'Force'}
                           forceMode={config.biomechanicsForceMode || 'force'}
                         />
-                      ) : contentType === 'Summary Table' || contentType === 'Biomechanics Table' ? (
+                      ) : contentType === 'Summary Table' || contentType === 'Biomechanics Table' || contentType === 'Bullpen Script Summary Table' || contentType === 'OVR Data Table' || contentType === 'Force Plate Data Table' ? (
                         <div className={`portal-custom-reports-table-wrap${useCompactSummaryTable ? ' portal-custom-reports-table-wrap--compact' : ''}`}>
                           {usesBiomechanicsTable && payload.biomechanics_percentiles ? (
                             <div className="portal-muted-text" style={{ padding: '0.35rem 0.55rem', fontSize: '0.72rem' }}>
-                              Percentiles vs. full-history data from {payload.biomechanics_percentiles.selectedGroupLabel}
+                              Percentiles vs. {payload.biomechanics_percentiles.comparisonWindow || 'last 365 days'} from {payload.biomechanics_percentiles.selectedGroupLabel}
                             </div>
                           ) : null}
                           <table className={`portal-table${useCompactSummaryTable ? ' portal-table--compact' : ''}`}>
@@ -11264,20 +12163,25 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                         batSpeedColorBy: config.batSpeedColorBy,
                         sprayView: config.sprayView,
                         biomechanicsPercentiles: payload.biomechanics_percentiles,
-                        forcePlatePercentileConfig: normalizePanelType(config.panelType) === 'Percentile Summary'
+                        baseballPercentile: payload.baseball_percentile,
+                        forcePlatePercentileConfig: normalizePanelType(config.panelType) === 'Performance Percentile Summary'
                           ? {
                               player: panelPlayer,
                               groupId: config.percentileSummaryGroupId || 'all',
                               testType: config.percentileSummaryForceTestType || 'All',
+                              comparisonStartDate: config.percentileComparisonStartDate,
+                              comparisonEndDate: config.percentileComparisonEndDate,
                               metrics: percentileForceMetrics,
                             }
                           : undefined,
-                        biomechanicsPercentileConfig: normalizePanelType(config.panelType) === 'Percentile Summary'
+                        biomechanicsPercentileConfig: normalizePanelType(config.panelType) === 'Performance Percentile Summary'
                           ? {
                               player: panelPlayer,
                               groupId: config.percentileSummaryGroupId || 'all',
                               forceMode: config.biomechanicsForceMode || 'force',
                               pitchType: config.percentileSummaryBiomechanicsPitchType || 'All',
+                              comparisonStartDate: config.percentileComparisonStartDate,
+                              comparisonEndDate: config.percentileComparisonEndDate,
                               metrics: config.percentileSummaryBiomechanicsMetrics.map((metric) => ({
                                 value: metric,
                                 label: biomechanicsMetricLabel(metric),

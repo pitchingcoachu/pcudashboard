@@ -7,6 +7,7 @@ import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-
 import { isCrossSchoolPlayerSelection } from '../../../../../lib/cross-school-player-data';
 import { fetchDashboardGroupSplit } from '../../../../../lib/dashboard-group-split';
 import { resolveSchoolScopedOrganizationId } from '../../../../../lib/programming-scope';
+import { resolvePercentileComparisonWindow } from '../../../../../lib/percentile-window';
 
 export const maxDuration = 300;
 
@@ -245,8 +246,13 @@ export async function GET(request: Request) {
   const level = inputUrl.searchParams.get('level')?.trim() ?? '';
   const tableMode = inputUrl.searchParams.get('table_mode')?.trim() ?? '';
   const customColumns = inputUrl.searchParams.get('custom_columns')?.trim() ?? '';
-  const startDate = inputUrl.searchParams.get('start_date')?.trim() ?? '';
-  const endDate = inputUrl.searchParams.get('end_date')?.trim() ?? '';
+  let startDate = inputUrl.searchParams.get('start_date')?.trim() ?? '';
+  let endDate = inputUrl.searchParams.get('end_date')?.trim() ?? '';
+  if (requestedPercentileBaseline) {
+    const comparisonWindow = resolvePercentileComparisonWindow(inputUrl.searchParams);
+    startDate = comparisonWindow.startDate;
+    endDate = comparisonWindow.endDate;
+  }
   const teamType = inputUrl.searchParams.get('team_type')?.trim() ?? '';
   const sessionType = inputUrl.searchParams.get('session_type')?.trim() ?? '';
   const oppPitcher = inputUrl.searchParams.get('opp_pitcher')?.trim() ?? '';
@@ -316,6 +322,14 @@ export async function GET(request: Request) {
   const url = new URL(`${apiBase}/v1/hitting/overview`);
   url.searchParams.set('school_code', schoolCode);
   for (const key of pass) {
+    if (key === 'start_date' && requestedPercentileBaseline) {
+      url.searchParams.set('start_date', startDate);
+      continue;
+    }
+    if (key === 'end_date' && requestedPercentileBaseline) {
+      url.searchParams.set('end_date', endDate);
+      continue;
+    }
     if (key === 'hitter' && scopedHitter) {
       url.searchParams.set('hitter', scopedHitter);
       continue;
