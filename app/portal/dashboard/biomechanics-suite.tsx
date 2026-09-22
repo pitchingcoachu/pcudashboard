@@ -98,6 +98,9 @@ type BiomechanicsPercentilePayload = {
   groups?: Array<{ id: string; label: string }>;
   selectedGroupId?: string;
   selectedGroupLabel?: string;
+  comparisonWindow?: string;
+  comparisonDateWindow?: { startDate: string; endDate: string };
+  selectedWindow?: { startDate: string | null; endDate: string | null };
   rows?: Record<string, Record<string, {
     value: number;
     percentile: number | null;

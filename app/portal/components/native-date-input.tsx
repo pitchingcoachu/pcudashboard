@@ -9,13 +9,15 @@ type NativeDateInputProps = {
   style?: CSSProperties;
   ariaLabel?: string;
   disabled?: boolean;
+  min?: string;
+  max?: string;
 };
 
 type DateInputElement = HTMLInputElement & {
   showPicker?: () => void;
 };
 
-export default function NativeDateInput({ value, onChange, className, style, ariaLabel, disabled }: NativeDateInputProps) {
+export default function NativeDateInput({ value, onChange, className, style, ariaLabel, disabled, min, max }: NativeDateInputProps) {
   const inputRef = useRef<DateInputElement | null>(null);
 
   function openPicker() {
@@ -54,6 +56,8 @@ export default function NativeDateInput({ value, onChange, className, style, ari
       type="date"
       value={value}
       disabled={disabled}
+      min={min}
+      max={max}
       aria-label={ariaLabel}
       className={className}
       style={style}
