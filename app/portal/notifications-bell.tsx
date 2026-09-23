@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { setUnreadNotificationCount, useUnreadNotificationCount } from './use-unread-counts';
 
 type PortalNotification = {
   id: number;
@@ -45,42 +46,34 @@ function roleLabel(value: string | null): string {
 export default function PortalNotificationsBell() {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [unreadCount, setUnreadCount] = useState(0);
+  const unreadCount = useUnreadNotificationCount();
   const [notifications, setNotifications] = useState<PortalNotification[]>([]);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
   const visibleCount = useMemo(() => (unreadCount > 99 ? '99+' : String(unreadCount)), [unreadCount]);
 
-  useEffect(() => {
-    let active = true;
-    async function load() {
-      setLoading(true);
-      try {
-        const response = await fetch('/api/portal/notifications?limit=20', { cache: 'no-store' });
-        if (!response.ok) throw new Error('Failed to load notifications.');
-        const payload = (await response.json().catch(() => ({}))) as NotificationsPayload;
-        if (!active) return;
-        setNotifications(Array.isArray(payload.notifications) ? payload.notifications : []);
-        setUnreadCount(Number(payload.unreadCount ?? 0) || 0);
-      } catch {
-        if (!active) return;
-        setUnreadCount(0);
-        setNotifications([]);
-      } finally {
-        if (active) setLoading(false);
-      }
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const response = await fetch('/api/portal/notifications?limit=20', { cache: 'no-store' });
+      if (!response.ok) throw new Error('Failed to load notifications.');
+      const payload = (await response.json().catch(() => ({}))) as NotificationsPayload;
+      setNotifications(Array.isArray(payload.notifications) ? payload.notifications : []);
+      setUnreadNotificationCount(Number(payload.unreadCount ?? 0) || 0);
+    } catch {
+      setNotifications([]);
+    } finally {
+      setLoading(false);
     }
-    void load();
-    const interval = window.setInterval(load, 60_000);
-    return () => {
-      active = false;
-      window.clearInterval(interval);
-    };
   }, []);
+
+  useEffect(() => {
+    if (open) void load();
+  }, [open, load]);
 
   function markAllRead() {
     if (unreadCount <= 0) return;
-    setUnreadCount(0);
+    setUnreadNotificationCount(0);
     setNotifications((current) => current.map((item) => ({ ...item, read: true })));
     fetch('/api/portal/notifications', {
       method: 'POST',
@@ -91,7 +84,7 @@ export default function PortalNotificationsBell() {
 
   function markOneRead(id: number) {
     setNotifications((current) => current.map((item) => (item.id === id ? { ...item, read: true } : item)));
-    setUnreadCount((current) => Math.max(0, current - 1));
+    setUnreadNotificationCount(unreadCount - 1);
     fetch('/api/portal/notifications', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

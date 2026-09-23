@@ -7,6 +7,7 @@ import { getBiomechanicsPitchOwnerName, getBiomechanicsPitchVideo } from '../../
 import { getObjectFromR2 } from '../../../../../../lib/biomechanics-storage';
 import { resolveProgrammingOrganizationId, resolveSchoolScopedOrganizationId } from '../../../../../../lib/programming-scope';
 import { getPlayerForUser } from '../../../../../../lib/training-db';
+import { createSignedR2DownloadUrl, signedR2Redirect } from '../../../../../../lib/r2-signed-download';
 
 function asyncIterableToStream(iterable: AsyncIterable<Uint8Array>): ReadableStream<Uint8Array> {
   const iterator = iterable[Symbol.asyncIterator]();
@@ -94,6 +95,9 @@ export async function GET(
   }
   if (session.role === 'player' && !video) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   if (!video) return NextResponse.json({ error: 'Video not found.' }, { status: 404 });
+
+  const signedUrl = await createSignedR2DownloadUrl({ key: video.r2Key, contentType: video.contentType || 'video/mp4' });
+  if (signedUrl) return signedR2Redirect(signedUrl);
 
   const object = await getObjectFromR2(video.r2Key);
   if (!object) return NextResponse.json({ error: 'Video file is not available.' }, { status: 404 });

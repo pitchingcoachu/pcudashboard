@@ -5,6 +5,7 @@ import {
   createGroupConversation,
   findActiveMessageUserByEmail,
   findOrCreateOneToOneConversation,
+  getUnreadMessageCountForUser,
   listConversationsForUser,
   listMessageablePlayersForOrganization,
   listMessageableUsersAcrossOrganizations,
@@ -26,6 +27,11 @@ async function requireSession(request: Request) {
 export async function GET(request: Request) {
   const allowed = await requireSession(request);
   if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
+  const url = new URL(request.url);
+  if (url.searchParams.get('unreadOnly') === '1') {
+    const unreadCount = await getUnreadMessageCountForUser(allowed.session.userId ?? 0);
+    return NextResponse.json({ unreadCount });
+  }
   const conversations = await listConversationsForUser({
     userId: allowed.session.userId ?? 0,
   });

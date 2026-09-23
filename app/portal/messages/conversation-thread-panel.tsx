@@ -7,8 +7,9 @@ import { MessagesAvatar } from './messages-avatar';
 import { MessageBubble } from './message-bubble';
 import { MessageComposer } from './message-composer';
 import { ManageMembersModal } from './manage-members-modal';
+import { refreshUnreadMessageCount } from '../use-unread-counts';
 
-const POLL_INTERVAL_MS = 7000;
+const POLL_INTERVAL_MS = 10_000;
 const MAX_GROUP_PHOTO_BYTES = 2_000_000;
 
 export function ConversationThreadPanel({
@@ -47,9 +48,14 @@ export function ConversationThreadPanel({
   useEffect(() => {
     setIsLoading(true);
     fetchMessages();
-    markRead(String(conversationId)).catch(() => {});
-    const interval = setInterval(fetchMessages, POLL_INTERVAL_MS);
-    return () => clearInterval(interval);
+    markRead(String(conversationId)).then(() => refreshUnreadMessageCount()).catch(() => {});
+    const poll = () => { if (document.visibilityState === 'visible') void fetchMessages(); };
+    const interval = setInterval(poll, POLL_INTERVAL_MS);
+    document.addEventListener('visibilitychange', poll);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', poll);
+    };
   }, [conversationId, fetchMessages]);
 
   useEffect(() => {

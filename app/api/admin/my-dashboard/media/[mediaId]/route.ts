@@ -4,6 +4,7 @@ import { getSessionFromRequest } from '../../../../../../lib/auth';
 import { resolvePlayerContentOrganizationId } from '../../../../../../lib/player-content-scope';
 import { getCoachDashboardMedia } from '../../../../../../lib/coach-dashboard-db';
 import { getObjectFromR2 } from '../../../../../../lib/biomechanics-storage';
+import { createSignedR2DownloadUrl, signedR2Redirect } from '../../../../../../lib/r2-signed-download';
 
 function toWebStream(body: AsyncIterable<Uint8Array>): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
@@ -25,6 +26,9 @@ export async function GET(request: Request, context: { params: Promise<{ mediaId
   const { mediaId } = await context.params;
   const media = await getCoachDashboardMedia({ organizationId, ownerUserId:session.userId, id:Number(mediaId) });
   if (!media) return NextResponse.json({ error:'Media not found.' }, { status:404 });
+  const contentDisposition = `inline; filename="${media.fileName.replace(/["\r\n]/g, '')}"`;
+  const signedUrl = await createSignedR2DownloadUrl({ key: media.r2Key, contentType: media.contentType, contentDisposition });
+  if (signedUrl) return signedR2Redirect(signedUrl);
   const range=request.headers.get('range');
   const object = await getObjectFromR2(media.r2Key,range);
   if (!object) return NextResponse.json({ error:'File not found.' }, { status:404 });
@@ -35,7 +39,7 @@ export async function GET(request: Request, context: { params: Promise<{ mediaId
       ...(object.contentLength ? { 'Content-Length': String(object.contentLength) } : {}),
       'Accept-Ranges':'bytes',
       ...(object.contentRange?{'Content-Range':object.contentRange}:{}),
-      'Content-Disposition': `inline; filename="${media.fileName.replace(/["\r\n]/g, '')}"`,
+      'Content-Disposition': contentDisposition,
       'Cache-Control': 'private, max-age=300',
     },
   });

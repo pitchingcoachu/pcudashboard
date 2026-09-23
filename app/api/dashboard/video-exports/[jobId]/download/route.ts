@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { getSessionFromRequest } from '../../../../../../lib/auth';
 import { getObjectFromR2 } from '../../../../../../lib/biomechanics-storage';
 import { getVideoExportJobForUser } from '../../../../../../lib/training-db';
+import { createSignedR2DownloadUrl, signedR2Redirect } from '../../../../../../lib/r2-signed-download';
 
 function asyncIterableToStream(iterable: AsyncIterable<Uint8Array>): ReadableStream<Uint8Array> {
   const iterator = iterable[Symbol.asyncIterator]();
@@ -39,10 +40,17 @@ export async function GET(request: Request, { params }: { params: Promise<{ jobI
     return NextResponse.json({ error: 'Export is not ready yet.' }, { status: 409 });
   }
 
+  const safeName = job.name.replace(/[^a-zA-Z0-9 ._-]+/g, '-').trim() || 'video-export';
+  const signedUrl = await createSignedR2DownloadUrl({
+    key: job.r2Key,
+    contentType: 'video/mp4',
+    contentDisposition: `attachment; filename="${safeName}.mp4"`,
+  });
+  if (signedUrl) return signedR2Redirect(signedUrl);
+
   const object = await getObjectFromR2(job.r2Key);
   if (!object) return NextResponse.json({ error: 'Export file is not available.' }, { status: 404 });
 
-  const safeName = job.name.replace(/[^a-zA-Z0-9 ._-]+/g, '-').trim() || 'video-export';
   const headers = new Headers();
   headers.set('Content-Type', 'video/mp4');
   headers.set('Content-Disposition', `attachment; filename="${safeName}.mp4"`);

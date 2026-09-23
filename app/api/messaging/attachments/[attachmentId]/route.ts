@@ -6,6 +6,7 @@ import { getR2Bucket, getR2Client } from '../../../../../lib/biomechanics-storag
 import { getMessageAttachment, isConversationParticipant } from '../../../../../lib/messaging-db';
 
 import { messageAttachmentDisposition, normalizeMessageContentType } from '../../../../../lib/message-attachments';
+import { createSignedR2DownloadUrl, signedR2Redirect } from '../../../../../lib/r2-signed-download';
 
 export async function GET(request: Request, context: { params: Promise<{ attachmentId: string }> }) {
   const cookieStore = await cookies();
@@ -28,6 +29,11 @@ export async function GET(request: Request, context: { params: Promise<{ attachm
   if (!client) return NextResponse.json({ error: 'Storage not configured.' }, { status: 503 });
   const bucket = getR2Bucket();
   const rangeHeader = request.headers.get('range');
+  const contentType = normalizeMessageContentType(attachment.fileName, attachment.contentType);
+  const contentDisposition = messageAttachmentDisposition(attachment.fileName, contentType);
+
+  const signedUrl = await createSignedR2DownloadUrl({ key: attachment.r2Key, contentType, contentDisposition });
+  if (signedUrl) return signedR2Redirect(signedUrl);
 
   try {
     const cmd = new GetObjectCommand({
@@ -39,12 +45,11 @@ export async function GET(request: Request, context: { params: Promise<{ attachm
     if (!response.Body) return NextResponse.json({ error: 'Empty response from storage.' }, { status: 502 });
 
     const headers = new Headers();
-    const contentType = normalizeMessageContentType(attachment.fileName, attachment.contentType);
     headers.set('Content-Type', contentType);
     headers.set('X-Content-Type-Options', 'nosniff');
     headers.set('Accept-Ranges', 'bytes');
     headers.set('Cache-Control', 'private, max-age=300');
-    headers.set('Content-Disposition', messageAttachmentDisposition(attachment.fileName, contentType));
+    headers.set('Content-Disposition', contentDisposition);
     if (response.ContentLength) headers.set('Content-Length', String(response.ContentLength));
     if (response.ContentRange) headers.set('Content-Range', response.ContentRange);
 

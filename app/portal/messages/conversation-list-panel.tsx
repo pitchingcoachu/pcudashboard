@@ -12,7 +12,7 @@ import { conversationTitle, conversationPhoto, relativeTime } from './messages-h
 import { MessagesAvatar } from './messages-avatar';
 import { MessagesContextMenu, type ContextMenuItem } from './messages-context-menu';
 
-const POLL_INTERVAL_MS = 10000;
+const POLL_INTERVAL_MS = 30_000;
 
 export function ConversationListPanel({
   currentUserId,
@@ -46,8 +46,13 @@ export function ConversationListPanel({
 
   useEffect(() => {
     load();
-    const interval = setInterval(load, POLL_INTERVAL_MS);
-    return () => clearInterval(interval);
+    const poll = () => { if (document.visibilityState === 'visible') void load(); };
+    const interval = setInterval(poll, POLL_INTERVAL_MS);
+    document.addEventListener('visibilitychange', poll);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', poll);
+    };
   }, [load]);
 
   function toggleSection(title: string) {

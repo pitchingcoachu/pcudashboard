@@ -1,7 +1,7 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
-import { listNotificationsForUser, markNotificationsReadForUser } from '../../../../lib/training-db';
+import { getUnreadNotificationCount, listNotificationsForUser, markNotificationsReadForUser } from '../../../../lib/training-db';
 
 export async function GET(request: Request) {
   const cookieStore = await cookies();
@@ -12,6 +12,9 @@ export async function GET(request: Request) {
   if (!Number.isFinite(userId) || userId <= 0) return NextResponse.json({ notifications: [], unreadCount: 0 });
 
   const url = new URL(request.url);
+  if (url.searchParams.get('unreadOnly') === '1') {
+    return NextResponse.json({ unreadCount: await getUnreadNotificationCount(userId) });
+  }
   const limit = Number(url.searchParams.get('limit') ?? 20);
   const payload = await listNotificationsForUser({ userId, limit });
   return NextResponse.json(payload);

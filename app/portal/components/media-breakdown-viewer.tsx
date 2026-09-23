@@ -815,6 +815,7 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
               ref={videoRef}
               className="portal-media-breakdown-video"
               src={url}
+              crossOrigin="anonymous"
               playsInline
               preload="auto"
               loop={loop}

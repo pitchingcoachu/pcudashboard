@@ -1,6 +1,7 @@
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { NextResponse } from 'next/server';
 import { getR2Bucket, getR2Client } from '../../../../lib/biomechanics-storage';
+import { createSignedR2DownloadUrl, signedR2Redirect } from '../../../../lib/r2-signed-download';
 
 function contentTypeFromKey(key: string): string {
   if (key.toLowerCase().endsWith('.mov')) return 'video/quicktime';
@@ -26,6 +27,9 @@ export async function GET(request: Request) {
   if (!/^exercise-media\/org-\d+\/[a-f0-9-]+\.(mp4|m4v|mov|webm)$/i.test(key)) {
     return NextResponse.json({ error: 'Video not found.' }, { status: 404 });
   }
+
+  const signedUrl = await createSignedR2DownloadUrl({ key, contentType: contentTypeFromKey(key), expiresIn: 60 * 60 });
+  if (signedUrl) return signedR2Redirect(signedUrl);
 
   const range = request.headers.get('range');
   const headers = new Headers({

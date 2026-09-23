@@ -5,6 +5,7 @@ import { getObjectFromR2 } from '../../../../../lib/biomechanics-storage';
 import { getMotionCaptureVideoForAccess } from '../../../../../lib/motion-capture-db';
 import { canManagePlayer } from '../../../../../lib/portal-access';
 import { resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
+import { createSignedR2DownloadUrl, signedR2Redirect } from '../../../../../lib/r2-signed-download';
 
 function asyncIterableToStream(iterable: AsyncIterable<Uint8Array>): ReadableStream<Uint8Array> {
   const iterator = iterable[Symbol.asyncIterator]();
@@ -40,6 +41,9 @@ export async function GET(
   if (!video) return NextResponse.json({ error: 'Video not found.' }, { status: 404 });
   const allowed = await canManagePlayer(session, video.playerId);
   if (!allowed) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
+  const signedUrl = await createSignedR2DownloadUrl({ key: video.r2Key, contentType: video.contentType });
+  if (signedUrl) return signedR2Redirect(signedUrl);
 
   const object = await getObjectFromR2(video.r2Key);
   if (!object) return NextResponse.json({ error: 'Video file is not available.' }, { status: 404 });

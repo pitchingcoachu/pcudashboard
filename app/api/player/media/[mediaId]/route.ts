@@ -8,6 +8,7 @@ import { getR2Client, getR2Bucket } from '../../../../../lib/biomechanics-storag
 import { resolvePlayerContentOrganizationId } from '../../../../../lib/player-content-scope';
 import { getPlayerMedia } from '../../../../../lib/training-db';
 import { GetObjectCommand } from '@aws-sdk/client-s3';
+import { createSignedR2DownloadUrl, signedR2Redirect } from '../../../../../lib/r2-signed-download';
 
 function localRoot(): string {
   return path.join(process.cwd(), '.motion-capture-uploads');
@@ -102,6 +103,13 @@ export async function GET(request: Request, context: { params: Promise<{ mediaId
     const stream = nodeToWebStream(createReadStream(filePath));
     return new Response(stream, { status: 200, headers });
   }
+
+  const signedUrl = await createSignedR2DownloadUrl({
+    key: media.r2Key,
+    contentType,
+    contentDisposition: `inline; filename="${media.fileName.replace(/["\r\n]/g, '')}"`,
+  });
+  if (signedUrl) return signedR2Redirect(signedUrl);
 
   // ── R2 serving ───────────────────────────────────────────────────────────
   const client = getR2Client();

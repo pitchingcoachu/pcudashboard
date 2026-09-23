@@ -6263,6 +6263,17 @@ export async function listNotificationsForUser(input: {
   return { notifications, unreadCount: Number(unreadResult.rows[0]?.count ?? '0') || 0 };
 }
 
+export async function getUnreadNotificationCount(userId: number): Promise<number> {
+  if (!isDatabaseConfigured() || !Number.isFinite(userId) || userId <= 0) return 0;
+  await ensureTrainingDbReady();
+  await ensureNotificationsTable();
+  const result = await getDbPool().query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count FROM notifications WHERE recipient_user_id = $1 AND read_at IS NULL`,
+    [userId]
+  );
+  return Number(result.rows[0]?.count ?? '0') || 0;
+}
+
 /**
  * Notify every coach/admin at a player's school about new note/media activity,
  * using the explicit user_school_access grant table -- never organization_id,

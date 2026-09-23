@@ -323,6 +323,24 @@ export async function listConversationsForUser(input: {
   }));
 }
 
+export async function getUnreadMessageCountForUser(userId: number): Promise<number> {
+  await ensureMessagingTablesReady();
+  const result = await getDbPool().query<{ count: string }>(
+    `
+      SELECT COUNT(m.id)::text AS count
+      FROM conversation_participants cp
+      JOIN conversations c ON c.id = cp.conversation_id
+      JOIN messages m ON m.conversation_id = c.id
+      WHERE cp.user_id = $1
+        AND (cp.hidden_at IS NULL OR c.updated_at > cp.hidden_at)
+        AND m.created_at > cp.last_read_at
+        AND m.sender_user_id IS DISTINCT FROM $1
+    `,
+    [userId]
+  );
+  return Number(result.rows[0]?.count ?? '0') || 0;
+}
+
 export async function getConversationParticipantIds(conversationId: number): Promise<number[]> {
   await ensureMessagingTablesReady();
   const pool = getDbPool();

@@ -1,34 +1,12 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
-import { listConversations } from '../../lib/messages-client';
-
-const POLL_INTERVAL_MS = 15000;
+import { useMemo } from 'react';
+import { useUnreadMessageCount } from './use-unread-counts';
 
 export default function PortalMessagesNavButton() {
-  const [unreadCount, setUnreadCount] = useState(0);
+  const unreadCount = useUnreadMessageCount();
   const visibleCount = useMemo(() => (unreadCount > 99 ? '99+' : String(unreadCount)), [unreadCount]);
-
-  useEffect(() => {
-    let active = true;
-    async function load() {
-      try {
-        const response = await listConversations();
-        if (!active) return;
-        const total = (response.conversations ?? []).reduce((sum, c) => sum + (c.unreadCount || 0), 0);
-        setUnreadCount(total);
-      } catch {
-        // Best-effort -- the next poll will catch up.
-      }
-    }
-    void load();
-    const interval = window.setInterval(load, POLL_INTERVAL_MS);
-    return () => {
-      active = false;
-      window.clearInterval(interval);
-    };
-  }, []);
 
   return (
     <Link href="/portal/messages" className="portal-notifications-btn" aria-label={`Messages${unreadCount ? `, ${unreadCount} unread` : ''}`}>

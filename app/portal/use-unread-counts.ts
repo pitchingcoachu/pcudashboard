@@ -1,59 +1,88 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { listConversations } from '../../lib/messages-client';
+import { useSyncExternalStore } from 'react';
 
-const POLL_INTERVAL_MS = 15000;
+type CounterStore = {
+  endpoint: string;
+  value: number;
+  subscribers: Set<() => void>;
+  timer: number | null;
+  request: Promise<void> | null;
+  visibilityHandler: (() => void) | null;
+};
+
+const POLL_INTERVAL_MS = 60_000;
+
+function createCounterStore(endpoint: string): CounterStore {
+  return { endpoint, value: 0, subscribers: new Set(), timer: null, request: null, visibilityHandler: null };
+}
+
+const messageStore = createCounterStore('/api/messaging/conversations?unreadOnly=1');
+const notificationStore = createCounterStore('/api/portal/notifications?unreadOnly=1');
+
+function notify(store: CounterStore) {
+  for (const subscriber of store.subscribers) subscriber();
+}
+
+async function refresh(store: CounterStore) {
+  if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+  if (store.request) return store.request;
+  store.request = (async () => {
+    try {
+      const response = await fetch(store.endpoint, { cache: 'no-store' });
+      if (!response.ok) return;
+      const payload = (await response.json().catch(() => ({}))) as { unreadCount?: number };
+      const nextValue = Number(payload.unreadCount ?? 0) || 0;
+      if (nextValue !== store.value) {
+        store.value = nextValue;
+        notify(store);
+      }
+    } catch {
+      // Best effort. The next visible refresh will retry.
+    }
+  })().finally(() => { store.request = null; });
+  return store.request;
+}
+
+function subscribe(store: CounterStore, callback: () => void) {
+  store.subscribers.add(callback);
+  if (store.subscribers.size === 1) {
+    void refresh(store);
+    store.timer = window.setInterval(() => void refresh(store), POLL_INTERVAL_MS);
+    store.visibilityHandler = () => {
+      if (document.visibilityState === 'visible') void refresh(store);
+    };
+    document.addEventListener('visibilitychange', store.visibilityHandler);
+  }
+  return () => {
+    store.subscribers.delete(callback);
+    if (store.subscribers.size > 0) return;
+    if (store.timer !== null) window.clearInterval(store.timer);
+    if (store.visibilityHandler) document.removeEventListener('visibilitychange', store.visibilityHandler);
+    store.timer = null;
+    store.visibilityHandler = null;
+  };
+}
+
+function subscribeToMessages(callback: () => void) { return subscribe(messageStore, callback); }
+function subscribeToNotifications(callback: () => void) { return subscribe(notificationStore, callback); }
+function getMessageSnapshot() { return messageStore.value; }
+function getNotificationSnapshot() { return notificationStore.value; }
+function getServerSnapshot() { return 0; }
 
 export function useUnreadMessageCount(): number {
-  const [count, setCount] = useState(0);
-
-  useEffect(() => {
-    let active = true;
-    async function load() {
-      try {
-        const response = await listConversations();
-        if (!active) return;
-        const total = (response.conversations ?? []).reduce((sum, c) => sum + (c.unreadCount || 0), 0);
-        setCount(total);
-      } catch {
-        // Best-effort -- the next poll will catch up.
-      }
-    }
-    void load();
-    const interval = window.setInterval(load, POLL_INTERVAL_MS);
-    return () => {
-      active = false;
-      window.clearInterval(interval);
-    };
-  }, []);
-
-  return count;
+  return useSyncExternalStore(subscribeToMessages, getMessageSnapshot, getServerSnapshot);
 }
 
 export function useUnreadNotificationCount(): number {
-  const [count, setCount] = useState(0);
+  return useSyncExternalStore(subscribeToNotifications, getNotificationSnapshot, getServerSnapshot);
+}
 
-  useEffect(() => {
-    let active = true;
-    async function load() {
-      try {
-        const response = await fetch('/api/portal/notifications?limit=1', { cache: 'no-store' });
-        if (!response.ok) throw new Error('Failed to load notifications.');
-        const payload = (await response.json().catch(() => ({}))) as { unreadCount?: number };
-        if (!active) return;
-        setCount(Number(payload.unreadCount ?? 0) || 0);
-      } catch {
-        // Best-effort -- the next poll will catch up.
-      }
-    }
-    void load();
-    const interval = window.setInterval(load, 60_000);
-    return () => {
-      active = false;
-      window.clearInterval(interval);
-    };
-  }, []);
+export function setUnreadNotificationCount(value: number) {
+  notificationStore.value = Math.max(0, Number(value) || 0);
+  notify(notificationStore);
+}
 
-  return count;
+export function refreshUnreadMessageCount() {
+  return refresh(messageStore);
 }
