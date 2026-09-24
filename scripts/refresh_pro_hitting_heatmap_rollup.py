@@ -187,7 +187,7 @@ WITH src AS (
     )::int AS pa_n,
     SUM(CASE WHEN plate_x_bin BETWEEN 7 AND 16 AND plate_z_bin BETWEEN 9 AND 21 THEN 1 ELSE 0 END)::int AS inzone_n,
     SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 THEN 1 ELSE 0 END)::int AS fps_den,
-    SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 AND REGEXP_REPLACE(LOWER(COALESCE(pitch_call, '')), '[^a-z0-9]+', '', 'g') IN ('calledstrike','strikecalled','swingingstrike','swingingstrikeblocked','strikeswinging','foul','foultip','foulbunt','foulball','foulballfieldable','foulballnotfieldable','inplayouts','inplaynoout','inplayruns','inplay','hitintoplay') THEN 1 ELSE 0 END)::int AS fps_num,
+    SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 AND REGEXP_REPLACE(LOWER(COALESCE(pitch_call, '')), '[^a-z0-9]+', '', 'g') IN ('swingingstrike','swingingstrikeblocked','strikeswinging','foul','foultip','foulbunt','foulball','foulballfieldable','foulballnotfieldable','inplayouts','inplaynoout','inplayruns','inplay','hitintoplay') THEN 1 ELSE 0 END)::int AS fps_num,
     SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 AND LOWER(COALESCE(pitch_group,''))='fastballs' THEN 1 ELSE 0 END)::int AS fps_fb_den,
     SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 AND LOWER(COALESCE(pitch_group,''))='fastballs' AND REGEXP_REPLACE(LOWER(COALESCE(pitch_call, '')), '[^a-z0-9]+', '', 'g') IN ('swingingstrike','swingingstrikeblocked','strikeswinging','foul','foultip','foulbunt','foulball','foulballfieldable','foulballnotfieldable','inplayouts','inplaynoout','inplayruns','inplay','hitintoplay') THEN 1 ELSE 0 END)::int AS fps_fb_num,
     SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 AND LOWER(COALESCE(pitch_group,''))='off-speed' THEN 1 ELSE 0 END)::int AS fps_os_den,

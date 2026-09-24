@@ -5097,7 +5097,7 @@ export default function HittingSuite({
   ]);
 
   return (
-    <section className="portal-panel portal-admin-panel" style={{ padding: '1rem' }}>
+    <section className="portal-panel portal-admin-panel" data-stat-domain="hitting" style={{ padding: '1rem' }}>
       <div
         className={`portal-dashboard-suite-layout${showSecondarySidebar ? ' portal-dashboard-suite-layout--double' : ''}`}
         style={isSidebarHidden ? { gridTemplateColumns: 'minmax(0, 1fr)' } : undefined}
@@ -5926,7 +5926,7 @@ export default function HittingSuite({
               style={isLeaderboardPage ? { maxHeight: '68vh', overflowY: 'auto' } : undefined}
               ref={isLeaderboardPage ? leaderboardTableExportRef : undefined}
             >
-            <table className={isLeaderboardPage ? 'portal-table' : undefined} style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+            <table data-stat-domain="hitting" className={isLeaderboardPage ? 'portal-table' : undefined} style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
               <thead>
                 <tr>
                   {isLeaderboardPage ? (
@@ -6324,7 +6324,7 @@ export default function HittingSuite({
                   <p style={{ color: '#ff8a8a', marginBottom: 0 }}>{gameLogError}</p>
                 ) : gameLogRowsWithPins.length ? (
                   <div className="portal-table-wrap" style={{ maxHeight: '68vh', overflowY: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+                    <table data-stat-domain="hitting" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
                       <thead>
                         <tr>
                           <th
@@ -6562,7 +6562,7 @@ export default function HittingSuite({
                   <p style={{ color: '#ff8a8a', marginBottom: 0 }}>{error}</p>
                 ) : sortedPitchLogRows.length ? (
                   <div className="portal-table-wrap" style={{ maxHeight: '72vh', overflowY: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+                    <table data-stat-domain="hitting" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
                       <thead>
                         <tr>
                           {pitchLogColumns.map((column) => {
@@ -7618,7 +7618,7 @@ export default function HittingSuite({
                               <div style={{ textAlign: 'center', marginBottom: 6, fontSize: '0.82rem', opacity: 0.86 }}>{`Pitcher: ${formatNameFirstLast(pitcher)}`}</div>
                               <AbPaChart pitches={pa.pitches} resultLabel={pa.result_label} pitchColors={PITCH_COLORS} />
                               <div className="portal-table-wrap portal-ab-pa-table-wrap" style={{ marginTop: 8 }}>
-                                <table className="portal-table">
+                                <table data-stat-domain="hitting" className="portal-table">
                                   <thead>
                                     <tr>
                                       {['Pitch #', 'Pitch', 'Velo', 'IVB', 'HB', 'EV', 'LA', 'Result'].map((column) => {

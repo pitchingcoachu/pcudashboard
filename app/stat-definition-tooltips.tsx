@@ -110,6 +110,13 @@ const STAT_DEFINITIONS: Record<string, string> = {
   gozonesw: 'Go zone swing count.',
 };
 
+const HITTING_STAT_DEFINITIONS: Record<string, string> = {
+  'fps%': 'First-pitch swing percentage: swings on 0-0 pitches divided by all 0-0 pitches.',
+  'fps(fb)%': 'First-pitch swing percentage on fastballs.',
+  'fps(os)%': 'First-pitch swing percentage on off-speed pitches.',
+  fps: 'First-pitch swing count.',
+};
+
 function normalizeHeaderLabel(value: string): string {
   return String(value ?? '')
     .replace(/[↑↓↕]/g, '')
@@ -144,7 +151,9 @@ export default function StatDefinitionTooltips() {
       }
 
       const label = extractHeaderLabel(cell);
-      const definition = STAT_DEFINITIONS[keyForLabel(label)];
+      const key = keyForLabel(label);
+      const isHittingMetric = Boolean(cell.closest('[data-stat-domain="hitting"]'));
+      const definition = (isHittingMetric ? HITTING_STAT_DEFINITIONS[key] : undefined) ?? STAT_DEFINITIONS[key];
       if (!definition) {
         if (hoverCellRef.current) hideTooltip();
         return;

@@ -3487,7 +3487,13 @@ def _is_fastball_or_sinker_pitch_type(value: Any) -> bool:
 
 
 def _fps_swing_count_from_rollup_row(row: Dict[str, Any]) -> int:
-    return int(row.get("fps_swing_num") or row.get("fps_num") or 0)
+    # A real zero means the hitter took the first pitch; do not fall back to
+    # the pitching-domain first-pitch-strike count in that case. The fallback
+    # is only for legacy rollup rows that predate fps_swing_num entirely.
+    fps_swing_num = row.get("fps_swing_num")
+    if fps_swing_num is not None:
+        return int(fps_swing_num or 0)
+    return int(row.get("fps_num") or 0)
 
 
 def _zone_decision_counts_from_rollup_rows(rows: Sequence[Dict[str, Any]]) -> tuple[Optional[int], Optional[int]]:
@@ -3667,6 +3673,7 @@ def _build_dynamic_table(
     stuff2_level: Optional[str] = None,
     ctrl_level: Optional[str] = None,
     timings: Optional[Dict[str, float]] = None,
+    fps_is_swing: bool = False,
 ) -> tuple[List[str], List[Dict[str, Any]], List[str]]:
     stage_started = time.perf_counter()
     mode_key = (mode or "Stuff").strip()
@@ -4315,7 +4322,11 @@ def _build_dynamic_table(
                 takes += 1
             if (
                 (r.get("balls_num") == 0 and r.get("strikes_num") == 0)
-                and pitch_call in {"StrikeCalled", "StrikeSwinging", "FoulBall", "FoulBallFieldable", "FoulBallNotFieldable", "InPlay"}
+                and (
+                    _row_is_swing_for_fps_metric(r)
+                    if fps_is_swing
+                    else pitch_call in {"StrikeCalled", "StrikeSwinging", "FoulBall", "FoulBallFieldable", "FoulBallNotFieldable", "InPlay"}
+                )
             ):
                 fps_count += 1
             if r.get("balls_num") == 0 and r.get("strikes_num") == 0:
@@ -4467,7 +4478,11 @@ def _build_dynamic_table(
             for r in grp
             if r.get("balls_num") == 0
             and r.get("strikes_num") == 0
-            and _effective_pitch_call_for_metrics(r) in {"StrikeCalled", "StrikeSwinging", "FoulBall", "FoulBallFieldable", "InPlay"}
+            and (
+                _row_is_swing_for_fps_metric(r)
+                if fps_is_swing
+                else _effective_pitch_call_for_metrics(r) in {"StrikeCalled", "StrikeSwinging", "FoulBall", "FoulBallFieldable", "InPlay"}
+            )
         )
         count_00 = sum(1 for r in grp if r.get("balls_num") == 0 and r.get("strikes_num") == 0)
         count_behind = sum(1 for r in grp if (r.get("balls_num"), r.get("strikes_num")) in {(1, 0), (2, 0), (3, 0), (3, 1), (2, 1)})
@@ -4830,7 +4845,11 @@ def _build_dynamic_table(
             if _is_competitive_row(r)
             and r.get("balls_num") == 0
             and r.get("strikes_num") == 0
-            and _effective_pitch_call_for_metrics(r) in strike_calls
+            and (
+                _row_is_swing_for_fps_metric(r)
+                if fps_is_swing
+                else _effective_pitch_call_for_metrics(r) in strike_calls
+            )
         )
         early_n = sum(
             1
@@ -15712,7 +15731,7 @@ def _try_pro_hitting_overview_rollup(
                 "Z-Whiff%": _safe_pct(iz_whiff_n, iz_swing_n) if iz_swing_n is not None and iz_whiff_n is not None else None,
                 "Whiff%": _safe_pct(sum(int(r.get("whiff_n") or 0) for r in rows_for_split), sum(int(r.get("swing_n") or 0) for r in rows_for_split)),
                 "CSW%": _safe_pct(sum(int(r.get("csw_n") or 0) for r in rows_for_split), pitches),
-                "FPS%": _safe_pct(sum(int(r.get("fps_num") or 0) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
+                "FPS%": _safe_pct(sum(_fps_swing_count_from_rollup_row(r) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
                 "FPS(FB)%": _safe_pct(fps_fb_num, fps_fb_den),
                 "FPS(OS)%": _safe_pct(fps_os_num, fps_os_den),
                 "InZone%": _safe_pct(sum(int(r.get("in_zone_n") or 0) for r in rows_for_split), sum(int(r.get("loc_n") or 0) for r in rows_for_split)),
@@ -15794,7 +15813,7 @@ def _try_pro_hitting_overview_rollup(
             "Z-Whiff%": _safe_pct(iz_whiff_n, iz_swing_n) if iz_swing_n is not None and iz_whiff_n is not None else None,
             "Whiff%": _safe_pct(sum(int(r.get("whiff_n") or 0) for r in rows_for_split), sum(int(r.get("swing_n") or 0) for r in rows_for_split)),
             "CSW%": _safe_pct(sum(int(r.get("csw_n") or 0) for r in rows_for_split), pitches),
-            "FPS%": _safe_pct(sum(int(r.get("fps_num") or 0) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
+            "FPS%": _safe_pct(sum(_fps_swing_count_from_rollup_row(r) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
             "FPS(FB)%": _safe_pct(fps_fb_num, fps_fb_den),
             "FPS(OS)%": _safe_pct(fps_os_num, fps_os_den),
             "InZone%": _safe_pct(sum(int(r.get("in_zone_n") or 0) for r in rows_for_split), sum(int(r.get("loc_n") or 0) for r in rows_for_split)),
@@ -15884,8 +15903,10 @@ def _try_league_hitting_overview_rollup(
         return None
     if venue_filter:
         return None
-    # Keep league fast-path strict so schema is stable and metrics are safe.
-    if mode_raw not in {"Results", "Swing Decisions", "Batted Ball Data", "Custom"}:
+    # Swing Decisions requires row-level location context for Chase% and the
+    # other decision metrics. The college rollup does not currently persist
+    # chase opportunities, so use the raw path instead of returning blanks.
+    if mode_raw not in {"Results", "Batted Ball Data", "Custom"}:
         return None
     normalized_custom_columns = _normalize_custom_columns(selected_custom_columns)
     custom_rollup_supported_columns = {
@@ -16195,7 +16216,7 @@ def _try_league_hitting_overview_rollup(
                 "Swing%": _safe_pct(sum(int(r.get("swing_n") or 0) for r in rows_for_split), pitches),
                 "IZswing%": _safe_pct(iz_swing_n, sum(int(r.get("in_zone_n") or 0) for r in rows_for_split)) if iz_swing_n is not None else None,
                 "Z-Whiff%": _safe_pct(iz_whiff_n, iz_swing_n) if iz_swing_n is not None and iz_whiff_n is not None else None,
-                "FPS%": _safe_pct(sum(int(r.get("fps_num") or 0) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
+                "FPS%": _safe_pct(sum(_fps_swing_count_from_rollup_row(r) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
                 "FPS(FB)%": _safe_pct(fps_fb_num, fps_fb_den),
                 "FPS(OS)%": _safe_pct(fps_os_num, fps_os_den),
                 "Called-S%": _safe_pct(max(0, sum(int(r.get("csw_n") or 0) for r in rows_for_split) - sum(int(r.get("whiff_n") or 0) for r in rows_for_split)), pitches),
@@ -16297,7 +16318,7 @@ def _try_league_hitting_overview_rollup(
             "Swing%": _safe_pct(sum(int(r.get("swing_n") or 0) for r in rows_for_split), pitches),
             "IZswing%": _safe_pct(iz_swing_n, sum(int(r.get("in_zone_n") or 0) for r in rows_for_split)) if iz_swing_n is not None else None,
             "Z-Whiff%": _safe_pct(iz_whiff_n, iz_swing_n) if iz_swing_n is not None and iz_whiff_n is not None else None,
-            "FPS%": _safe_pct(sum(int(r.get("fps_num") or 0) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
+            "FPS%": _safe_pct(sum(_fps_swing_count_from_rollup_row(r) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
             "FPS(FB)%": _safe_pct(fps_fb_num, fps_fb_den),
             "FPS(OS)%": _safe_pct(fps_os_num, fps_os_den),
             "Called-S%": _safe_pct(max(0, sum(int(r.get("csw_n") or 0) for r in rows_for_split) - sum(int(r.get("whiff_n") or 0) for r in rows_for_split)), pitches),
@@ -22083,6 +22104,7 @@ def _pro_hitting_overview(
         selected_custom_columns,
         stuff2_level=(_pro_level_norm(level_filter) if _pro_level_norm(level_filter) != "All" else "MLB"),
         ctrl_level=(_pro_level_norm(level_filter) if _pro_level_norm(level_filter) != "All" else "MLB"),
+        fps_is_swing=True,
     )
     split_col_name = table_columns[0] if table_columns else "Pitch"
     grouped_rows: Dict[str, List[Dict[str, Any]]] = {}
@@ -28058,6 +28080,7 @@ def hitting_overview(
         selected_custom_columns,
         stuff2_level=(_college_level_norm(college_level_filter) if _college_level_norm(college_level_filter) != "All" else "D1"),
         ctrl_level=(_college_level_norm(college_level_filter) if _college_level_norm(college_level_filter) != "All" else "D1"),
+        fps_is_swing=True,
     )
 
     pitch_type_legend = sorted(
