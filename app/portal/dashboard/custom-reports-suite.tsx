@@ -500,12 +500,29 @@ type ReportPayload = {
   rowNoteSpans: number[];
   columnNotes?: string[];
   columnNoteSpans?: number[];
+  columnLabelRows?: Record<string, { notes: string[]; spans: number[] }>;
   cells: Record<string, CellConfig>;
 };
 
 const MAX_REPORT_ROWS = 120;
 const MAX_REPORT_COLS = 6;
 const PRO_DEFAULT_TEAM = 'Boston Red Sox';
+
+type ColumnLabelRowConfig = { notes: string[]; spans: number[] };
+
+function emptyColumnLabelRow(): ColumnLabelRowConfig {
+  return {
+    notes: Array.from({ length: MAX_REPORT_COLS }, () => ''),
+    spans: Array.from({ length: MAX_REPORT_COLS }, () => 1),
+  };
+}
+
+function normalizeColumnLabelRow(value?: Partial<ColumnLabelRowConfig> | null): ColumnLabelRowConfig {
+  return {
+    notes: Array.from({ length: MAX_REPORT_COLS }, (_, index) => String(value?.notes?.[index] ?? '')),
+    spans: Array.from({ length: MAX_REPORT_COLS }, (_, index) => Math.max(1, Number(value?.spans?.[index]) || 1)),
+  };
+}
 
 function normalizedReportNameKey(name: string): string {
   return String(name ?? '')
@@ -1697,19 +1714,22 @@ function percentileTierClassName(percentile: number): string {
   return 'portal-custom-reports-percentile-high';
 }
 
-function baseballPercentileMetricPresentation(metric: string, metricLabel: string, value: number | null): { label: string; value: string; unit: string } {
+function baseballPercentileMetricPresentation(metric: unknown, metricLabel: unknown, value: unknown): { label: string; value: string; unit: string } {
   const catchingLabels: Record<string, { label: string; unit: string }> = {
     ExchangeTime: { label: 'Exchange Time', unit: 's' },
     PopTime: { label: 'Pop Time', unit: 's' },
     Velo: { label: 'Velo', unit: 'mph' },
   };
-  const explicit = catchingLabels[metric];
-  const unitMatch = metricLabel.match(/\s*\((mph|in|ft|rpm|°)\)\s*$/i);
-  const label = explicit?.label || (unitMatch ? metricLabel.slice(0, unitMatch.index).trim() : metricLabel);
+  const safeMetric = String(metric ?? '').trim();
+  const safeMetricLabel = String(metricLabel ?? '').trim() || dashboardMetricLabel(safeMetric) || safeMetric || 'Metric';
+  const numericValue = typeof value === 'number' && Number.isFinite(value) ? value : null;
+  const explicit = catchingLabels[safeMetric];
+  const unitMatch = safeMetricLabel.match(/\s*\((mph|in|ft|rpm|°)\)\s*$/i);
+  const label = explicit?.label || (unitMatch ? safeMetricLabel.slice(0, unitMatch.index).trim() : safeMetricLabel);
   const unit = explicit?.unit || unitMatch?.[1] || '';
-  if (value === null) return { label, value: '—', unit };
-  if (metric === 'ExchangeTime' || metric === 'PopTime') return { label, value: value.toFixed(2), unit };
-  return { label, value: formatTableDisplayValue(metric, value), unit };
+  if (numericValue === null) return { label, value: '—', unit };
+  if (safeMetric === 'ExchangeTime' || safeMetric === 'PopTime') return { label, value: numericValue.toFixed(2), unit };
+  return { label, value: formatTableDisplayValue(safeMetric, numericValue), unit };
 }
 
 function forcePlateTestTypeLabel(value: string): string {
@@ -4724,8 +4744,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const [rowPlayers, setRowPlayers] = useState<string[]>(Array.from({ length: MAX_REPORT_ROWS }, () => 'All'));
   const [rowNotes, setRowNotes] = useState<string[]>(Array.from({ length: MAX_REPORT_ROWS }, () => ''));
   const [rowNoteSpans, setRowNoteSpans] = useState<number[]>(Array.from({ length: MAX_REPORT_ROWS }, () => 1));
-  const [columnNotes, setColumnNotes] = useState<string[]>(Array.from({ length: MAX_REPORT_COLS }, () => ''));
-  const [columnNoteSpans, setColumnNoteSpans] = useState<number[]>(Array.from({ length: MAX_REPORT_COLS }, () => 1));
+  const [columnLabelRows, setColumnLabelRows] = useState<Record<string, ColumnLabelRowConfig>>({ '1': emptyColumnLabelRow() });
+  const [columnLabelEditRow, setColumnLabelEditRow] = useState(1);
   const [cellConfigs, setCellConfigs] = useState<Record<string, CellConfig>>({ r1c1: emptyCell() });
   const [dragState, setDragState] = useState<{ kind: 'panel' | 'row' | 'column'; id: string } | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
@@ -4896,7 +4916,18 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     const distribution = scopedDistribution.length > 1 ? scopedDistribution : globalDistribution;
     const percentileRaw = percentileForValue(num, distribution);
     if (percentileRaw === null) return null;
-    return adjustPercentileDirection(column, percentileRaw, reportType);
+    const adjusted = adjustPercentileDirection(column, percentileRaw, reportType);
+    const splitColumnToken = normalizePercentileColumnToken(splitColumn);
+    const isPitchTypeSplit = ['pitchtype', 'taggedpitchtype', 'autopitchtype'].includes(splitColumnToken);
+    if (
+      reportType === 'Pitching' &&
+      normalizePercentileColumnToken(column) === 'ivb' &&
+      isPitchTypeSplit &&
+      canonicalPitchType(String(splitValue ?? '')) === 'Sinker'
+    ) {
+      return Math.max(0, Math.min(100, 100 - adjusted));
+    }
+    return adjusted;
   };
   const teamScopePlayers = useMemo(
     () => Array.from(new Set(teamScopeSelectedPlayers.map((entry) => String(entry ?? '').trim()).filter((entry) => entry && entry !== 'All'))),
@@ -4930,20 +4961,29 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   }, [effectiveReportRows, reportRows, reportCols, reportScope, cellConfigs]);
 
   const visibleCellKeys = useMemo(() => cellSlots.map((entry) => entry.cellId), [cellSlots]);
-  const columnLabelEntries = useMemo(() => {
-    const out: Array<{ colStart: number; colSpan: number; text: string }> = [];
-    const occupied = new Set<number>();
-    for (let col = 1; col <= reportCols; col += 1) {
-      if (occupied.has(col)) continue;
-      const text = String(columnNotes[col - 1] ?? '').trim();
-      const rawSpan = Math.max(1, Number(columnNoteSpans[col - 1]) || 1);
-      const colSpan = Math.max(1, Math.min(reportCols - col + 1, rawSpan));
-      if (!text) continue;
-      out.push({ colStart: col, colSpan, text });
-      for (let next = col + 1; next <= col + colSpan - 1; next += 1) occupied.add(next);
+  const columnLabelBands = useMemo(() => {
+    const bands: Array<{
+      rowStart: number;
+      gridRow: number;
+      entries: Array<{ colStart: number; colSpan: number; text: string }>;
+    }> = [];
+    for (let row = 1; row <= reportRows; row += 1) {
+      const config = normalizeColumnLabelRow(columnLabelRows[String(row)]);
+      const entries: Array<{ colStart: number; colSpan: number; text: string }> = [];
+      const occupied = new Set<number>();
+      for (let col = 1; col <= reportCols; col += 1) {
+        if (occupied.has(col)) continue;
+        const text = String(config.notes[col - 1] ?? '').trim();
+        const rawSpan = Math.max(1, Number(config.spans[col - 1]) || 1);
+        const colSpan = Math.max(1, Math.min(reportCols - col + 1, rawSpan));
+        if (!text) continue;
+        entries.push({ colStart: col, colSpan, text });
+        for (let next = col + 1; next <= col + colSpan - 1; next += 1) occupied.add(next);
+      }
+      if (entries.length) bands.push({ rowStart: row, gridRow: row + bands.length, entries });
     }
-    return out;
-  }, [columnNoteSpans, columnNotes, reportCols]);
+    return bands;
+  }, [columnLabelRows, reportCols, reportRows]);
   const rowLabelEntries = useMemo(() => {
     const out: Array<{ rowStart: number; rowSpan: number; text: string }> = [];
     const occupied = new Set<number>();
@@ -4963,9 +5003,12 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     }
     return out;
   }, [effectiveReportRows, reportRows, reportScope, rowNoteSpans, rowNotes]);
-  const hasColumnLabels = columnLabelEntries.length > 0;
+  const hasColumnLabels = columnLabelBands.length > 0;
   const hasRowLabels = rowLabelEntries.length > 0;
-  const labelRowOffset = hasColumnLabels ? 1 : 0;
+  const gridRowForReportRow = (row: number): number =>
+    row + columnLabelBands.reduce((count, band) => count + (band.rowStart <= row ? 1 : 0), 0);
+  const activeColumnLabelEditRow = Math.max(1, Math.min(reportRows, columnLabelEditRow));
+  const activeColumnLabelConfig = normalizeColumnLabelRow(columnLabelRows[String(activeColumnLabelEditRow)]);
 
   const playerLabel = useMemo(() => subjectLabelForReportType(reportType), [reportType]);
   const canUseForcePlatePanels =
@@ -7272,8 +7315,18 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     setRowPlayers(Array.from({ length: MAX_REPORT_ROWS }, (_, idx) => payload.rowPlayers?.[idx] ?? 'All'));
     setRowNotes(Array.from({ length: MAX_REPORT_ROWS }, (_, idx) => payload.rowNotes?.[idx] ?? ''));
     setRowNoteSpans(Array.from({ length: MAX_REPORT_ROWS }, (_, idx) => Math.max(1, Number(payload.rowNoteSpans?.[idx]) || 1)));
-    setColumnNotes(Array.from({ length: MAX_REPORT_COLS }, (_, idx) => payload.columnNotes?.[idx] ?? ''));
-    setColumnNoteSpans(Array.from({ length: MAX_REPORT_COLS }, (_, idx) => Math.max(1, Number(payload.columnNoteSpans?.[idx]) || 1)));
+    const restoredColumnLabelRows = Object.fromEntries(
+      Object.entries(payload.columnLabelRows ?? {})
+        .map(([row, config]) => [String(Math.max(1, Number(row) || 1)), normalizeColumnLabelRow(config)])
+    );
+    if (!restoredColumnLabelRows['1']) {
+      restoredColumnLabelRows['1'] = normalizeColumnLabelRow({
+        notes: payload.columnNotes,
+        spans: payload.columnNoteSpans,
+      });
+    }
+    setColumnLabelRows(restoredColumnLabelRows);
+    setColumnLabelEditRow(1);
     setCellConfigs(
       ensureCellConfigMap(
         payload.cells ?? {},
@@ -7342,8 +7395,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     rowPlayers,
     rowNotes,
     rowNoteSpans,
-    columnNotes,
-    columnNoteSpans,
+    columnNotes: columnLabelRows['1']?.notes ?? [],
+    columnNoteSpans: columnLabelRows['1']?.spans ?? [],
+    columnLabelRows,
     cells: ensureCellConfigMap(cellConfigs, reportRows, reportCols),
   });
 
@@ -7414,8 +7468,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     setRowPlayers(Array.from({ length: MAX_REPORT_ROWS }, () => 'All'));
     setRowNotes(Array.from({ length: MAX_REPORT_ROWS }, () => ''));
     setRowNoteSpans(Array.from({ length: MAX_REPORT_ROWS }, () => 1));
-    setColumnNotes(Array.from({ length: MAX_REPORT_COLS }, () => ''));
-    setColumnNoteSpans(Array.from({ length: MAX_REPORT_COLS }, () => 1));
+    setColumnLabelRows({ '1': emptyColumnLabelRow() });
+    setColumnLabelEditRow(1);
     setCellConfigs({ r1c1: emptyCell() });
     setSelectedReportId(null);
     setSaveVisibility('organization');
@@ -7447,6 +7501,33 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       },
     }));
     setColSpanInputs((current) => ({ ...current, [cellId]: String(normalized) }));
+  };
+
+  const insertEmptyColumnLabelRow = (insertRow: number) => {
+    setColumnLabelRows((current) => {
+      const next: Record<string, ColumnLabelRowConfig> = {};
+      for (const [rowKey, rawConfig] of Object.entries(current)) {
+        const row = Math.max(1, Number(rowKey) || 1);
+        next[String(row >= insertRow ? row + 1 : row)] = normalizeColumnLabelRow(rawConfig);
+      }
+      next[String(insertRow)] = emptyColumnLabelRow();
+      return next;
+    });
+    setColumnLabelEditRow((current) => current >= insertRow ? current + 1 : current);
+  };
+
+  const removeColumnLabelRow = (targetRow: number) => {
+    setColumnLabelRows((current) => {
+      const next: Record<string, ColumnLabelRowConfig> = {};
+      for (const [rowKey, rawConfig] of Object.entries(current)) {
+        const row = Math.max(1, Number(rowKey) || 1);
+        if (row === targetRow) continue;
+        next[String(row > targetRow ? row - 1 : row)] = normalizeColumnLabelRow(rawConfig);
+      }
+      if (!next['1']) next['1'] = emptyColumnLabelRow();
+      return next;
+    });
+    setColumnLabelEditRow((current) => current > targetRow ? current - 1 : Math.max(1, Math.min(current, reportRows - 1)));
   };
 
   // Directional duplication inserts beside the source and shifts the existing
@@ -7492,6 +7573,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         next.splice(insertRow - 1, 0, 1);
         return next.slice(0, MAX_REPORT_ROWS);
       });
+      insertEmptyColumnLabelRow(insertRow);
       setReportRows(newRows);
       setReportRowsInput(String(newRows));
       return;
@@ -7519,16 +7601,14 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       }
       return next;
     });
-    setColumnNotes((current) => {
-      const next = [...current];
-      next.splice(insertCol - 1, 0, '');
-      return next.slice(0, MAX_REPORT_COLS);
-    });
-    setColumnNoteSpans((current) => {
-      const next = [...current];
-      next.splice(insertCol - 1, 0, 1);
-      return next.slice(0, MAX_REPORT_COLS);
-    });
+    setColumnLabelRows((current) => Object.fromEntries(Object.entries(current).map(([labelRow, rawConfig]) => {
+      const config = normalizeColumnLabelRow(rawConfig);
+      const notes = [...config.notes];
+      const spans = [...config.spans];
+      notes.splice(insertCol - 1, 0, '');
+      spans.splice(insertCol - 1, 0, 1);
+      return [labelRow, { notes: notes.slice(0, MAX_REPORT_COLS), spans: spans.slice(0, MAX_REPORT_COLS) }];
+    })));
     setReportCols(newCols);
     setReportColsInput(String(newCols));
   };
@@ -7553,6 +7633,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     setRowNotes((current) => { const next = [...current]; next.splice(insertRow - 1, 0, current[sourceRow - 1] ?? ''); return next.slice(0, MAX_REPORT_ROWS); });
     setRowNoteSpans((current) => { const next = [...current]; next.splice(insertRow - 1, 0, current[sourceRow - 1] ?? 1); return next.slice(0, MAX_REPORT_ROWS); });
     setRowPlayers((current) => { const next = [...current]; next.splice(insertRow - 1, 0, current[sourceRow - 1] ?? 'All'); return next.slice(0, MAX_REPORT_ROWS); });
+    insertEmptyColumnLabelRow(insertRow);
     setReportRows(newRows);
     setReportRowsInput(String(newRows));
   };
@@ -7578,13 +7659,15 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       }
       return next;
     });
-    setColumnNotes((current) => { const next = [...current]; next.splice(insertCol - 1, 0, current[sourceCol - 1] ?? ''); return next.slice(0, MAX_REPORT_COLS); });
-    setColumnNoteSpans((current) => {
-      const next = [...current];
-      next.splice(insertCol - 1, 0, 1);
-      if (direction === 'right') next[sourceCol - 1] = 1;
-      return next.slice(0, MAX_REPORT_COLS);
-    });
+    setColumnLabelRows((current) => Object.fromEntries(Object.entries(current).map(([labelRow, rawConfig]) => {
+      const config = normalizeColumnLabelRow(rawConfig);
+      const notes = [...config.notes];
+      const spans = [...config.spans];
+      notes.splice(insertCol - 1, 0, config.notes[sourceCol - 1] ?? '');
+      spans.splice(insertCol - 1, 0, 1);
+      if (direction === 'right') spans[sourceCol - 1] = 1;
+      return [labelRow, { notes: notes.slice(0, MAX_REPORT_COLS), spans: spans.slice(0, MAX_REPORT_COLS) }];
+    })));
     setReportCols(newCols);
     setReportColsInput(String(newCols));
   };
@@ -7624,6 +7707,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       next.push(1);
       return next.slice(0, MAX_REPORT_ROWS);
     });
+    removeColumnLabelRow(targetRow);
     setColSpanInputs({});
     setReportRows(newRows);
     setReportRowsInput(String(newRows));
@@ -7650,18 +7734,16 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       }
       return next;
     });
-    setColumnNotes((current) => {
-      const next = [...current];
-      next.splice(targetCol - 1, 1);
-      next.push('');
-      return next.slice(0, MAX_REPORT_COLS);
-    });
-    setColumnNoteSpans((current) => {
-      const next = [...current];
-      next.splice(targetCol - 1, 1);
-      next.push(1);
-      return next.slice(0, MAX_REPORT_COLS);
-    });
+    setColumnLabelRows((current) => Object.fromEntries(Object.entries(current).map(([labelRow, rawConfig]) => {
+      const config = normalizeColumnLabelRow(rawConfig);
+      const notes = [...config.notes];
+      const spans = [...config.spans];
+      notes.splice(targetCol - 1, 1);
+      spans.splice(targetCol - 1, 1);
+      notes.push('');
+      spans.push(1);
+      return [labelRow, { notes: notes.slice(0, MAX_REPORT_COLS), spans: spans.slice(0, MAX_REPORT_COLS) }];
+    })));
     setColSpanInputs({});
     setReportCols(newCols);
     setReportColsInput(String(newCols));
@@ -7711,6 +7793,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       next[rowB - 1] = a;
       return next;
     });
+    setColumnLabelRows((current) => ({
+      ...current,
+      [String(rowA)]: normalizeColumnLabelRow(current[String(rowB)]),
+      [String(rowB)]: normalizeColumnLabelRow(current[String(rowA)]),
+    }));
   };
 
   const swapColumns = (colA: number, colB: number) => {
@@ -7728,14 +7815,14 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       }
       return next;
     });
-    setColumnNotes((current) => {
-      const next = [...current];
-      const a = current[colA - 1] ?? '';
-      const b = current[colB - 1] ?? '';
-      next[colA - 1] = b;
-      next[colB - 1] = a;
-      return next;
-    });
+    setColumnLabelRows((current) => Object.fromEntries(Object.entries(current).map(([labelRow, rawConfig]) => {
+      const config = normalizeColumnLabelRow(rawConfig);
+      const notes = [...config.notes];
+      const spans = [...config.spans];
+      [notes[colA - 1], notes[colB - 1]] = [notes[colB - 1] ?? '', notes[colA - 1] ?? ''];
+      [spans[colA - 1], spans[colB - 1]] = [spans[colB - 1] ?? 1, spans[colA - 1] ?? 1];
+      return [labelRow, { notes, spans }];
+    })));
   };
 
   // Shared by both PNG and PDF export: renders the report DOM to a canvas
@@ -8759,20 +8846,36 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
               </div>
             </fieldset>
             <fieldset className="portal-fieldset">
-              <legend>Column Labels (Top)</legend>
+              <legend>Column Labels</legend>
+              <div className="portal-custom-reports-column-label-placement">
+                <label>
+                  Place Labels Above
+                  <SearchableSingleSelect
+                    value={String(activeColumnLabelEditRow)}
+                    options={Array.from({ length: reportRows }, (_, index) => index + 1).map((rowNumber) => {
+                      const rowConfig = normalizeColumnLabelRow(columnLabelRows[String(rowNumber)]);
+                      const hasLabels = rowConfig.notes.some((note) => String(note ?? '').trim());
+                      return { value: String(rowNumber), label: `Row ${rowNumber}${hasLabels ? ' • Labeled' : ''}` };
+                    })}
+                    onChange={(next) => setColumnLabelEditRow(Math.max(1, Number(next) || 1))}
+                  />
+                </label>
+                <p className="portal-muted-text">Each row can have its own column headings. Leave every field blank to show no label band above that row.</p>
+              </div>
               <div className="portal-custom-reports-row-players">
                 {Array.from({ length: reportCols }, (_, idx) => idx + 1).map((colNumber) => (
-                  <div key={`col-label-${colNumber}`} className="portal-custom-reports-row-player-item">
+                  <div key={`col-label-${activeColumnLabelEditRow}-${colNumber}`} className="portal-custom-reports-row-player-item">
                     <label>{`Column ${colNumber} Label`}</label>
                     <input
                       type="text"
-                      value={columnNotes[colNumber - 1] ?? ''}
+                      value={activeColumnLabelConfig.notes[colNumber - 1] ?? ''}
                       placeholder="e.g. xWOBA"
                       onChange={(event) =>
-                        setColumnNotes((current) => {
-                          const out = [...current];
-                          out[colNumber - 1] = event.target.value;
-                          return out;
+                        setColumnLabelRows((current) => {
+                          const config = normalizeColumnLabelRow(current[String(activeColumnLabelEditRow)]);
+                          const notes = [...config.notes];
+                          notes[colNumber - 1] = event.target.value;
+                          return { ...current, [String(activeColumnLabelEditRow)]: { ...config, notes } };
                         })
                       }
                     />
@@ -8781,13 +8884,14 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                       type="number"
                       min={1}
                       max={reportCols}
-                      value={Math.max(1, Number(columnNoteSpans[colNumber - 1]) || 1)}
+                      value={Math.max(1, Number(activeColumnLabelConfig.spans[colNumber - 1]) || 1)}
                       onChange={(event) =>
-                        setColumnNoteSpans((current) => {
-                          const out = [...current];
+                        setColumnLabelRows((current) => {
+                          const config = normalizeColumnLabelRow(current[String(activeColumnLabelEditRow)]);
+                          const spans = [...config.spans];
                           const parsed = Number(event.target.value);
-                          out[colNumber - 1] = Number.isFinite(parsed) ? Math.max(1, Math.min(reportCols, Math.trunc(parsed))) : 1;
-                          return out;
+                          spans[colNumber - 1] = Number.isFinite(parsed) ? Math.max(1, Math.min(reportCols, Math.trunc(parsed))) : 1;
+                          return { ...current, [String(activeColumnLabelEditRow)]: { ...config, spans } };
                         })
                       }
                     />
@@ -8838,25 +8942,6 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                 />
               </div>
               <div className="portal-custom-reports-grid-shell">
-                {hasColumnLabels ? (
-                  <div
-                    className="portal-custom-reports-col-label-grid"
-                    style={{
-                      gridTemplateColumns: hasRowLabels ? `3.1rem repeat(${reportCols}, minmax(0, 1fr))` : `repeat(${reportCols}, minmax(0, 1fr))`,
-                    }}
-                  >
-                    {hasRowLabels ? <div aria-hidden="true" /> : null}
-                    {columnLabelEntries.map((entry) => (
-                      <div
-                        key={`col-label-${entry.colStart}-${entry.colSpan}`}
-                        className="portal-custom-reports-col-label"
-                        style={{ gridColumn: `${hasRowLabels ? entry.colStart + 1 : entry.colStart} / span ${entry.colSpan}` }}
-                      >
-                        {entry.text}
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
                 <div className="portal-custom-reports-grid-row">
                   <div
                     className="portal-custom-reports-grid"
@@ -8864,12 +8949,29 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                       gridTemplateColumns: hasRowLabels ? `3.1rem repeat(${reportCols}, minmax(0, 1fr))` : `repeat(${reportCols}, minmax(0, 1fr))`,
                     }}
                   >
+                {hasColumnLabels
+                  ? columnLabelBands.flatMap((band) => band.entries.map((entry) => (
+                      <div
+                        key={`col-label-${band.rowStart}-${entry.colStart}-${entry.colSpan}`}
+                        className="portal-custom-reports-col-label"
+                        style={{
+                          gridColumn: `${hasRowLabels ? entry.colStart + 1 : entry.colStart} / span ${entry.colSpan}`,
+                          gridRow: `${band.gridRow}`,
+                        }}
+                      >
+                        {entry.text}
+                      </div>
+                    )))
+                  : null}
                 {hasRowLabels
                   ? rowLabelEntries.map((entry) => (
                       <div
                         key={`row-label-${entry.rowStart}-${entry.rowSpan}`}
                         className="portal-custom-reports-row-label-vertical"
-                        style={{ gridColumn: '1', gridRow: `${entry.rowStart + labelRowOffset} / span ${entry.rowSpan}` }}
+                        style={{
+                          gridColumn: '1',
+                          gridRow: `${gridRowForReportRow(entry.rowStart)} / ${gridRowForReportRow(entry.rowStart + entry.rowSpan - 1) + 1}`,
+                        }}
                       >
                         {formatVerticalRowLabel(entry.text)}
                       </div>
@@ -9048,7 +9150,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                       className={`portal-custom-reports-cell${!(config.showControls ?? true) ? ' portal-custom-reports-cell--collapsed' : ''}${
                         reportScope === 'Team' && rowWithinTeamPlayer === 1 ? ' portal-custom-reports-cell--team-player-start' : ''
                       }${dragOverId === `panel:${cellId}` ? ' portal-custom-reports-cell--drag-over' : ''}`}
-                      style={{ gridColumn: `${gridColumnStart} / span ${colSpan}`, gridRow: `${rowNumber + labelRowOffset}` }}
+                      style={{ gridColumn: `${gridColumnStart} / span ${colSpan}`, gridRow: `${gridRowForReportRow(rowNumber)}` }}
                       onDragOver={(event) => {
                         if (!canDragReorder || !dragState) return;
                         event.preventDefault();
@@ -11250,9 +11352,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                           })()}
                         </div>
                       ) : contentType === 'Pitch Usage Pie Chart' ? (
-                        <div className="portal-custom-reports-velocity">
-                          <div style={{ display: 'grid', justifyItems: 'center', gap: 8 }}>
-                            <svg viewBox="0 0 260 172" role="img" aria-label="Pitch usage pie" style={{ display: 'block' }}>
+                        <div className="portal-custom-reports-velocity portal-custom-reports-pitch-usage-pie">
+                          <div className="portal-custom-reports-pitch-usage-pie-inner">
+                            <svg className="portal-custom-reports-pitch-usage-pie-svg" viewBox="0 0 260 172" role="img" aria-label="Pitch usage pie">
                               {(() => {
                                 const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
                                 const pieStroke = isLightTheme ? 'rgba(15,23,42,0.24)' : 'rgba(255,255,255,0.25)';
@@ -11276,7 +11378,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                 });
                               })()}
                             </svg>
-                            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap', gap: 14 }}>
+                            <div className="portal-custom-reports-pitch-usage-pie-legend">
                               {pitchTypeCountList.slice(0, 8).map(([pitchType, count]) => (
                                 <span key={`${cellId}-pie-k-${pitchType}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: (typeof document !== 'undefined' && document.body.classList.contains('theme-light')) ? 'rgba(15,23,42,0.92)' : 'rgba(255,255,255,0.92)' }}>
                                   <span

@@ -21,6 +21,7 @@ import {
   notifyPlayerForStaffActivity,
   notifyStaffForPlayerActivity,
   recordPortalActivityEvent,
+  savePlayerMediaCategoryByOrganization,
   updatePlayerMedia,
 } from '../../../../lib/training-db';
 
@@ -294,6 +295,20 @@ export async function POST(request: Request) {
     const playerId = Number(body.playerId ?? '0');
     const allowed = await requireManagedPlayer(request, playerId);
     if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
+
+    if (body.action === 'create_category') {
+      try {
+        const category = await savePlayerMediaCategoryByOrganization({
+          organizationId: allowed.organizationId,
+          name: String(body.name ?? ''),
+          createdByUserId: allowed.session.userId ?? 0,
+        });
+        const categories = await listPlayerMediaCategoriesByOrganization({ organizationId: allowed.organizationId });
+        return NextResponse.json({ ok: true, category, categories });
+      } catch (error) {
+        return NextResponse.json({ error: error instanceof Error ? error.message : 'Could not create category.' }, { status: 400 });
+      }
+    }
 
     const r2Key = String(body.r2Key ?? '').trim();
     const fileName = String(body.fileName ?? '').trim();

@@ -5,8 +5,9 @@ import type { CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
 import type { ProgramItemRow } from '../../../lib/training-db';
 import WorkoutLogModal from '../components/workout-log-modal';
+import ThrowingReadonly from './program/throwing/throwing-readonly';
 
-type ViewMode = 'day' | 'week' | 'month' | 'cycle' | 'plan';
+type ViewMode = 'day' | 'week' | 'month' | 'cycle' | 'plan' | 'throwing';
 const CALENDAR_SUB_MODES: ViewMode[] = ['day', 'week', 'month'];
 const PLAN_SECTIONS: Array<{ key: 'daily_prep' | 'throwing' | 'post_throw_arm_care' | 's_and_c' | 'movement_mobility'; label: string }> = [
   { key: 'daily_prep', label: 'Daily Prep' },
@@ -34,6 +35,9 @@ const CYCLE_COLUMNS: Array<{ key: 'medium' | 'high' | 'low' | 'mobility' | 's_an
   { key: 'mobility', label: 'Mobility' },
   { key: 's_and_c', label: 'S&C' },
 ];
+
+type ThrowingDayEntry = Record<string, string>;
+type ThrowingFieldDef = { key: string; label: string };
 
 function toIsoDate(date: Date): string {
   const year = date.getUTCFullYear();
@@ -190,6 +194,11 @@ export default function PlayerCalendar({
   const [catchPlayNotes, setCatchPlayNotes] = useState<{ highDay: string; mediumDay: string; lowDay: string }>({ highDay: '', mediumDay: '', lowDay: '' });
   const [cycleNotes, setCycleNotes] = useState('');
   const [planSectionNotes, setPlanSectionNotes] = useState<Record<string, string> | null>(null);
+  const [throwingByDate, setThrowingByDate] = useState<Record<string, ThrowingDayEntry>>({});
+  const [throwingWeekNotes, setThrowingWeekNotes] = useState<Record<string, string>>({});
+  const [throwingFieldSchema, setThrowingFieldSchema] = useState<ThrowingFieldDef[]>([]);
+  const [throwingLoading, setThrowingLoading] = useState(false);
+  const [throwingError, setThrowingError] = useState('');
   const consumedInitialRef = useRef(false);
   const loadedThrowingNotesRef = useRef(false);
 
@@ -198,10 +207,14 @@ export default function PlayerCalendar({
     setCatchPlayNotes({ highDay: '', mediumDay: '', lowDay: '' });
     setCycleNotes('');
     setPlanSectionNotes(null);
+    setThrowingByDate({});
+    setThrowingWeekNotes({});
+    setThrowingFieldSchema([]);
+    setThrowingError('');
   }, [playerId, previewPlayerId]);
 
   const visibleRange = useMemo(() => {
-    if (view === 'cycle' || view === 'plan') return { startDate: anchorDate, endDate: addDays(anchorDate, 1) };
+    if (view === 'cycle' || view === 'plan' || view === 'throwing') return { startDate: anchorDate, endDate: addDays(anchorDate, 1) };
     if (view === 'day') return { startDate: anchorDate, endDate: addDays(anchorDate, 1) };
     if (view === 'week') return { startDate: startOfWeek(anchorDate), endDate: endOfWeekExclusive(anchorDate) };
     const monthStart = startOfMonth(anchorDate);
@@ -210,6 +223,10 @@ export default function PlayerCalendar({
   }, [anchorDate, view]);
 
   const loadItems = useCallback(async () => {
+    if (view === 'throwing') {
+      setLoading(false);
+      return;
+    }
     const isInitialRange = visibleRange.startDate === initialStartDate && visibleRange.endDate === initialEndDate;
     if (!consumedInitialRef.current && isInitialRange) {
       consumedInitialRef.current = true;
@@ -266,14 +283,22 @@ export default function PlayerCalendar({
 
   useEffect(() => {
     let cancelled = false;
-    if (view !== 'cycle' && !selectedItem) return () => { cancelled = true; };
+    if (view !== 'cycle' && view !== 'throwing' && !selectedItem) return () => { cancelled = true; };
     if (loadedThrowingNotesRef.current) return () => { cancelled = true; };
     loadedThrowingNotesRef.current = true;
+    if (view === 'throwing') {
+      setThrowingLoading(true);
+      setThrowingError('');
+    }
     const playerIdParam = previewPlayerId && Number.isFinite(previewPlayerId) && previewPlayerId > 0
       ? `?playerId=${previewPlayerId}`
       : '';
     fetch(`/api/player/throwing${playerIdParam}`, { cache: 'no-store' })
-      .then((res) => (res.ok ? res.json() : null))
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(String(data.error ?? 'Failed to load throwing schedule.'));
+        return data;
+      })
       .then((data) => {
         if (cancelled || !data) return;
         const notes = data.catchPlayNotes;
@@ -281,9 +306,18 @@ export default function PlayerCalendar({
           setCatchPlayNotes({ highDay: String(notes.highDay ?? ''), mediumDay: String(notes.mediumDay ?? ''), lowDay: String(notes.lowDay ?? '') });
         }
         setCycleNotes(String(data.cycleNotes ?? ''));
+        setThrowingByDate(data.byDate && typeof data.byDate === 'object' ? data.byDate : {});
+        setThrowingWeekNotes(data.weekNotes && typeof data.weekNotes === 'object' ? data.weekNotes : {});
+        setThrowingFieldSchema(Array.isArray(data.fieldSchema) ? data.fieldSchema : []);
       })
-      .catch(() => {
+      .catch((requestError) => {
         loadedThrowingNotesRef.current = false;
+        if (!cancelled && view === 'throwing') {
+          setThrowingError(requestError instanceof Error ? requestError.message : 'Failed to load throwing schedule.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setThrowingLoading(false);
       });
     return () => { cancelled = true; };
   }, [previewPlayerId, selectedItem, view]);
@@ -305,6 +339,7 @@ export default function PlayerCalendar({
   const periodLabel = useMemo(() => {
     if (view === 'cycle') return '3-Day Cycle';
     if (view === 'plan') return 'Training Program';
+    if (view === 'throwing') return 'Throwing';
     const anchor = fromIsoDate(anchorDate);
     if (view === 'month') {
       return anchor.toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' });
@@ -331,7 +366,7 @@ export default function PlayerCalendar({
   }, [anchorDate, view]);
 
   const movePeriod = (direction: -1 | 1) => {
-    if (view === 'cycle' || view === 'plan') return;
+    if (view === 'cycle' || view === 'plan' || view === 'throwing') return;
     if (view === 'day') {
       setAnchorDate((prev) => addDays(prev, direction));
       return;
@@ -456,6 +491,13 @@ export default function PlayerCalendar({
           >
             Training Program
           </button>
+          <button
+            type="button"
+            className={`btn ${view === 'throwing' ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setView('throwing')}
+          >
+            Throwing
+          </button>
         </div>
         {isCalendarActive && (
           <div className="portal-schedule-view-switch" role="group" aria-label="Calendar sub-view">
@@ -474,7 +516,7 @@ export default function PlayerCalendar({
             ))}
           </div>
         )}
-        {view !== 'cycle' && view !== 'plan' && (
+        {isCalendarActive && (
           <div className="portal-schedule-nav">
             <button type="button" className="btn btn-ghost" onClick={() => movePeriod(-1)}>
               Prev
@@ -486,9 +528,9 @@ export default function PlayerCalendar({
         )}
       </div>
 
-      <section className="portal-schedule-calendar" aria-busy={loading}>
-        <h3 className="portal-schedule-period">{periodLabel}</h3>
-        {view !== 'day' && view !== 'cycle' && view !== 'plan' && (
+      <section className="portal-schedule-calendar" aria-busy={loading || throwingLoading}>
+        {view !== 'throwing' && <h3 className="portal-schedule-period">{periodLabel}</h3>}
+        {(view === 'week' || view === 'month') && (
           <div
             className={`portal-schedule-weekdays${view === 'week' ? ' is-week' : ''}`}
             style={{
@@ -628,9 +670,27 @@ export default function PlayerCalendar({
             })}
           </div>
         )}
+        {view === 'throwing' && throwingLoading ? (
+          <p className="portal-muted-text">Loading throwing schedule...</p>
+        ) : null}
+        {view === 'throwing' && !throwingLoading && !throwingError ? (
+          Object.keys(throwingByDate).length > 0 ? (
+            <ThrowingReadonly
+              key={`throwing-${playerId}-${previewPlayerId ?? 'self'}`}
+              byDate={throwingByDate}
+              weekNotes={throwingWeekNotes}
+              fieldSchema={throwingFieldSchema}
+              initialDate={toIsoDate(new Date())}
+              initialView="day"
+            />
+          ) : (
+            <p className="portal-muted-text">No throwing schedule data yet.</p>
+          )
+        ) : null}
       </section>
 
       {error && <p className="auth-error">{error}</p>}
+      {throwingError && <p className="auth-error">{throwingError}</p>}
 
       {selectedItem && (
         <WorkoutLogModal

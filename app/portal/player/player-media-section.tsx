@@ -112,17 +112,21 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
   const [orgMediaCategories, setOrgMediaCategories] = useState<string[]>([]);
   const [mediaFiles, setMediaFiles] = useState<File[]>([]);
   const [mediaTitle, setMediaTitle] = useState('');
-  const [mediaCategory, setMediaCategory] = useState('General');
+  const [mediaCategory, setMediaCategory] = useState('Game');
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState('');
   const [filterCategory, setFilterCategory] = useState('All');
+  const [addingCategory, setAddingCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [savingCategory, setSavingCategory] = useState(false);
 
   const categoryOptions = useMemo(
     () => uniqueCategoryNames(media.map((m) => m.category)),
     [media]
   );
   const uploadCategoryOptions = useMemo(
-    () => uniqueCategoryNames(['General', 'Workout', 'Drills', 'Bullpen', 'Mechanics', 'Edger', ...orgMediaCategories, ...media.map((m) => m.category)]),
+    () => uniqueCategoryNames(['Game', 'Scrimmage', 'Workout', 'Drills', 'Bullpen', 'Mechanics', 'Edger', ...orgMediaCategories, ...media.map((m) => m.category)])
+      .filter((category) => category.toLowerCase() !== 'general'),
     [media, orgMediaCategories]
   );
   const uploadCategorySelectOptions = useMemo(
@@ -185,6 +189,31 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
     }
   }
 
+  async function createCategory() {
+    const name = newCategoryName.trim();
+    if (!name) return;
+    setSavingCategory(true);
+    setMessage('');
+    try {
+      const response = await fetch('/api/player/media', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'create_category', playerId, name }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { category?: string; categories?: string[]; error?: string };
+      if (!response.ok || !payload.category) throw new Error(payload.error ?? 'Could not create category.');
+      if (Array.isArray(payload.categories)) setOrgMediaCategories(payload.categories);
+      setMediaCategory(payload.category);
+      setNewCategoryName('');
+      setAddingCategory(false);
+      setMessage(`${payload.category} category added.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not create category.');
+    } finally {
+      setSavingCategory(false);
+    }
+  }
+
   const filtered = filterCategory === 'All' ? media : media.filter((m) => m.category === filterCategory);
   const previewIndex = mediaPreview ? filtered.findIndex((item) => item.id === mediaPreview.mediaId) : -1;
 
@@ -242,6 +271,7 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
         <label>
           Upload
           <input
+            className="portal-player-media-file-input"
             type="file"
             accept="image/*,video/*,application/pdf,.pdf"
             multiple
@@ -258,7 +288,17 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
           <input value={mediaTitle} onChange={(e) => setMediaTitle(e.target.value)} placeholder="Optional name..." />
         </label>
         <label>
-          Category
+          <span className="portal-player-media-category-label">
+            <span>Category</span>
+            <button
+              type="button"
+              className="portal-player-media-new-category-trigger"
+              aria-expanded={addingCategory}
+              onClick={() => setAddingCategory((current) => !current)}
+            >
+              + New
+            </button>
+          </span>
           <select
             className="portal-desktop-category-input"
             value={mediaCategory}
@@ -278,6 +318,43 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
           {uploading ? 'Uploading...' : 'Upload'}
         </button>
       </div>
+      {addingCategory ? (
+        <div className="portal-player-media-category-creator">
+          <label htmlFor={`player-media-category-${playerId}`}>
+            <span>New Category</span>
+            <input
+              className="portal-player-media-category-input"
+              id={`player-media-category-${playerId}`}
+              autoFocus
+              value={newCategoryName}
+              maxLength={80}
+              placeholder="e.g. Pitch Design"
+              onChange={(event) => setNewCategoryName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  void createCategory();
+                }
+              }}
+            />
+          </label>
+          <div>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => {
+                setAddingCategory(false);
+                setNewCategoryName('');
+              }}
+            >
+              Cancel
+            </button>
+            <button type="button" className="btn btn-primary" disabled={savingCategory || !newCategoryName.trim()} onClick={() => void createCategory()}>
+              {savingCategory ? 'Adding...' : 'Add Category'}
+            </button>
+          </div>
+        </div>
+      ) : null}
       {mediaFiles.length > 0 && (
         <p className="portal-muted-text" style={{ margin: '0 0 8px' }}>{mediaFiles.map((f) => f.name).join(', ')}</p>
       )}

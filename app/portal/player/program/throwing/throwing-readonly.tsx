@@ -4,6 +4,9 @@ import { useMemo, useState } from 'react';
 
 type ThrowingDayEntry = Record<string, string>;
 type ThrowingFieldDef = { key: string; label: string };
+type CalendarBlockColor = 'none' | 'red' | 'yellow' | 'green';
+
+const CALENDAR_COLOR_FIELD = '__masterCalendarColor';
 
 const DEFAULT_THROWING_FIELDS: ThrowingFieldDef[] = [
   { key: 'intensity', label: 'Intensity' },
@@ -50,19 +53,32 @@ function makeMonthGrid(anchor: string): Array<string> {
   return result;
 }
 
+function calendarBlockColor(value: string | undefined): CalendarBlockColor {
+  return value === 'red' || value === 'yellow' || value === 'green' ? value : 'none';
+}
+
+function throwingCellHighlightStyle(color: CalendarBlockColor) {
+  if (color === 'red') return { backgroundColor: 'rgba(153, 27, 27, 0.30)', boxShadow: 'inset 0 0 0 1px rgba(239, 68, 68, 0.62)' };
+  if (color === 'yellow') return { backgroundColor: 'rgba(202, 138, 4, 0.28)', boxShadow: 'inset 0 0 0 1px rgba(250, 204, 21, 0.62)' };
+  if (color === 'green') return { backgroundColor: 'rgba(21, 128, 61, 0.30)', boxShadow: 'inset 0 0 0 1px rgba(74, 222, 128, 0.62)' };
+  return {};
+}
+
 export default function ThrowingReadonly({
   byDate,
   weekNotes,
   fieldSchema,
   initialDate,
+  initialView,
 }: {
   byDate: Record<string, ThrowingDayEntry>;
   weekNotes: Record<string, string>;
   fieldSchema?: ThrowingFieldDef[];
   initialDate?: string;
+  initialView?: 'month' | 'week' | 'day';
 }) {
   const fields = fieldSchema && fieldSchema.length ? fieldSchema : DEFAULT_THROWING_FIELDS;
-  const [view, setView] = useState<'month' | 'week' | 'day'>(initialDate ? 'day' : 'month');
+  const [view, setView] = useState<'month' | 'week' | 'day'>(initialView ?? (initialDate ? 'day' : 'month'));
   const [anchorDate, setAnchorDate] = useState(() => {
     if (initialDate) return initialDate;
     const dates = Object.keys(byDate).sort();
@@ -133,33 +149,26 @@ export default function ThrowingReadonly({
     resize: 'none' as const,
   };
 
-  const parseIntensityValue = (raw: string): number | null => {
-    const match = String(raw ?? '').match(/(\d+(?:\.\d+)?)/);
-    if (!match) return null;
-    const value = Number(match[1]);
-    return Number.isFinite(value) ? value : null;
-  };
-  const getThrowingCellHighlightStyle = (entry: ThrowingDayEntry) => {
-    const intensity = parseIntensityValue(entry.intensity ?? '');
-    if (intensity == null) return {};
-    if (intensity <= 60) return { background: 'rgba(153, 27, 27, 0.30)', boxShadow: 'inset 0 0 0 1px rgba(239, 68, 68, 0.55)' };
-    if (intensity >= 65 && intensity <= 85) return { background: 'rgba(202, 138, 4, 0.28)', boxShadow: 'inset 0 0 0 1px rgba(250, 204, 21, 0.55)' };
-    if (intensity >= 90) return { background: 'rgba(21, 128, 61, 0.30)', boxShadow: 'inset 0 0 0 1px rgba(74, 222, 128, 0.55)' };
-    return {};
-  };
-
   const cell = (date: string) => {
     const entry = byDate[date] ?? {};
+    const blockColor = calendarBlockColor(entry[CALENDAR_COLOR_FIELD]);
     return (
       <article
         key={date}
-        className="portal-schedule-day portal-throwing-cell"
-        style={{ minHeight: '182px', borderRadius: 0, borderRight: '1px solid var(--calendar-grid-border, var(--border))', borderBottom: '1px solid var(--calendar-grid-border, var(--border))' }}
+        className={`portal-schedule-day portal-throwing-cell portal-throwing-cell--${blockColor}`}
+        data-calendar-color={blockColor}
+        style={{
+          minHeight: '182px',
+          borderRadius: 0,
+          borderRight: '1px solid var(--calendar-grid-border, var(--border))',
+          borderBottom: '1px solid var(--calendar-grid-border, var(--border))',
+          ...throwingCellHighlightStyle(blockColor),
+        }}
       >
         <div className="portal-schedule-day-head">
           <span className="portal-schedule-day-num">{fromIsoDate(date).getUTCDate()}</span>
         </div>
-        <div className="portal-schedule-day-body" style={{ display: 'grid', gap: '0.28rem', ...getThrowingCellHighlightStyle(entry) }}>
+        <div className="portal-schedule-day-body" style={{ display: 'grid', gap: '0.28rem' }}>
           {fields.map((field) => (
             <div key={field.key} style={throwingRowStyle}>
               <span style={throwingLabelStyle}>{field.label}:</span>
@@ -172,7 +181,7 @@ export default function ThrowingReadonly({
   };
 
   return (
-    <section className="portal-schedule-calendar" style={{ gridColumn: '1 / -1', width: '100%' }}>
+    <section className="portal-schedule-calendar portal-throwing-readonly" data-throwing-view={view} style={{ gridColumn: '1 / -1', width: '100%' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: '0.45rem' }}>
         <h3 className="portal-schedule-period">{periodLabel}</h3>
         <div className="portal-schedule-nav">
@@ -191,15 +200,15 @@ export default function ThrowingReadonly({
       </div>
 
       <div
-        className="portal-schedule-weekdays is-week"
+        className={`portal-schedule-weekdays is-week ${view === 'day' ? 'portal-throwing-day-headings' : 'portal-throwing-week-headings'}`}
         style={{
           borderTop: '1px solid var(--calendar-grid-border, var(--border))',
           borderLeft: '1px solid var(--calendar-grid-border, var(--border))',
           display: 'grid',
-          gridTemplateColumns: 'repeat(7, minmax(0, 1fr)) minmax(220px, 1.35fr)',
+          gridTemplateColumns: view === 'day' ? 'minmax(0, 1fr) minmax(220px, 1.35fr)' : 'repeat(7, minmax(0, 1fr)) minmax(220px, 1.35fr)',
         }}
       >
-        {[...WEEKDAY_LABELS, 'Notes'].map((label) => (
+        {(view === 'day' ? [WEEKDAY_LABELS[fromIsoDate(anchorDate).getUTCDay()], 'Notes'] : [...WEEKDAY_LABELS, 'Notes']).map((label) => (
           <span key={label} style={{ borderRight: '1px solid var(--calendar-grid-border, var(--border))', borderBottom: '1px solid var(--calendar-grid-border, var(--border))', padding: '0.35rem 0.25rem', textAlign: 'center' }}>
             {label}
           </span>
@@ -207,7 +216,7 @@ export default function ThrowingReadonly({
       </div>
 
       {view === 'day' ? (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr minmax(220px, 1.35fr)', borderLeft: '1px solid var(--calendar-grid-border, var(--border))' }}>
+        <div className="portal-throwing-day-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(220px, 1.35fr)', borderLeft: '1px solid var(--calendar-grid-border, var(--border))' }}>
           {cell(anchorDate)}
           <article className="portal-schedule-day portal-throwing-cell" style={{ minHeight: '182px', borderRadius: 0, borderRight: '1px solid var(--calendar-grid-border, var(--border))', borderBottom: '1px solid var(--calendar-grid-border, var(--border))' }}>
             <div className="portal-schedule-day-body" style={{ margin: 0 }}>
@@ -218,7 +227,7 @@ export default function ThrowingReadonly({
       ) : null}
 
       {view === 'week' ? (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr)) minmax(220px, 1.35fr)', borderLeft: '1px solid var(--calendar-grid-border, var(--border))' }}>
+        <div className="portal-throwing-week-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr)) minmax(220px, 1.35fr)', borderLeft: '1px solid var(--calendar-grid-border, var(--border))' }}>
           {weekCells.map((date) => cell(date))}
           <article className="portal-schedule-day portal-throwing-cell" style={{ minHeight: '182px', borderRadius: 0, borderRight: '1px solid var(--calendar-grid-border, var(--border))', borderBottom: '1px solid var(--calendar-grid-border, var(--border))' }}>
             <div className="portal-schedule-day-body" style={{ margin: 0 }}>
@@ -234,7 +243,7 @@ export default function ThrowingReadonly({
             const days = monthCells.slice(weekIdx * 7, weekIdx * 7 + 7);
             const start = startOfWeek(days[0]!);
             return (
-              <div key={`wk-${weekIdx}`} style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr)) minmax(220px, 1.35fr)' }}>
+              <div key={`wk-${weekIdx}`} className="portal-throwing-month-week" style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr)) minmax(220px, 1.35fr)' }}>
                 {days.map((date) => cell(date))}
                 <article className="portal-schedule-day portal-throwing-cell" style={{ minHeight: '182px', borderRadius: 0, borderRight: '1px solid var(--calendar-grid-border, var(--border))', borderBottom: '1px solid var(--calendar-grid-border, var(--border))' }}>
                   <div className="portal-schedule-day-body" style={{ margin: 0 }}>

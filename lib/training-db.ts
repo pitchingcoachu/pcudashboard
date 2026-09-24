@@ -783,6 +783,16 @@ export async function ensureTrainingDbReady(): Promise<void> {
     await pool.query(`ALTER TABLE player_media ADD COLUMN IF NOT EXISTS processing_error TEXT;`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_media_player_created ON player_media (player_id, created_at DESC);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_media_org_player_category ON player_media (organization_id, player_id, lower(category));`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS player_media_categories (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        created_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_player_media_categories_org_name ON player_media_categories (organization_id, lower(name));`);
     await pool.query(`ALTER TABLE body_weight_logs ADD COLUMN IF NOT EXISTS media_id BIGINT REFERENCES player_media(id) ON DELETE SET NULL;`);
     await pool.query(`
     CREATE TABLE IF NOT EXISTS note_media (
@@ -12681,6 +12691,11 @@ export async function listPlayerMediaCategoriesByOrganization(input: {
         WHERE organization_id = $1
           AND ($2::text IS NULL OR media_type = $2::text)
           AND BTRIM(COALESCE(category, '')) <> ''
+        UNION ALL
+        SELECT BTRIM(name) AS category
+        FROM player_media_categories
+        WHERE organization_id = $1
+          AND BTRIM(COALESCE(name, '')) <> ''
       ) categories
       GROUP BY category
       ORDER BY lower(category), category
@@ -12688,6 +12703,37 @@ export async function listPlayerMediaCategoriesByOrganization(input: {
     [input.organizationId, mediaType]
   );
   return result.rows.map((row) => String(row.category ?? '').trim()).filter(Boolean);
+}
+
+export async function savePlayerMediaCategoryByOrganization(input: {
+  organizationId: number;
+  name: string;
+  createdByUserId: number;
+}): Promise<string> {
+  if (!isDatabaseConfigured()) throw new Error('DATABASE_URL is not configured.');
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const name = String(input.name ?? '').trim().replace(/\s+/g, ' ').slice(0, 80);
+  if (!name) throw new Error('Enter a category name.');
+  if (name.toLowerCase() === 'general') throw new Error('Choose a category name other than General.');
+  await pool.query(
+    `
+      INSERT INTO player_media_categories (organization_id, name, created_by_user_id)
+      VALUES ($1, $2, $3)
+      ON CONFLICT DO NOTHING
+    `,
+    [input.organizationId, name, input.createdByUserId || null]
+  );
+  const result = await pool.query<{ name: string }>(
+    `
+      SELECT name
+      FROM player_media_categories
+      WHERE organization_id = $1 AND lower(name) = lower($2)
+      LIMIT 1
+    `,
+    [input.organizationId, name]
+  );
+  return String(result.rows[0]?.name ?? name).trim();
 }
 
 export async function getPlayerMedia(input: {

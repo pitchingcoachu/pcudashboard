@@ -19,9 +19,10 @@ const BASEBALL_FILTER_PARAMS = [
   'in_zone', 'count_filter', 'after_count_filter', 'zone_locations', 'velo_min', 'velo_max', 'ivb_min',
   'ivb_max', 'hb_min', 'hb_max',
 ] as const;
-const LOWER_PITCHING = new Set(['bbpct', 'hrpct', 'ev', 'rv100', 'pv100', 'era', 'fip', 'xfip', 'siera', 'whip', 'itmissavg', 'itmissmed']);
+const LOWER_PITCHING = new Set(['bbpct', 'hrpct', 'barrelpct', 'ev', 'rv100', 'pv100', 'era', 'fip', 'xfip', 'siera', 'whip', 'itmissavg', 'itmissmed']);
 const LOWER_HITTING = new Set(['kpct', 'whiffpct', 'whiffrate', 'swstrkpct', 'zwhiffpct', 'chasepct', 'calledspct']);
 const LOWER_CATCHING = new Set(['exchangetime', 'poptime']);
+const SINKER_PITCH_TYPE_TOKENS = new Set(['sinker', 'oneseamfastball', 'twoseam', 'twoseamfastball', 'twoseamfasball', 'si', 'ft']);
 
 function token(value: unknown): string {
   return String(value ?? '').trim().toLowerCase().replace(/%/g, 'pct').replace(/[^a-z0-9]/g, '');
@@ -55,9 +56,17 @@ function percentileForValue(value: number, values: number[]): number | null {
   return Math.max(0, Math.min(100, ((less + equal * 0.5 - 0.5) / (sorted.length - 1)) * 100));
 }
 
-function isLowerBetter(domain: Domain, metric: string): boolean {
+function isSinkerOnlyFilter(value: string): boolean {
+  const pitchTypes = value
+    .split(/[,;|]/)
+    .map((entry) => token(entry))
+    .filter((entry) => entry && entry !== 'all');
+  return pitchTypes.length > 0 && pitchTypes.every((entry) => SINKER_PITCH_TYPE_TOKENS.has(entry));
+}
+
+function isLowerBetter(domain: Domain, metric: string, pitchTypes: string): boolean {
   const key = token(metric);
-  return (domain === 'pitching' && LOWER_PITCHING.has(key))
+  return (domain === 'pitching' && (LOWER_PITCHING.has(key) || (key === 'ivb' && isSinkerOnlyFilter(pitchTypes))))
     || (domain === 'hitting' && LOWER_HITTING.has(key))
     || (domain === 'catching' && LOWER_CATCHING.has(key));
 }
@@ -186,7 +195,7 @@ export async function GET(request: Request) {
       return candidate === null ? [] : [candidate];
     });
     const raw = value === null ? null : percentileForValue(value, distribution);
-    const lowerBetter = isLowerBetter(domain, metric);
+    const lowerBetter = isLowerBetter(domain, metric, String(input.searchParams.get('pitch_types') ?? ''));
     const percentile = raw === null ? null : lowerBetter ? 100 - raw : raw;
     return NextResponse.json({
       domain,

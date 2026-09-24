@@ -114,8 +114,16 @@ export default function MasterCalendarTabs({
   const [title, setTitle] = useState(initialTitle);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
+  const [throwingSaveError, setThrowingSaveError] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const tableScrollRef = useRef<HTMLDivElement | null>(null);
+  const pendingThrowingSavesRef = useRef(new Map<string, {
+    timeoutId: number;
+    playerId: number;
+    day: string;
+    fieldKey: string;
+    value: string;
+  }>());
 
   useEffect(() => {
     if (!throwingMenu) return;
@@ -131,14 +139,39 @@ export default function MasterCalendarTabs({
     const key = `${playerId}-${day}-${fieldKey}`;
     setSavingThrowingKey(key);
     try {
-      await fetch('/api/admin/master-calendar/throwing-field', {
+      const response = await fetch('/api/admin/master-calendar/throwing-field', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ playerId, dayDate: day, fieldKey, value }),
+        keepalive: true,
       });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Could not save the throwing-calendar entry.');
+      setThrowingSaveError(null);
+    } catch (error) {
+      setThrowingSaveError(error instanceof Error ? error.message : 'Could not save the throwing-calendar entry.');
     } finally {
       setSavingThrowingKey((current) => (current === key ? null : current));
     }
+  }
+
+  function queueThrowingFieldSave(playerId: number, day: string, fieldKey: string, value: string) {
+    const key = `${playerId}-${day}-${fieldKey}`;
+    const pending = pendingThrowingSavesRef.current.get(key);
+    if (pending) window.clearTimeout(pending.timeoutId);
+    const timeoutId = window.setTimeout(() => {
+      pendingThrowingSavesRef.current.delete(key);
+      void saveThrowingField(playerId, day, fieldKey, value);
+    }, 500);
+    pendingThrowingSavesRef.current.set(key, { timeoutId, playerId, day, fieldKey, value });
+  }
+
+  function flushThrowingFieldSave(playerId: number, day: string, fieldKey: string, value: string) {
+    const key = `${playerId}-${day}-${fieldKey}`;
+    const pending = pendingThrowingSavesRef.current.get(key);
+    if (pending) window.clearTimeout(pending.timeoutId);
+    pendingThrowingSavesRef.current.delete(key);
+    void saveThrowingField(playerId, day, fieldKey, value);
   }
 
   function updateThrowingFieldText(playerId: number, day: string, fieldKey: string, value: string) {
@@ -519,8 +552,12 @@ export default function MasterCalendarTabs({
               <input
                 className="portal-throwing-field"
                 value={entry[field.key] ?? ''}
-                onChange={(event) => updateThrowingFieldText(playerId, day, field.key, event.target.value)}
-                onBlur={(event) => saveThrowingField(playerId, day, field.key, event.target.value)}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  updateThrowingFieldText(playerId, day, field.key, value);
+                  queueThrowingFieldSave(playerId, day, field.key, value);
+                }}
+                onBlur={(event) => flushThrowingFieldSave(playerId, day, field.key, event.target.value)}
                 style={{
                   width: '100%',
                   minHeight: 28,
@@ -576,6 +613,7 @@ export default function MasterCalendarTabs({
           ))}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {throwingSaveError ? <span role="alert" style={{ color: '#f87171', fontSize: '0.8rem' }}>{throwingSaveError}</span> : null}
           {pdfError ? <span style={{ color: '#f87171', fontSize: '0.8rem' }}>{pdfError}</span> : null}
           <button type="button" className="btn btn-ghost" disabled={isExportingPdf} onClick={() => void exportPdf()}>
             {isExportingPdf ? 'Exporting…' : 'Export PDF'}
