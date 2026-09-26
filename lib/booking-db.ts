@@ -1,8 +1,11 @@
 import type { PoolClient } from 'pg';
 import { ensureAuthDbReady, getDbPool, isDatabaseConfigured } from './auth-db';
 
-export type SessionTypeValue = 'bullpen' | 'regular';
-export type BookingOverrideScope = SessionTypeValue | 'all';
+// 'assessment' slots are created only by external booking sources (Calendly today); they are
+// never published as open availability and each assessment booking also occupies one spot in
+// the Regular Training pool for every clock hour it overlaps.
+export type SessionTypeValue = 'bullpen' | 'regular' | 'assessment';
+export type BookingOverrideScope = 'bullpen' | 'regular' | 'all';
 
 export type BookingDateOverride = {
   id: number;
@@ -21,7 +24,7 @@ export type BookingSlot = {
   closedByOverride: boolean;
   bookedCount: number;
   myBookingId: number | null;
-  attendees: Array<{ bookingId: number; playerId: number; playerName: string }>;
+  attendees: Array<{ bookingId: number; playerId: number | null; playerName: string; source: string }>;
 };
 
 let bookingTablesReady = false;
@@ -72,7 +75,7 @@ export async function ensureBookingTables(): Promise<void> {
   await client.query(`ALTER TABLE booking_slots DROP CONSTRAINT IF EXISTS booking_slots_check;`);
   await client.query(`ALTER TABLE booking_slots ADD CONSTRAINT booking_slots_check CHECK (ends_at >= starts_at);`);
   await client.query(`ALTER TABLE booking_slots DROP CONSTRAINT IF EXISTS booking_slots_session_type_check;`);
-  await client.query(`ALTER TABLE booking_slots ADD CONSTRAINT booking_slots_session_type_check CHECK (session_type IN ('bullpen','regular'));`);
+  await client.query(`ALTER TABLE booking_slots ADD CONSTRAINT booking_slots_session_type_check CHECK (session_type IN ('bullpen','regular','assessment'));`);
   await client.query(`ALTER TABLE booking_slots DROP CONSTRAINT IF EXISTS booking_slots_coach_user_id_fkey;`);
   await client.query(`ALTER TABLE booking_slots DROP CONSTRAINT IF EXISTS booking_slots_session_type_id_fkey;`);
   await client.query(`ALTER TABLE booking_slots DROP COLUMN IF EXISTS coach_user_id;`);
@@ -98,6 +101,16 @@ export async function ensureBookingTables(): Promise<void> {
     );
   `);
   await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_session_booking_active_player ON session_bookings (slot_id, player_id) WHERE status IN ('booked', 'attended');`);
+  // Bookings from outside sources (Calendly) may belong to a lead who has no player profile yet.
+  await client.query(`ALTER TABLE session_bookings ALTER COLUMN player_id DROP NOT NULL;`);
+  await client.query(`ALTER TABLE session_bookings ADD COLUMN IF NOT EXISTS lead_name TEXT;`);
+  await client.query(`ALTER TABLE session_bookings ADD COLUMN IF NOT EXISTS lead_email TEXT;`);
+  await client.query(`ALTER TABLE session_bookings ADD COLUMN IF NOT EXISTS lead_phone TEXT;`);
+  await client.query(`ALTER TABLE session_bookings ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'app';`);
+  await client.query(`ALTER TABLE session_bookings ADD COLUMN IF NOT EXISTS external_id TEXT;`);
+  await client.query(`ALTER TABLE session_bookings DROP CONSTRAINT IF EXISTS session_bookings_person_check;`);
+  await client.query(`ALTER TABLE session_bookings ADD CONSTRAINT session_bookings_person_check CHECK (player_id IS NOT NULL OR lead_name IS NOT NULL);`);
+  await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_session_booking_external ON session_bookings (organization_id, source, external_id) WHERE external_id IS NOT NULL;`);
   await client.query(`CREATE INDEX IF NOT EXISTS idx_session_bookings_slot_status ON session_bookings (slot_id, status);`);
   await client.query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS min_booking_lead_hours INTEGER NOT NULL DEFAULT 4;`);
   await client.query(`
@@ -283,13 +296,13 @@ export async function listBookingSlots(input: {
          DATE_TRUNC('hour', s.starts_at AT TIME ZONE 'America/Phoenix') AS hour_bucket,
          COUNT(b.id) FILTER (WHERE b.status IN ('booked','attended'))::int AS own_booked_count,
          MAX(b.id) FILTER (WHERE b.player_id=$4 AND b.status IN ('booked','attended')) AS my_booking_id,
-         COALESCE(JSONB_AGG(JSONB_BUILD_OBJECT('bookingId',b.id,'playerId',b.player_id,'playerName',p.full_name)
-           ORDER BY p.full_name) FILTER (WHERE b.id IS NOT NULL AND b.status IN ('booked','attended')), '[]'::jsonb) AS attendees
+         COALESCE(JSONB_AGG(JSONB_BUILD_OBJECT('bookingId',b.id,'playerId',b.player_id,'playerName',COALESCE(p.full_name,b.lead_name,'Guest'),'source',b.source)
+           ORDER BY COALESCE(p.full_name,b.lead_name)) FILTER (WHERE b.id IS NOT NULL AND b.status IN ('booked','attended')), '[]'::jsonb) AS attendees
        FROM booking_slots s
        LEFT JOIN session_bookings b ON b.slot_id=s.id AND b.status IN ('booked','attended') LEFT JOIN players p ON p.id=b.player_id
        WHERE s.organization_id=$1 AND s.starts_at >= ($2::date AT TIME ZONE 'America/Phoenix')
          AND s.starts_at < (($3::date + 1) AT TIME ZONE 'America/Phoenix')
-         ${input.staff ? '' : "AND s.ends_at>NOW() AND ((s.status='open' AND NOT EXISTS (SELECT 1 FROM booking_date_overrides o WHERE o.organization_id=s.organization_id AND o.override_date=(s.starts_at AT TIME ZONE 'America/Phoenix')::date AND o.session_type IN ('all',s.session_type))) OR EXISTS (SELECT 1 FROM session_bookings own WHERE own.slot_id=s.id AND own.player_id=$4 AND own.status IN ('booked','attended')))"}
+         ${input.staff ? '' : "AND s.session_type<>'assessment' AND s.ends_at>NOW() AND ((s.status='open' AND NOT EXISTS (SELECT 1 FROM booking_date_overrides o WHERE o.organization_id=s.organization_id AND o.override_date=(s.starts_at AT TIME ZONE 'America/Phoenix')::date AND o.session_type IN ('all',s.session_type))) OR EXISTS (SELECT 1 FROM session_bookings own WHERE own.slot_id=s.id AND own.player_id=$4 AND own.status IN ('booked','attended')))"}
        GROUP BY s.id,s.session_type,s.starts_at,s.capacity,s.location,s.status
      ),
      bullpen_spillover AS (
@@ -300,13 +313,25 @@ export async function listBookingSlots(input: {
          AND s.starts_at >= (($2::date AT TIME ZONE 'America/Phoenix') + INTERVAL '1 hour')
          AND s.starts_at < (((($3::date + 1) AT TIME ZONE 'America/Phoenix')) + INTERVAL '1 hour')
        GROUP BY 1
+     ),
+     -- Each assessment booking holds one spot in the Regular Training pool for every clock hour it overlaps.
+     assessment_load AS (
+       SELECT hb.hour_bucket, COUNT(ab.id)::int AS load_count
+       FROM (SELECT DISTINCT hour_bucket FROM base WHERE session_type='regular') hb
+       JOIN booking_slots s ON s.organization_id=$1 AND s.session_type='assessment'
+         AND (s.starts_at AT TIME ZONE 'America/Phoenix') < hb.hour_bucket + INTERVAL '1 hour'
+         AND (s.ends_at AT TIME ZONE 'America/Phoenix') > hb.hour_bucket
+       JOIN session_bookings ab ON ab.slot_id=s.id AND ab.status IN ('booked','attended')
+       GROUP BY hb.hour_bucket
      )
      SELECT base.id, base.session_type, base.starts_at, base.capacity, base.location, base.status, base.closed_by_override, base.my_booking_id, base.attendees,
        CASE WHEN base.session_type='regular'
          THEN SUM(base.own_booked_count) OVER (PARTITION BY base.session_type, base.hour_bucket)
            + COALESCE(MAX(spill.spillover_count) OVER (PARTITION BY base.session_type, base.hour_bucket), 0)
+           + COALESCE(MAX(aload.load_count) OVER (PARTITION BY base.session_type, base.hour_bucket), 0)
          ELSE base.own_booked_count END AS booked_count
      FROM base LEFT JOIN bullpen_spillover spill ON spill.hour_bucket=base.hour_bucket
+       LEFT JOIN assessment_load aload ON aload.hour_bucket=base.hour_bucket AND base.session_type='regular'
      ORDER BY base.starts_at`,
     [input.organizationId, input.startDate, input.endDate, input.playerId ?? 0]
   );
@@ -347,6 +372,7 @@ async function bookSlotWithClient(
   );
   const slot = slotResult.rows[0];
   if (!slot || slot.status !== 'open') throw new Error('This time is no longer available.');
+  if (slot.session_type === 'assessment') throw new Error('Assessments are booked through Calendly.');
   const dateOverride = await client.query(
     `SELECT 1 FROM booking_date_overrides
      WHERE organization_id=$1
@@ -404,7 +430,15 @@ async function bookSlotWithClient(
            = DATE_TRUNC('hour', $2::timestamptz AT TIME ZONE 'America/Phoenix')`,
       [input.organizationId, slot.starts_at]
     );
-    const totalBooked = Number(count.rows[0]?.count ?? 0) + Number(spillover.rows[0]?.count ?? 0);
+    // Each assessment overlapping this hour holds one spot in the pool.
+    const assessmentLoad = await client.query(
+      `SELECT COUNT(*)::int AS count FROM booking_slots bs JOIN session_bookings bb ON bb.slot_id=bs.id AND bb.status IN ('booked','attended')
+       WHERE bs.organization_id=$1 AND bs.session_type='assessment'
+         AND (bs.starts_at AT TIME ZONE 'America/Phoenix') < DATE_TRUNC('hour', $2::timestamptz AT TIME ZONE 'America/Phoenix') + INTERVAL '1 hour'
+         AND (bs.ends_at AT TIME ZONE 'America/Phoenix') > DATE_TRUNC('hour', $2::timestamptz AT TIME ZONE 'America/Phoenix')`,
+      [input.organizationId, slot.starts_at]
+    );
+    const totalBooked = Number(count.rows[0]?.count ?? 0) + Number(spillover.rows[0]?.count ?? 0) + Number(assessmentLoad.rows[0]?.count ?? 0);
     if (totalBooked >= Number(slot.capacity)) throw new Error('This session just filled up.');
   } else {
     const count = await client.query(
@@ -455,6 +489,7 @@ export async function rescheduleSessionBooking(input: {
     );
     const old = existing.rows[0];
     if (!old) throw new Error('Booking not found or already cancelled.');
+    if (old.player_id === null) throw new Error('This booking came from Calendly — reschedule it in Calendly.');
 
     const result = await bookSlotWithClient(client, {
       organizationId: input.organizationId, slotId: input.newSlotId, playerId: Number(old.player_id),
@@ -528,16 +563,18 @@ export async function cancelSessionBooking(input: { organizationId: number; book
   if (!input.staff) params.push(input.playerId ?? 0);
   const result = await getDbPool().query(
     `UPDATE session_bookings b SET status='cancelled',cancelled_by_user_id=$3,cancelled_at=NOW(),updated_at=NOW()
-     FROM booking_slots s, players p
-     WHERE b.id=$1 AND b.organization_id=$2 AND s.id=b.slot_id AND p.id=b.player_id
+     FROM booking_slots s
+     WHERE b.id=$1 AND b.organization_id=$2 AND s.id=b.slot_id
        AND b.status='booked' ${input.staff ? '' : 'AND b.player_id=$4'}
-     RETURNING b.id,b.player_user_id,b.player_id,p.full_name,s.session_type,s.starts_at`,
+     RETURNING b.id,b.player_user_id,b.player_id,
+       COALESCE((SELECT p.full_name FROM players p WHERE p.id=b.player_id),b.lead_name,'Guest') AS full_name,
+       s.session_type,s.starts_at`,
     params
   );
   if (!result.rows[0]) throw new Error('Booking not found or already cancelled.');
   const row = result.rows[0];
   return {
-    bookingId: Number(row.id), playerUserId: row.player_user_id ? Number(row.player_user_id) : null, playerId: Number(row.player_id),
+    bookingId: Number(row.id), playerUserId: row.player_user_id ? Number(row.player_user_id) : null, playerId: row.player_id ? Number(row.player_id) : null,
     playerName: row.full_name, sessionType: row.session_type as SessionTypeValue, startsAt: new Date(row.starts_at).toISOString(),
   };
 }
@@ -546,4 +583,105 @@ export async function updateBookingSlotStatus(input: { organizationId: number; s
   await ensureBookingTables();
   const result = await getDbPool().query(`UPDATE booking_slots SET status=$3,updated_at=NOW() WHERE id=$1 AND organization_id=$2 RETURNING id`, [input.slotId, input.organizationId, input.status]);
   if (!result.rows[0]) throw new Error('Session slot not found.');
+}
+
+export type ExternalAssessmentInput = {
+  organizationId: number; source: 'calendly'; externalId: string;
+  startsAt: string; endsAt: string; name: string; email: string; phone: string; location?: string;
+};
+
+/**
+ * Records an assessment booked outside the app (Calendly). Idempotent on (source, externalId), so
+ * webhook retries never double-book. The booking is linked to an existing player when the invitee's
+ * email matches that player's login; otherwise it is stored as a lead.
+ */
+export async function upsertExternalAssessment(input: ExternalAssessmentInput): Promise<{ bookingId: number; created: boolean; startsAt: string; name: string }> {
+  await ensureBookingTables();
+  const client = await getDbPool().connect();
+  try {
+    await client.query('BEGIN');
+    const existing = await client.query(
+      `SELECT b.id, s.starts_at FROM session_bookings b JOIN booking_slots s ON s.id=b.slot_id
+       WHERE b.organization_id=$1 AND b.source=$2 AND b.external_id=$3`,
+      [input.organizationId, input.source, input.externalId]
+    );
+    if (existing.rows[0]) {
+      await client.query('COMMIT');
+      return { bookingId: Number(existing.rows[0].id), created: false, startsAt: new Date(existing.rows[0].starts_at).toISOString(), name: input.name };
+    }
+    await client.query(
+      `INSERT INTO booking_slots (organization_id,session_type,starts_at,ends_at,capacity,location)
+       VALUES ($1,'assessment',$2,$3,1,$4)
+       ON CONFLICT (organization_id,session_type,starts_at) DO NOTHING`,
+      [input.organizationId, input.startsAt, input.endsAt, input.location?.trim() || '']
+    );
+    const slot = (await client.query(
+      `SELECT id, capacity FROM booking_slots WHERE organization_id=$1 AND session_type='assessment' AND starts_at=$2::timestamptz FOR UPDATE`,
+      [input.organizationId, input.startsAt]
+    )).rows[0];
+    // Two assessments can start at the same time; grow the slot rather than reject a booking Calendly already confirmed.
+    const active = await client.query(
+      `SELECT COUNT(*)::int AS count FROM session_bookings WHERE slot_id=$1 AND status IN ('booked','attended')`, [slot.id]
+    );
+    const activeCount = Number(active.rows[0]?.count ?? 0);
+    await client.query(
+      `UPDATE booking_slots SET capacity=GREATEST(capacity,$2), ends_at=GREATEST(ends_at,$3::timestamptz), status='open', updated_at=NOW() WHERE id=$1`,
+      [slot.id, activeCount + 1, input.endsAt]
+    );
+    const player = input.email ? (await client.query(
+      `SELECT p.id, p.user_id FROM players p JOIN auth_users a ON a.id=p.user_id
+       WHERE p.organization_id=$1 AND LOWER(a.email)=LOWER($2) LIMIT 1`,
+      [input.organizationId, input.email]
+    )).rows[0] : undefined;
+    const created = await client.query(
+      `INSERT INTO session_bookings (organization_id,slot_id,player_id,player_user_id,lead_name,lead_email,lead_phone,source,external_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+      [input.organizationId, slot.id, player?.id ?? null, player?.user_id ?? null, input.name.trim() || input.email || 'Guest',
+        input.email || null, input.phone || null, input.source, input.externalId]
+    );
+    await client.query('COMMIT');
+    return { bookingId: Number(created.rows[0].id), created: true, startsAt: new Date(input.startsAt).toISOString(), name: input.name };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally { client.release(); }
+}
+
+export async function cancelExternalAssessment(input: { organizationId: number; source: 'calendly'; externalId: string }): Promise<{ startsAt: string; name: string } | null> {
+  await ensureBookingTables();
+  const result = await getDbPool().query(
+    `UPDATE session_bookings b SET status='cancelled',cancelled_at=NOW(),updated_at=NOW()
+     FROM booking_slots s
+     WHERE s.id=b.slot_id AND b.organization_id=$1 AND b.source=$2 AND b.external_id=$3 AND b.status='booked'
+     RETURNING s.starts_at, b.lead_name`,
+    [input.organizationId, input.source, input.externalId]
+  );
+  const row = result.rows[0];
+  return row ? { startsAt: new Date(row.starts_at).toISOString(), name: row.lead_name ?? '' } : null;
+}
+
+export type CalendarSession = {
+  slotId: number; sessionType: SessionTypeValue; startsAt: string; endsAt: string; location: string; capacity: number;
+  attendees: Array<{ name: string; email: string | null; phone: string | null; source: string }>;
+};
+
+/** Every slot in the window that has at least one active booking -- the unit synced to Google Calendar. */
+export async function listCalendarSessions(input: { organizationId: number; from: string; to: string }): Promise<CalendarSession[]> {
+  await ensureBookingTables();
+  const result = await getDbPool().query(
+    `SELECT s.id, s.session_type, s.starts_at, s.ends_at, s.location, s.capacity,
+       JSONB_AGG(JSONB_BUILD_OBJECT('name',COALESCE(p.full_name,b.lead_name,'Guest'),'email',b.lead_email,'phone',b.lead_phone,'source',b.source)
+         ORDER BY COALESCE(p.full_name,b.lead_name)) AS attendees
+     FROM booking_slots s
+     JOIN session_bookings b ON b.slot_id=s.id AND b.status IN ('booked','attended')
+     LEFT JOIN players p ON p.id=b.player_id
+     WHERE s.organization_id=$1 AND s.status<>'cancelled' AND s.starts_at >= $2::timestamptz AND s.starts_at < $3::timestamptz
+     GROUP BY s.id ORDER BY s.starts_at`,
+    [input.organizationId, input.from, input.to]
+  );
+  return result.rows.map((row) => ({
+    slotId: Number(row.id), sessionType: row.session_type as SessionTypeValue,
+    startsAt: new Date(row.starts_at).toISOString(), endsAt: new Date(row.ends_at).toISOString(),
+    location: row.location ?? '', capacity: Number(row.capacity), attendees: row.attendees,
+  }));
 }

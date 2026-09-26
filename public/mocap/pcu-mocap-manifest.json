@@ -1,0 +1,722 @@
+[
+  {
+    "athlete": "Branden Piercey",
+    "datasetKey": "branden-piercey-20260925-141122",
+    "recordedAt": "2026-09-25T14:11:22.365096-07:00",
+    "title": "Pitch 1 \u00b7 Sep 25, 2026 \u00b7 2:11 PM",
+    "handedness": "R",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 36,
+    "endFrame": 131,
+    "file": "pcu-branden-piercey-20260925-141122.json"
+  },
+  {
+    "athlete": "Branden Piercey",
+    "datasetKey": "branden-piercey-20260925-141154",
+    "recordedAt": "2026-09-25T14:11:54.585277-07:00",
+    "title": "Pitch 2 \u00b7 Sep 25, 2026 \u00b7 2:11 PM",
+    "handedness": "R",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 27,
+    "endFrame": 123,
+    "file": "pcu-branden-piercey-20260925-141154.json"
+  },
+  {
+    "athlete": "Branden Piercey",
+    "datasetKey": "branden-piercey-20260925-141219",
+    "recordedAt": "2026-09-25T14:12:19.166842-07:00",
+    "title": "Pitch 3 \u00b7 Sep 25, 2026 \u00b7 2:12 PM",
+    "handedness": "R",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 0,
+    "endFrame": 63,
+    "file": "pcu-branden-piercey-20260925-141219.json"
+  },
+  {
+    "athlete": "Branden Piercey",
+    "datasetKey": "branden-piercey-20260925-141238",
+    "recordedAt": "2026-09-25T14:12:38.973832-07:00",
+    "title": "Pitch 4 \u00b7 Sep 25, 2026 \u00b7 2:12 PM",
+    "handedness": "R",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 11,
+    "endFrame": 96,
+    "file": "pcu-branden-piercey-20260925-141238.json"
+  },
+  {
+    "athlete": "Branden Piercey",
+    "datasetKey": "branden-piercey-20260925-141321",
+    "recordedAt": "2026-09-25T14:13:21.375233-07:00",
+    "title": "Pitch 5 \u00b7 Sep 25, 2026 \u00b7 2:13 PM",
+    "handedness": "R",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 9,
+    "endFrame": 95,
+    "file": "pcu-branden-piercey-20260925-141321.json"
+  },
+  {
+    "athlete": "Branden Piercey",
+    "datasetKey": "branden-piercey-20260925-141430",
+    "recordedAt": "2026-09-25T14:14:30.996785-07:00",
+    "title": "Pitch 6 \u00b7 Sep 25, 2026 \u00b7 2:14 PM",
+    "handedness": "R",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 19,
+    "endFrame": 114,
+    "file": "pcu-branden-piercey-20260925-141430.json"
+  },
+  {
+    "athlete": "Branden Piercey",
+    "datasetKey": "branden-piercey-20260925-141516",
+    "recordedAt": "2026-09-25T14:15:16.927694-07:00",
+    "title": "Pitch 7 \u00b7 Sep 25, 2026 \u00b7 2:15 PM",
+    "handedness": "R",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 103,
+    "endFrame": 198,
+    "file": "pcu-branden-piercey-20260925-141516.json"
+  },
+  {
+    "athlete": "Branden Piercey",
+    "datasetKey": "branden-piercey-20260925-141543",
+    "recordedAt": "2026-09-25T14:15:43.206495-07:00",
+    "title": "Pitch 8 \u00b7 Sep 25, 2026 \u00b7 2:15 PM",
+    "handedness": "R",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 12,
+    "endFrame": 103,
+    "file": "pcu-branden-piercey-20260925-141543.json"
+  },
+  {
+    "athlete": "Branden Piercey",
+    "datasetKey": "branden-piercey-20260925-141720",
+    "recordedAt": "2026-09-25T14:17:20.266596-07:00",
+    "title": "Pitch 9 \u00b7 Sep 25, 2026 \u00b7 2:17 PM",
+    "handedness": "R",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 24,
+    "endFrame": 118,
+    "file": "pcu-branden-piercey-20260925-141720.json"
+  },
+  {
+    "athlete": "Bryce Conley",
+    "datasetKey": "bryce-conley-20260925-120856",
+    "recordedAt": "2026-09-25T12:08:56.092420-07:00",
+    "title": "Pitch 1 \u00b7 Sep 25, 2026 \u00b7 12:08 PM",
+    "handedness": "R",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 74,
+    "endFrame": 166,
+    "file": "pcu-bryce-conley-20260925-120856.json"
+  },
+  {
+    "athlete": "Bryce Conley",
+    "datasetKey": "bryce-conley-20260925-120912",
+    "recordedAt": "2026-09-25T12:09:12.800842-07:00",
+    "title": "Pitch 2 \u00b7 Sep 25, 2026 \u00b7 12:09 PM",
+    "handedness": "R",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 39,
+    "endFrame": 130,
+    "file": "pcu-bryce-conley-20260925-120912.json"
+  },
+  {
+    "athlete": "Bryce Conley",
+    "datasetKey": "bryce-conley-20260925-120934",
+    "recordedAt": "2026-09-25T12:09:34.159045-07:00",
+    "title": "Pitch 3 \u00b7 Sep 25, 2026 \u00b7 12:09 PM",
+    "handedness": "R",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 41,
+    "endFrame": 133,
+    "file": "pcu-bryce-conley-20260925-120934.json"
+  },
+  {
+    "athlete": "Bryce Conley",
+    "datasetKey": "bryce-conley-20260925-120954",
+    "recordedAt": "2026-09-25T12:09:54.741225-07:00",
+    "title": "Pitch 4 \u00b7 Sep 25, 2026 \u00b7 12:09 PM",
+    "handedness": "R",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 38,
+    "endFrame": 130,
+    "file": "pcu-bryce-conley-20260925-120954.json"
+  },
+  {
+    "athlete": "Bryce Conley",
+    "datasetKey": "bryce-conley-20260925-121017",
+    "recordedAt": "2026-09-25T12:10:17.318267-07:00",
+    "title": "Pitch 5 \u00b7 Sep 25, 2026 \u00b7 12:10 PM",
+    "handedness": "R",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 50,
+    "endFrame": 141,
+    "file": "pcu-bryce-conley-20260925-121017.json"
+  },
+  {
+    "athlete": "Bryce Conley",
+    "datasetKey": "bryce-conley-20260925-121037",
+    "recordedAt": "2026-09-25T12:10:37.895494-07:00",
+    "title": "Pitch 6 \u00b7 Sep 25, 2026 \u00b7 12:10 PM",
+    "handedness": "R",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 30,
+    "endFrame": 120,
+    "file": "pcu-bryce-conley-20260925-121037.json"
+  },
+  {
+    "athlete": "Bryce Conley",
+    "datasetKey": "bryce-conley-20260925-121059",
+    "recordedAt": "2026-09-25T12:10:59.408205-07:00",
+    "title": "Pitch 7 \u00b7 Sep 25, 2026 \u00b7 12:10 PM",
+    "handedness": "R",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 20,
+    "endFrame": 113,
+    "file": "pcu-bryce-conley-20260925-121059.json"
+  },
+  {
+    "athlete": "Bryce Conley",
+    "datasetKey": "bryce-conley-20260925-121120",
+    "recordedAt": "2026-09-25T12:11:20.391533-07:00",
+    "title": "Pitch 8 \u00b7 Sep 25, 2026 \u00b7 12:11 PM",
+    "handedness": "R",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 39,
+    "endFrame": 131,
+    "file": "pcu-bryce-conley-20260925-121120.json"
+  },
+  {
+    "athlete": "Bryce Conley",
+    "datasetKey": "bryce-conley-20260925-121138",
+    "recordedAt": "2026-09-25T12:11:38.987837-07:00",
+    "title": "Pitch 9 \u00b7 Sep 25, 2026 \u00b7 12:11 PM",
+    "handedness": "R",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 15,
+    "endFrame": 105,
+    "file": "pcu-bryce-conley-20260925-121138.json"
+  },
+  {
+    "athlete": "Jared Gaynor",
+    "datasetKey": "jared-gaynor-20260925-180322",
+    "recordedAt": "2026-09-25T18:03:22.861326-07:00",
+    "title": "Pitch 1 \u00b7 Sep 25, 2026 \u00b7 6:03 PM",
+    "handedness": "L",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 175,
+    "endFrame": 268,
+    "file": "pcu-jared-gaynor-20260925-180322.json"
+  },
+  {
+    "athlete": "Jared Gaynor",
+    "datasetKey": "jared-gaynor-20260925-180354",
+    "recordedAt": "2026-09-25T18:03:54.531296-07:00",
+    "title": "Pitch 2 \u00b7 Sep 25, 2026 \u00b7 6:03 PM",
+    "handedness": "L",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 181,
+    "endFrame": 275,
+    "file": "pcu-jared-gaynor-20260925-180354.json"
+  },
+  {
+    "athlete": "Patrick Morris",
+    "datasetKey": "patrick-morris-20260925-102744",
+    "recordedAt": "2026-09-25T10:27:44.424252-07:00",
+    "title": "Pitch 1 \u00b7 Sep 25, 2026 \u00b7 10:27 AM",
+    "handedness": "L",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 13,
+    "endFrame": 105,
+    "file": "pcu-patrick-morris-20260925-102744.json"
+  },
+  {
+    "athlete": "Patrick Morris",
+    "datasetKey": "patrick-morris-20260925-102825",
+    "recordedAt": "2026-09-25T10:28:25.860828-07:00",
+    "title": "Pitch 2 \u00b7 Sep 25, 2026 \u00b7 10:28 AM",
+    "handedness": "L",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 0,
+    "endFrame": 69,
+    "file": "pcu-patrick-morris-20260925-102825.json"
+  },
+  {
+    "athlete": "Patrick Morris",
+    "datasetKey": "patrick-morris-20260925-102856",
+    "recordedAt": "2026-09-25T10:28:56.759950-07:00",
+    "title": "Pitch 3 \u00b7 Sep 25, 2026 \u00b7 10:28 AM",
+    "handedness": "L",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 9,
+    "endFrame": 94,
+    "file": "pcu-patrick-morris-20260925-102856.json"
+  },
+  {
+    "athlete": "Patrick Morris",
+    "datasetKey": "patrick-morris-20260925-102934",
+    "recordedAt": "2026-09-25T10:29:34.987877-07:00",
+    "title": "Pitch 4 \u00b7 Sep 25, 2026 \u00b7 10:29 AM",
+    "handedness": "L",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 5,
+    "endFrame": 81,
+    "file": "pcu-patrick-morris-20260925-102934.json"
+  },
+  {
+    "athlete": "Patrick Morris",
+    "datasetKey": "patrick-morris-20260925-103008",
+    "recordedAt": "2026-09-25T10:30:08.212814-07:00",
+    "title": "Pitch 5 \u00b7 Sep 25, 2026 \u00b7 10:30 AM",
+    "handedness": "L",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 10,
+    "endFrame": 100,
+    "file": "pcu-patrick-morris-20260925-103008.json"
+  },
+  {
+    "athlete": "Patrick Morris",
+    "datasetKey": "patrick-morris-20260925-103034",
+    "recordedAt": "2026-09-25T10:30:34.367045-07:00",
+    "title": "Pitch 6 \u00b7 Sep 25, 2026 \u00b7 10:30 AM",
+    "handedness": "L",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 9,
+    "endFrame": 85,
+    "file": "pcu-patrick-morris-20260925-103034.json"
+  },
+  {
+    "athlete": "Patrick Morris",
+    "datasetKey": "patrick-morris-20260925-103059",
+    "recordedAt": "2026-09-25T10:30:59.772328-07:00",
+    "title": "Pitch 7 \u00b7 Sep 25, 2026 \u00b7 10:30 AM",
+    "handedness": "L",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 15,
+    "endFrame": 91,
+    "file": "pcu-patrick-morris-20260925-103059.json"
+  },
+  {
+    "athlete": "Patrick Morris",
+    "datasetKey": "patrick-morris-20260925-103212",
+    "recordedAt": "2026-09-25T10:32:12.862743-07:00",
+    "title": "Pitch 8 \u00b7 Sep 25, 2026 \u00b7 10:32 AM",
+    "handedness": "L",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 22,
+    "endFrame": 112,
+    "file": "pcu-patrick-morris-20260925-103212.json"
+  },
+  {
+    "athlete": "Patrick Morris",
+    "datasetKey": "patrick-morris-20260925-103245",
+    "recordedAt": "2026-09-25T10:32:45.093263-07:00",
+    "title": "Pitch 9 \u00b7 Sep 25, 2026 \u00b7 10:32 AM",
+    "handedness": "L",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 10,
+    "endFrame": 86,
+    "file": "pcu-patrick-morris-20260925-103245.json"
+  },
+  {
+    "athlete": "Patrick Morris",
+    "datasetKey": "patrick-morris-20260925-103303",
+    "recordedAt": "2026-09-25T10:33:03.742553-07:00",
+    "title": "Pitch 10 \u00b7 Sep 25, 2026 \u00b7 10:33 AM",
+    "handedness": "L",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 72,
+    "endFrame": 163,
+    "file": "pcu-patrick-morris-20260925-103303.json"
+  },
+  {
+    "athlete": "Patrick Morris",
+    "datasetKey": "patrick-morris-20260925-103336",
+    "recordedAt": "2026-09-25T10:33:36.462927-07:00",
+    "title": "Pitch 11 \u00b7 Sep 25, 2026 \u00b7 10:33 AM",
+    "handedness": "L",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 29,
+    "endFrame": 121,
+    "file": "pcu-patrick-morris-20260925-103336.json"
+  },
+  {
+    "athlete": "Patrick Morris",
+    "datasetKey": "patrick-morris-20260925-103501",
+    "recordedAt": "2026-09-25T10:35:01.208508-07:00",
+    "title": "Pitch 12 \u00b7 Sep 25, 2026 \u00b7 10:35 AM",
+    "handedness": "L",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 13,
+    "endFrame": 105,
+    "file": "pcu-patrick-morris-20260925-103501.json"
+  },
+  {
+    "athlete": "Patrick Morris",
+    "datasetKey": "patrick-morris-20260925-103535",
+    "recordedAt": "2026-09-25T10:35:35.035483-07:00",
+    "title": "Pitch 13 \u00b7 Sep 25, 2026 \u00b7 10:35 AM",
+    "handedness": "L",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 64,
+    "endFrame": 156,
+    "file": "pcu-patrick-morris-20260925-103535.json"
+  },
+  {
+    "athlete": "Patrick Morris",
+    "datasetKey": "patrick-morris-20260925-103606",
+    "recordedAt": "2026-09-25T10:36:06.828114-07:00",
+    "title": "Pitch 14 \u00b7 Sep 25, 2026 \u00b7 10:36 AM",
+    "handedness": "L",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 29,
+    "endFrame": 122,
+    "file": "pcu-patrick-morris-20260925-103606.json"
+  },
+  {
+    "athlete": "Patrick Morris",
+    "datasetKey": "patrick-morris-20260925-103630",
+    "recordedAt": "2026-09-25T10:36:30.676259-07:00",
+    "title": "Pitch 15 \u00b7 Sep 25, 2026 \u00b7 10:36 AM",
+    "handedness": "L",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 11,
+    "endFrame": 99,
+    "file": "pcu-patrick-morris-20260925-103630.json"
+  },
+  {
+    "athlete": "Ryan Mixey",
+    "datasetKey": "ryan-mixey-20260925-110215",
+    "recordedAt": "2026-09-25T11:02:15.500517-07:00",
+    "title": "Pitch 1 \u00b7 Sep 25, 2026 \u00b7 11:02 AM",
+    "handedness": "R",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 92,
+    "endFrame": 188,
+    "file": "pcu-ryan-mixey-20260925-110215.json"
+  },
+  {
+    "athlete": "Ryan Mixey",
+    "datasetKey": "ryan-mixey-20260925-110238",
+    "recordedAt": "2026-09-25T11:02:38.534381-07:00",
+    "title": "Pitch 2 \u00b7 Sep 25, 2026 \u00b7 11:02 AM",
+    "handedness": "R",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 134,
+    "endFrame": 224,
+    "file": "pcu-ryan-mixey-20260925-110238.json"
+  },
+  {
+    "athlete": "Ryan Mixey",
+    "datasetKey": "ryan-mixey-20260925-110304",
+    "recordedAt": "2026-09-25T11:03:04.294995-07:00",
+    "title": "Pitch 3 \u00b7 Sep 25, 2026 \u00b7 11:03 AM",
+    "handedness": "R",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 159,
+    "endFrame": 242,
+    "file": "pcu-ryan-mixey-20260925-110304.json"
+  },
+  {
+    "athlete": "Ryan Mixey",
+    "datasetKey": "ryan-mixey-20260925-110334",
+    "recordedAt": "2026-09-25T11:03:34.515745-07:00",
+    "title": "Pitch 4 \u00b7 Sep 25, 2026 \u00b7 11:03 AM",
+    "handedness": "R",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 15,
+    "endFrame": 104,
+    "file": "pcu-ryan-mixey-20260925-110334.json"
+  },
+  {
+    "athlete": "Ryan Mixey",
+    "datasetKey": "ryan-mixey-20260925-110358",
+    "recordedAt": "2026-09-25T11:03:58.748059-07:00",
+    "title": "Pitch 5 \u00b7 Sep 25, 2026 \u00b7 11:03 AM",
+    "handedness": "R",
+    "cameraCount": 5,
+    "availableCameras": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "startFrame": 73,
+    "endFrame": 167,
+    "file": "pcu-ryan-mixey-20260925-110358.json"
+  }
+]

@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-type SessionTypeValue='bullpen'|'regular';
-type OverrideScope='all'|SessionTypeValue;
+type SessionTypeValue='bullpen'|'regular'|'assessment';
+type OverrideScope='all'|'bullpen'|'regular';
 type Person={id:number;name:string};
-type Slot={id:number;sessionType:SessionTypeValue;startsAt:string;capacity:number;location:string;status:'open'|'closed'|'cancelled';closedByOverride:boolean;bookedCount:number;myBookingId:number|null;attendees:Array<{bookingId:number;playerId:number;playerName:string}>};
+type Slot={id:number;sessionType:SessionTypeValue;startsAt:string;capacity:number;location:string;status:'open'|'closed'|'cancelled';closedByOverride:boolean;bookedCount:number;myBookingId:number|null;attendees:Array<{bookingId:number;playerId:number|null;playerName:string;source?:string}>};
 type DateOverride={id:number;date:string;sessionType:OverrideScope;reason:string};
 type Payload={role:'staff'|'player';slots:Slot[];players:Person[];minBookingLeadHours:number;dateOverrides:DateOverride[];error?:string};
 type RecurringResult={startsAt:string;status:'booked'|'unavailable';reason?:string};
@@ -22,7 +22,7 @@ const timeLabel24=(iso:string)=>new Intl.DateTimeFormat('en-GB',{timeZone:PHOENI
 const fullDate=(ymd:string)=>new Intl.DateTimeFormat('en-US',{timeZone:'UTC',weekday:'long',month:'long',day:'numeric'}).format(new Date(`${ymd}T12:00:00Z`));
 const shortDate=(iso:string)=>new Intl.DateTimeFormat('en-US',{timeZone:PHOENIX,month:'short',day:'numeric'}).format(new Date(iso));
 const WEEKDAYS=[{id:0,label:'Sun'},{id:1,label:'Mon'},{id:2,label:'Tue'},{id:3,label:'Wed'},{id:4,label:'Thu'},{id:5,label:'Fri'},{id:6,label:'Sat'}];
-const sessionTypeLabel=(type:SessionTypeValue)=>type==='bullpen'?'Bullpen':'Regular Training';
+const sessionTypeLabel=(type:SessionTypeValue)=>type==='bullpen'?'Bullpen':type==='assessment'?'Assessment':'Regular Training';
 const overrideScopeLabel=(scope:OverrideScope)=>scope==='all'?'All session types':sessionTypeLabel(scope);
 
 async function request(body:Record<string,unknown>){
@@ -39,7 +39,7 @@ export default function SchedulingSuite({role,logoSrc,logoAlt,schoolName}:{role:
   const [loading,setLoading]=useState(true); const [working,setWorking]=useState(false);
   const [message,setMessage]=useState(''); const [typeFilter,setTypeFilter]=useState<'all'|SessionTypeValue>('all');
   const [playerChoice,setPlayerChoice]=useState(0);
-  const [buildMode,setBuildMode]=useState<SessionTypeValue>('regular');
+  const [buildMode,setBuildMode]=useState<'regular'|'bullpen'>('regular');
   const [regularDraft,setRegularDraft]=useState({startDate:today(),endDate:addDays(today(),28),weekdays:[1,2,3,4,5] as number[],startTime:'15:00',endTime:'19:00',intervalMinutes:30,capacity:4,location:''});
   const [bullpenDraft,setBullpenDraft]=useState({startDate:today(),endDate:addDays(today(),28),weekdays:[1,2,3,4,5] as number[],startTime:'15:00',endTime:'19:00',intervalMinutes:20,capacity:2,location:''});
   const draft=buildMode==='regular'?regularDraft:bullpenDraft;
@@ -229,6 +229,7 @@ export default function SchedulingSuite({role,logoSrc,logoAlt,schoolName}:{role:
           </div>
         </div>
       </article>
+      {role==='admin'?<GoogleCalendarPanel/>:null}
     </div>:mode==='calendar'&&isStaff?<div className="booking-calendar-panel">
       <div className="booking-calendar-controls">
         <nav className="booking-tabs" aria-label="Calendar view"><button className={calendarView==='day'?'is-active':''} onClick={()=>setCalendarView('day')}>Day</button><button className={calendarView==='week'?'is-active':''} onClick={()=>setCalendarView('week')}>Week</button><button className={calendarView==='month'?'is-active':''} onClick={()=>setCalendarView('month')}>Month</button></nav>
@@ -241,19 +242,19 @@ export default function SchedulingSuite({role,logoSrc,logoAlt,schoolName}:{role:
       {calendarLoading?<div className="booking-empty">Loading calendar…</div>:<CalendarView view={calendarView} anchor={calendarAnchor} slots={calendarPayload?.slots??[]}/>}
     </div>:<>
       <div className="booking-toolbar"><button className="booking-arrow" aria-label="Previous two weeks" onClick={()=>{const next=addDays(rangeStart,-14);setRangeStart(next);setSelectedDate(next);}}>←</button><div className="booking-days">{days.map(day=><button key={day} className={selectedDate===day?'is-selected':''} onClick={()=>setSelectedDate(day)}><small>{dayLabel(day).split(' ')[0]}</small><strong>{Number(day.slice(-2))}</strong><span>{dayLabel(day).split(' ')[1]}</span></button>)}</div><button className="booking-arrow" aria-label="Next two weeks" disabled={!isStaff&&addDays(rangeStart,14)>maxDate} onClick={()=>{const next=addDays(rangeStart,14);setRangeStart(next);setSelectedDate(next);}}>→</button></div>
-      <div className="booking-calendar-head"><div><p>AVAILABLE SESSIONS</p><h2>{fullDate(selectedDate)}</h2></div><select aria-label="Filter by session type" value={typeFilter} onChange={event=>setTypeFilter(event.target.value as 'all'|SessionTypeValue)}><option value="all">All session types</option><option value="regular">Regular Training</option><option value="bullpen">Bullpen</option></select></div>
+      <div className="booking-calendar-head"><div><p>AVAILABLE SESSIONS</p><h2>{fullDate(selectedDate)}</h2></div><select aria-label="Filter by session type" value={typeFilter} onChange={event=>setTypeFilter(event.target.value as 'all'|SessionTypeValue)}><option value="all">All session types</option><option value="regular">Regular Training</option><option value="bullpen">Bullpen</option>{isStaff?<option value="assessment">Assessment</option>:null}</select></div>
       {!isStaff?<p className="booking-bullpen-note">Booking opens up to {MAX_ADVANCE_DAYS} days in advance{payload&&payload.minBookingLeadHours>0?`, and must be made at least ${payload.minBookingLeadHours} hour${payload.minBookingLeadHours===1?'':'s'} before the session`:''}.</p>:null}
       {isStaff?<div className="booking-staff-book"><label>Book on behalf of <select value={playerChoice} onChange={event=>setPlayerChoice(Number(event.target.value))}>{payload?.players.map(player=><option key={player.id} value={player.id}>{player.name}</option>)}</select></label></div>:null}
       {loading?<div className="booking-empty">Loading available times…</div>:slots.length===0?<div className="booking-empty"><strong>No sessions posted.</strong><span>{isStaff?'Use Availability setup to open this day.':'Check another day for available training times.'}</span></div>:<div className="booking-slot-list">{slots.map(slot=>{
-        const remaining=Math.max(0,slot.capacity-slot.bookedCount);const full=remaining===0;const isBullpen=slot.sessionType==='bullpen';
+        const remaining=Math.max(0,slot.capacity-slot.bookedCount);const full=remaining===0;const isBullpen=slot.sessionType==='bullpen';const isAssessment=slot.sessionType==='assessment';
         const bookedMessage=isBullpen?`Bullpen booked for ${timeLabel(slot.startsAt)}. This is your mound start time — arrive roughly 1 hour early to warm up.`:'Session booked.';
         const reschedulingSameType=rescheduling!==null&&rescheduling.sessionType===slot.sessionType;
         return <article className={`booking-slot ${slot.status!=='open'?'is-closed':''}`} key={slot.id}>
           <time><strong>{timeLabel(slot.startsAt)}</strong></time>
           <div className="booking-slot-main">
             <div><p>{sessionTypeLabel(slot.sessionType)}</p>{isBullpen?<small className="booking-bullpen-note">Mound start time — arrive roughly 1 hour early</small>:null}</div>
-            <div className="booking-slot-meta"><span>{slot.location||`${schoolName} Facility`}</span><span className={full?'is-full':''}>{full?'Full':`${remaining} of ${slot.capacity} spots left`}</span></div>
-            {isStaff&&slot.attendees.length?<div className="booking-attendees">{slot.attendees.map(attendee=><button title="Cancel this booking" key={attendee.bookingId} onClick={()=>{if(window.confirm(`Cancel ${attendee.playerName}'s booking?`))void run({action:'cancel_booking',bookingId:attendee.bookingId},'Booking cancelled.');}}>{attendee.playerName} ×</button>)}</div>:null}
+            <div className="booking-slot-meta"><span>{slot.location||`${schoolName} Facility`}</span>{isAssessment?<span>Booked via Calendly</span>:<span className={full?'is-full':''}>{full?'Full':`${remaining} of ${slot.capacity} spots left`}</span>}</div>
+            {isStaff&&slot.attendees.length?<div className="booking-attendees">{slot.attendees.map(attendee=><button title="Cancel this booking" key={attendee.bookingId} onClick={()=>{if(window.confirm(attendee.source==='calendly'?`Remove ${attendee.playerName}'s assessment from the schedule? This does not cancel it in Calendly.`:`Cancel ${attendee.playerName}'s booking?`))void run({action:'cancel_booking',bookingId:attendee.bookingId},'Booking cancelled.');}}>{attendee.playerName} ×</button>)}</div>:null}
             {!isStaff&&!isBullpen&&!slot.myBookingId&&slot.status==='open'&&!full&&!rescheduling?<div className="booking-recurring-row"><label>Book weekly ×<input type="number" min="2" max="12" value={recurringWeeks[slot.id]??4} onChange={event=>setRecurringWeeks({...recurringWeeks,[slot.id]:Number(event.target.value)})}/></label><button type="button" className="booking-link" disabled={working} onClick={()=>void runRecurring(slot.id)}>Book recurring</button></div>:null}
           </div>
           <div className="booking-slot-action">
@@ -264,9 +265,9 @@ export default function SchedulingSuite({role,logoSrc,logoAlt,schoolName}:{role:
                 <button className="booking-secondary" disabled={working} onClick={()=>{if(window.confirm('Cancel this booking?'))void run({action:'cancel_booking',bookingId:slot.myBookingId},'Booking cancelled.');}}>Cancel</button>
                 <button className="booking-link" disabled={working} onClick={()=>startReschedule(slot.myBookingId!,slot.sessionType)}>Reschedule</button>
               </div>
-            :slot.status==='open'&&!full?<button className="booking-primary" disabled={working||(isStaff&&!playerChoice)} onClick={()=>void run({action:'book',slotId:slot.id,...(isStaff?{playerId:playerChoice}:{})},bookedMessage)}>{isStaff?'Add player':'Book'}</button>
-            :<span>{slot.status==='open'?'Full':slot.status}</span>}
-            {isStaff?(slot.closedByOverride?<span className="booking-bullpen-note">Closed by date override</span>:<button className="booking-link" disabled={working} onClick={()=>void run({action:'slot_status',slotId:slot.id,status:slot.status==='open'?'closed':'open'},slot.status==='open'?'Time closed.':'Time reopened.')}>{slot.status==='open'?'Close time':'Reopen'}</button>):null}
+            :!isAssessment&&slot.status==='open'&&!full?<button className="booking-primary" disabled={working||(isStaff&&!playerChoice)} onClick={()=>void run({action:'book',slotId:slot.id,...(isStaff?{playerId:playerChoice}:{})},bookedMessage)}>{isStaff?'Add player':'Book'}</button>
+            :<span>{isAssessment?'Assessment':slot.status==='open'?'Full':slot.status}</span>}
+            {isStaff&&!isAssessment?(slot.closedByOverride?<span className="booking-bullpen-note">Closed by date override</span>:<button className="booking-link" disabled={working} onClick={()=>void run({action:'slot_status',slotId:slot.id,status:slot.status==='open'?'closed':'open'},slot.status==='open'?'Time closed.':'Time reopened.')}>{slot.status==='open'?'Close time':'Reopen'}</button>):null}
           </div>
         </article>;
       })}</div>}
@@ -331,4 +332,48 @@ function CalendarView({view,anchor,slots}:{view:'day'|'week'|'month';anchor:stri
       </div>;
     })}
   </div>;
+}
+
+type GoogleCalendarStatus={configured:boolean;connected:boolean;email:string;lastSyncedAt:string|null;lastError:string|null};
+const GCAL_RESULT_MESSAGES:Record<string,string>={connected:'Google Calendar connected. Your sessions are syncing now.',denied:'Google Calendar access was not granted.',invalid:'That connection link expired. Try connecting again.',failed:'Could not connect Google Calendar. Try again.'};
+
+function GoogleCalendarPanel(){
+  const [status,setStatus]=useState<GoogleCalendarStatus|null>(null);
+  const [busy,setBusy]=useState(false);
+  const [note,setNote]=useState('');
+  const refresh=useCallback(async()=>{
+    const response=await fetch('/api/integrations/google-calendar',{cache:'no-store'});
+    const next=await response.json().catch(()=>({})) as GoogleCalendarStatus&{error?:string};
+    if(response.ok)setStatus(next);else setNote(next.error||'Unable to load Google Calendar status.');
+  },[]);
+  useEffect(()=>{
+    void refresh();
+    const result=new URLSearchParams(window.location.search).get('gcal');
+    if(result)setNote(GCAL_RESULT_MESSAGES[result]??'');
+  },[refresh]);
+  const syncNow=async()=>{
+    setBusy(true);setNote('');
+    try{const response=await fetch('/api/integrations/google-calendar',{method:'POST'});const payload=await response.json().catch(()=>({})) as {error?:string;upserted?:number;deleted?:number;status?:GoogleCalendarStatus};
+      if(!response.ok)throw new Error(payload.error||'Sync failed.');
+      if(payload.status)setStatus(payload.status);setNote(`Synced · ${payload.upserted??0} updated, ${payload.deleted??0} removed.`);
+    }catch(error){setNote(error instanceof Error?error.message:'Sync failed.');}finally{setBusy(false);}
+  };
+  const disconnect=async()=>{
+    if(!window.confirm('Disconnect Google Calendar? Session events this integration created will be removed from your calendar.'))return;
+    setBusy(true);setNote('');
+    try{await fetch('/api/integrations/google-calendar',{method:'DELETE'});await refresh();setNote('Google Calendar disconnected.');}finally{setBusy(false);}
+  };
+  return <article className="booking-panel"><div className="booking-panel-heading"><span>04</span><div><h2>Google Calendar</h2><p>Every booked session time appears on your Google Calendar — one event per time with everyone booked, updated as people book or cancel. Events are marked free, so they never block Calendly.</p></div></div>
+    <div className="booking-form-stack">
+      {!status?<p className="booking-empty-inline">Loading…</p>
+      :!status.configured?<p className="booking-override-note">Google sign-in is not set up on the server yet (GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET).</p>
+      :status.connected?<>
+        <p className="booking-override-note">Connected to <strong>{status.email||'your Google account'}</strong>{status.lastSyncedAt?` · last synced ${new Intl.DateTimeFormat('en-US',{timeZone:PHOENIX,month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}).format(new Date(status.lastSyncedAt))}`:''}</p>
+        {status.lastError?<p className="booking-override-note">Last sync error: {status.lastError}</p>:null}
+        <div className="booking-form-row"><button className="booking-primary" disabled={busy} onClick={()=>void syncNow()}>{busy?'Working…':'Sync now'}</button><button className="booking-secondary" disabled={busy} onClick={()=>void disconnect()}>Disconnect</button></div>
+      </>
+      :<a className="booking-primary" href="/api/integrations/google-calendar/connect">Connect Google Calendar</a>}
+      {note?<p className="booking-empty-inline" role="status">{note}</p>:null}
+    </div>
+  </article>;
 }

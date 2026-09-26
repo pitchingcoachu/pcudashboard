@@ -2,8 +2,7 @@ import Link from 'next/link';
 import { requirePortalSession } from '../../../lib/portal-session';
 import { resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
 import { resolveSessionDashboardSchoolOptions } from '../../../lib/dashboard-school-options';
-import { canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../lib/programming-scope';
-import { getPlayerForUser } from '../../../lib/training-db';
+import { canUseProgrammingData, resolveProgrammingSchoolCode } from '../../../lib/programming-scope';
 import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
 import LogoutButton from '../logout-button';
 import PortalUserMenu from '../user-menu';
@@ -11,7 +10,7 @@ import PortalChrome from '../portal-chrome';
 import PortalNotificationsBell from '../notifications-bell';
 import PortalThemeToggle from '../theme-toggle';
 import PortalMessagesNavButton from '../messages-nav-button';
-import MotionCaptureDashboard from './motion-capture-dashboard';
+import PcuMocapDashboard from '../dashboard/pcu-mocap-dashboard';
 import { resolveStaffPrimaryNavigation } from '../../../lib/portal-primary-nav-server';
 import StaffPrimaryNav, { staffPrimaryMobileItems } from '../staff-primary-nav';
 
@@ -21,11 +20,9 @@ export default async function MotionCapturePage() {
   const schoolOptions = await resolveSessionDashboardSchoolOptions(session);
   const canAccessProgramming = await canUseProgrammingData(session);
   const selectedSchoolCode = resolveProgrammingSchoolCode(session);
-  const orgId = await resolveProgrammingOrganizationId(session);
   const isPcu = String(selectedSchoolCode ?? '').trim().toUpperCase() === 'PCU';
   const isStaff = session.role === 'admin' || session.role === 'coach';
   const primaryNav = isStaff ? await resolveStaffPrimaryNavigation(session) : null;
-  const ownPlayer = session.role === 'player' && orgId > 0 ? await getPlayerForUser({ organizationId: orgId, userId: session.userId ?? 0 }) : null;
   const error = !isPcu
     ? 'Motion Capture is currently enabled only for PCU.'
     : !canAccessProgramming
@@ -87,9 +84,9 @@ export default async function MotionCapturePage() {
     >
       <div className="portal-admin-stack">
         <div className="portal-admin-headline">
-          <h2 style={{ margin: 0 }}>Motion Capture</h2>
+          <h2 style={{ margin: 0 }}>Motion Capture Lab</h2>
           <p className="portal-muted-text" style={{ margin: 0 }}>
-            Upload phone video, link it to TrackMan when available, and review motion-capture outputs by player and date.
+            Review three-dimensional pitch movement from foot plant through ball release.
           </p>
         </div>
         {error ? (
@@ -99,7 +96,7 @@ export default async function MotionCapturePage() {
             </p>
           </article>
         ) : (
-          <MotionCaptureDashboard initialPlayerId={ownPlayer?.id ?? null} />
+          <PcuMocapDashboard canEditEvents={isStaff} />
         )}
       </div>
     </PortalChrome>

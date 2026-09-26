@@ -98,11 +98,15 @@ export default async function ForcePlatesPage({
     playerScopedName = toFirstLast(String(own?.fullName ?? '')).trim();
   }
 
+  let rosterLoadError = '';
   const pcuCandidates =
     isPcu && canAccessProgramming && orgId > 0
       ? await listPlayerChoicesByOrganization({
           organizationId: orgId,
           assignedCoachUserId: null,
+        }).catch((error: unknown) => {
+          rosterLoadError = error instanceof Error ? error.message : 'Unable to load the player roster.';
+          return [];
         })
       : [];
   const candidateNames = Array.from(
@@ -131,6 +135,8 @@ export default async function ForcePlatesPage({
     error = 'Force Plate Data is not currently enabled for this organization.';
   } else if (!canAccessProgramming) {
     error = 'Programming access is required to view Force Plate Data.';
+  } else if (rosterLoadError) {
+    error = 'The player roster could not be loaded. Please refresh to reconnect.';
   } else if (candidateNames.length === 0) {
     error = 'No PCU players found in programming list.';
   } else {

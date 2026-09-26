@@ -3697,6 +3697,32 @@ function _invalidateTrainingReadCacheForOrganization(organizationId: number) {
   ]);
 }
 
+function _isTransientTrainingDbConnectionError(error: unknown): boolean {
+  const code = typeof error === 'object' && error && 'code' in error
+    ? String((error as { code?: unknown }).code ?? '')
+    : '';
+  if (['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', '57P01', '57P02', '57P03', '08000', '08003', '08006'].includes(code)) {
+    return true;
+  }
+  const message = typeof error === 'object' && error && 'message' in error
+    ? String((error as { message?: unknown }).message ?? '').toLowerCase()
+    : '';
+  return message.includes('connection terminated')
+    || message.includes('connection timeout')
+    || message.includes('timeout expired');
+}
+
+async function _withTransientTrainingDbRetry<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (!_isTransientTrainingDbConnectionError(error)) throw error;
+    // node-postgres removes the failed client from the pool. A second query
+    // therefore acquires a fresh connection instead of reusing the dead one.
+    return operation();
+  }
+}
+
 function _invalidateTrainingReadCacheForPlayer(playerId: number) {
   const pid = Number(playerId);
   if (!Number.isFinite(pid) || pid <= 0) return;
@@ -4242,8 +4268,7 @@ export async function listPlayerChoicesByOrganization(input: {
   const activeOnly = input.activeOnly === true;
   const cacheKey = `player_choices:${input.organizationId}:${useCoachFilter ? assignedCoachUserId : 0}:${activeOnly ? 1 : 0}`;
   return _withTrainingReadCache(cacheKey, 20_000, async () => {
-    const pool = getDbPool();
-    const result = await pool.query<{
+    const result = await _withTransientTrainingDbRetry(() => getDbPool().query<{
       player_id: number;
       full_name: string;
       assigned_coach_user_id: number | null;
@@ -4257,7 +4282,7 @@ export async function listPlayerChoicesByOrganization(input: {
         ORDER BY p.full_name ASC
       `,
       useCoachFilter ? [input.organizationId, assignedCoachUserId] : [input.organizationId]
-    );
+    ));
     return result.rows.map((row) => ({
       playerId: row.player_id,
       fullName: row.full_name,

@@ -1,10 +1,11 @@
 import { cookies } from 'next/headers';
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 import { getSessionFromRequest } from '../../../lib/auth';
 import { resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
 import { resolveSchoolScopedOrganizationId } from '../../../lib/programming-scope';
 import { createNotificationsForUsers } from '../../../lib/training-db';
 import { sendPushNotificationToUsers } from '../../../lib/push-notifications';
+import { syncGoogleCalendarForTimes } from '../../../lib/google-calendar';
 import { bookRecurringWeekly, bookSessionSlot, cancelSessionBooking, createBookingSlots, deleteBookingDateOverride, editBookingSlotGroup, getMinBookingLeadHours,
   listBookingDateOverrides, listBookingPlayers, listBookingSlots, rescheduleSessionBooking, saveBookingDateOverride,
   setMinBookingLeadHours, updateBookingSlotStatus, type BookingOverrideScope, type SessionTypeValue } from '../../../lib/booking-db';
@@ -13,7 +14,7 @@ function validDate(value:string){return /^\d{4}-\d{2}-\d{2}$/.test(value);}
 function validTime(value:string){return /^\d{2}:\d{2}$/.test(value);}
 function cleanInt(value:unknown,min:number,max:number,fallback:number){const parsed=Number(value);return Number.isFinite(parsed)?Math.min(max,Math.max(min,Math.round(parsed))):fallback;}
 function formatWhen(iso:string){return new Intl.DateTimeFormat('en-US',{timeZone:'America/Phoenix',weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}).format(new Date(iso));}
-function sessionTypeLabel(type:SessionTypeValue){return type==='bullpen'?'Bullpen':'Regular Training';}
+function sessionTypeLabel(type:SessionTypeValue){return type==='bullpen'?'Bullpen':type==='assessment'?'Assessment':'Regular Training';}
 function slotStartsForDay(date:string,startTime:string,endTime:string,interval:number):Array<{startsAt:string;endsAt:string}>{
   const starts:Array<{startsAt:string;endsAt:string}>=[];
   const startMinutes=Number(startTime.slice(0,2))*60+Number(startTime.slice(3)),endMinutes=Number(endTime.slice(0,2))*60+Number(endTime.slice(3));
@@ -116,6 +117,7 @@ export async function POST(request:Request){
       await createNotificationsForUsers({recipientUserIds:recipients,eventType:'session_booked',title:'Session booked',
         detail:`${result.playerName} booked ${sessionTypeLabel(result.sessionType)} for ${formatWhen(result.startsAt)}.`,path:'/portal/dashboard?suite=scheduling',actorUserId:auth.userId,actorName:auth.session.name,actorRole:auth.session.role,playerId,playerName:result.playerName}).catch(()=>{});
       void sendPushNotificationToUsers({userIds:recipients,title:'Session booked',body:`${sessionTypeLabel(result.sessionType)} · ${formatWhen(result.startsAt)}`,data:{type:'session_booked',bookingId:result.bookingId}});
+      after(()=>syncGoogleCalendarForTimes(auth.organizationId,[result.startsAt]));
       return NextResponse.json({ok:true,bookingId:result.bookingId});
     }
     if(action==='reschedule'){
@@ -124,6 +126,7 @@ export async function POST(request:Request){
       await createNotificationsForUsers({recipientUserIds:recipients,eventType:'session_rescheduled',title:'Session rescheduled',
         detail:`${result.playerName} moved ${sessionTypeLabel(result.oldSessionType)} from ${formatWhen(result.oldStartsAt)} to ${sessionTypeLabel(result.sessionType)} at ${formatWhen(result.startsAt)}.`,path:'/portal/dashboard?suite=scheduling',actorUserId:auth.userId,actorName:auth.session.name,actorRole:auth.session.role,playerId:Number(auth.session.playerId??0)||null,playerName:result.playerName}).catch(()=>{});
       void sendPushNotificationToUsers({userIds:recipients,title:'Session rescheduled',body:`Now ${sessionTypeLabel(result.sessionType)} · ${formatWhen(result.startsAt)}`,data:{type:'session_rescheduled',bookingId:result.bookingId}});
+      after(()=>syncGoogleCalendarForTimes(auth.organizationId,[result.oldStartsAt,result.startsAt]));
       return NextResponse.json({ok:true,bookingId:result.bookingId});
     }
     if(action==='book_recurring'){
@@ -139,6 +142,7 @@ export async function POST(request:Request){
           detail:`${player?.name??'Player'} booked Regular Training for ${bookedCount} of ${weeks} week${weeks===1?'':'s'}.`,path:'/portal/dashboard?suite=scheduling',actorUserId:auth.userId,actorName:auth.session.name,actorRole:auth.session.role,playerId,playerName:player?.name??'Player'}).catch(()=>{});
         void sendPushNotificationToUsers({userIds:recipients,title:'Recurring sessions booked',body:`Booked ${bookedCount} of ${weeks} week${weeks===1?'':'s'}.`,data:{type:'session_booked'}});
       }
+      after(()=>syncGoogleCalendarForTimes(auth.organizationId,results.filter(item=>item.status==='booked').map(item=>item.startsAt)));
       return NextResponse.json({ok:true,results,bookedCount,weeks});
     }
     if(action==='cancel_booking'){
@@ -146,6 +150,7 @@ export async function POST(request:Request){
       const recipients=Array.from(new Set([result.playerUserId].filter((id):id is number=>Boolean(id&&id!==auth.userId))));
       await createNotificationsForUsers({recipientUserIds:recipients,eventType:'session_cancelled',title:'Session cancelled',detail:`${result.playerName} cancelled ${sessionTypeLabel(result.sessionType)} for ${formatWhen(result.startsAt)}.`,path:'/portal/dashboard?suite=scheduling',actorUserId:auth.userId,actorName:auth.session.name,actorRole:auth.session.role,playerId:result.playerId,playerName:result.playerName}).catch(()=>{});
       void sendPushNotificationToUsers({userIds:recipients,title:'Session cancelled',body:`${sessionTypeLabel(result.sessionType)} · ${formatWhen(result.startsAt)}`,data:{type:'session_cancelled',bookingId:result.bookingId}});
+      after(()=>syncGoogleCalendarForTimes(auth.organizationId,[result.startsAt]));
       return NextResponse.json({ok:true});
     }
     if(action==='slot_status'){

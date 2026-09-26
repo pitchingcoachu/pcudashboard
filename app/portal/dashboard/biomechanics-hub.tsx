@@ -1,8 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import MotionCaptureDashboard from '../motion-capture/motion-capture-dashboard';
 import BiomechanicsSuite from './biomechanics-suite';
+import PcuMocapDashboard from './pcu-mocap-dashboard';
 
 type BiomechanicsHubProps = {
   role: 'admin' | 'coach' | 'player';
@@ -15,6 +15,8 @@ type BiomechanicsSubPage = 'force-plates' | 'motion-capture';
 
 export default function BiomechanicsHub({ role, schoolCode, isActive = true, fixedPlayerName }: BiomechanicsHubProps) {
   const [activeSubPage, setActiveSubPage] = useState<BiomechanicsSubPage>('force-plates');
+  const isPcu = schoolCode.trim().toUpperCase() === 'PCU';
+  const displayedSubPage: BiomechanicsSubPage = isPcu ? activeSubPage : 'force-plates';
 
   return (
     <div style={{ display: 'grid', gap: 10 }}>
@@ -22,27 +24,31 @@ export default function BiomechanicsHub({ role, schoolCode, isActive = true, fix
         <div className="portal-dashboard-suite-tabs-center">
           <button
             type="button"
-            className={activeSubPage === 'force-plates' ? 'btn btn-primary' : 'btn btn-ghost'}
+            className={displayedSubPage === 'force-plates' ? 'btn btn-primary' : 'btn btn-ghost'}
             onClick={() => setActiveSubPage('force-plates')}
           >
             Force Plates
           </button>
-          <button
-            type="button"
-            className={activeSubPage === 'motion-capture' ? 'btn btn-primary' : 'btn btn-ghost'}
-            onClick={() => setActiveSubPage('motion-capture')}
-          >
-            Motion Capture
-          </button>
+          {isPcu ? (
+            <button
+              type="button"
+              className={displayedSubPage === 'motion-capture' ? 'btn btn-primary' : 'btn btn-ghost'}
+              onClick={() => setActiveSubPage('motion-capture')}
+            >
+              Motion Capture
+            </button>
+          ) : null}
         </div>
       </div>
 
-      <div style={{ display: activeSubPage === 'force-plates' ? 'block' : 'none' }}>
-        <BiomechanicsSuite role={role} schoolCode={schoolCode} isActive={isActive && activeSubPage === 'force-plates'} fixedPlayerName={fixedPlayerName} />
+      <div style={{ display: displayedSubPage === 'force-plates' ? 'block' : 'none' }}>
+        <BiomechanicsSuite role={role} schoolCode={schoolCode} isActive={isActive && displayedSubPage === 'force-plates'} fixedPlayerName={fixedPlayerName} />
       </div>
-      <div style={{ display: activeSubPage === 'motion-capture' ? 'block' : 'none' }}>
-        <MotionCaptureDashboard fixedPlayerName={fixedPlayerName} />
-      </div>
+      {isPcu ? (
+        <div style={{ display: displayedSubPage === 'motion-capture' ? 'block' : 'none' }}>
+          <PcuMocapDashboard canEditEvents={role === 'admin' || role === 'coach'} />
+        </div>
+      ) : null}
     </div>
   );
 }
