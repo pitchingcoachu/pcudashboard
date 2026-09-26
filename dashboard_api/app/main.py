@@ -6055,6 +6055,14 @@ CROSS_SCHOOL_PLAYER_DATA_LINKS: tuple[Dict[str, Any], ...] = (
         "aliases": {"tommypascanu", "pascanutommy", "thomaspascanu", "pascanuthomas"},
         "school_codes": {"PCU", "ARIZONA"},
     },
+    {
+        "aliases": {"cristianmogen", "mogencristian"},
+        "school_codes": {"PCU", "UNM"},
+    },
+    {
+        "aliases": {"diegorodriguez", "rodriguezdiego"},
+        "school_codes": {"PCU", "UNM"},
+    },
 )
 
 

@@ -8,6 +8,14 @@ const LINKS: CrossSchoolPlayerLink[] = [
     aliases: new Set(['tommypascanu', 'pascanutommy', 'thomaspascanu', 'pascanuthomas']),
     schoolCodes: new Set(['PCU', 'ARIZONA']),
   },
+  {
+    aliases: new Set(['cristianmogen', 'mogencristian']),
+    schoolCodes: new Set(['PCU', 'UNM']),
+  },
+  {
+    aliases: new Set(['diegorodriguez', 'rodriguezdiego']),
+    schoolCodes: new Set(['PCU', 'UNM']),
+  },
 ];
 
 const SCHOOL_DISPLAY_ALIASES: Record<string, Record<string, string>> = {
