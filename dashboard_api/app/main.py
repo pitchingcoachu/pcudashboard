@@ -3527,6 +3527,63 @@ def _pitch_type_family(value: Any) -> str:
     return "Other"
 
 
+PRO_AAA_FIP_CONSTANTS: Dict[tuple[int, str], float] = {
+    # League/year constants derived from the final official league totals.
+    # FIP constant = lgERA - ((13*lgHR + 3*(lgBB+lgHBP) - 2*lgK) / lgIP)
+    (2025, "PCL"): 3.9662126170002283,
+    (2025, "IL"): 3.496056823523268,
+    (2026, "PCL"): 3.901693536082999,
+    (2026, "IL"): 3.485453262233376,
+}
+PRO_AAA_PCL_TEAM_CODES = frozenset({"ABQ", "ELP", "LV", "LAS", "OKC", "RNO", "RR", "SAC", "SL", "SLC", "SUG", "TAC"})
+PRO_AAA_IL_TEAM_CODES = frozenset({
+    "BUF", "CHA", "CLT", "COL", "DUR", "GWN", "IND", "IOW", "JAX", "LHV",
+    "LOU", "MEM", "NAS", "NFK", "NOR", "OMA", "ROC", "SCR", "STP", "SWB",
+    "SYR", "TOL", "WOR",
+})
+
+
+def _pro_aaa_fip_constant_for_rows(rows: List[Dict[str, Any]], fallback: float = 3.2) -> float:
+    """Return the pitch-weighted AAA league/year FIP constant for rows."""
+    weighted_sum = 0.0
+    total_weight = 0.0
+    for r in rows:
+        team_code = str(
+            r.get("pitcher_team_code")
+            or r.get("pitcher_team_norm")
+            or r.get("pitcherteam")
+            or ""
+        ).strip().upper()
+        if team_code in PRO_AAA_PCL_TEAM_CODES:
+            league = "PCL"
+        elif team_code in PRO_AAA_IL_TEAM_CODES:
+            league = "IL"
+        else:
+            continue
+
+        year_value = r.get("season_year")
+        if not _is_num(year_value):
+            session_value = r.get("session_date")
+            match = re.match(r"^(\d{4})", str(session_value or ""))
+            year_value = int(match.group(1)) if match else None
+        if not _is_num(year_value):
+            continue
+        constant = PRO_AAA_FIP_CONSTANTS.get((int(float(year_value)), league))
+        if constant is None:
+            continue
+
+        # Rollup rows carry pitch totals and raw rows represent one pitch each.
+        # Either is a stable weighting when a view spans teams or seasons.
+        weight = (
+            float(r.get("pitches"))
+            if _is_num(r.get("pitches")) and float(r.get("pitches")) > 0
+            else 1.0
+        )
+        weighted_sum += constant * weight
+        total_weight += weight
+    return (weighted_sum / total_weight) if total_weight > 0 else fallback
+
+
 def _derive_pro_fip_context(rows: List[Dict[str, Any]]) -> tuple[float, float]:
     """Return (FIP constant, league HR/FB) derived from current PRO row set."""
     fallback_fip_const = 3.2
@@ -4042,6 +4099,8 @@ def _build_dynamic_table(
         if s == 2:
             usage_count_2k_total += 1
     pro_fip_const, pro_lg_hr_fb = _derive_pro_fip_context(rows)
+    if str(ctrl_level or "").strip().upper() == "AAA":
+        pro_fip_const = _pro_aaa_fip_constant_for_rows(rows, fallback=pro_fip_const)
     if timings is not None:
         timings["grouping_ms"] = round((time.perf_counter() - stage_started) * 1000.0, 1)
     stage_started = time.perf_counter()
@@ -4994,7 +5053,11 @@ def _build_dynamic_table(
 
         # Advanced pitching metrics (ERA/FIP/xFIP) for custom-table use.
         # Note: ERA here is an event-weight estimate because earned-runs is not tracked directly.
-        fip_const = pro_fip_const if is_pro_group else 3.2
+        fip_const = (
+            _pro_aaa_fip_constant_for_rows(grp, fallback=pro_fip_const)
+            if is_pro_group and str(ctrl_level or "").strip().upper() == "AAA"
+            else (pro_fip_const if is_pro_group else 3.2)
+        )
         lg_hr_fb = pro_lg_hr_fb if is_pro_group else 0.12
         fip_val: Optional[float] = None
         x_fip_val: Optional[float] = None
@@ -14319,6 +14382,8 @@ def _try_pro_pitching_overview_rollup(
                 SELECT
                   {split_expr} AS split_value,
                   pitch_type,
+                  pitcher_team_code,
+                  EXTRACT(YEAR FROM session_date)::int AS season_year,
                   MIN(level_bucket)::text AS level_bucket,
                   SUM(pitches)::int AS pitches,
                   SUM(velo_sum)::double precision AS velo_sum,
@@ -14415,7 +14480,7 @@ def _try_pro_pitching_overview_rollup(
                   {command_plus_select}
                 FROM {rollup_source}
                 WHERE {where_sql}
-                GROUP BY {split_expr}, pitch_type
+                GROUP BY {split_expr}, pitch_type, pitcher_team_code, EXTRACT(YEAR FROM session_date)
                 """,
                 params,
             )
@@ -15087,7 +15152,11 @@ def _try_pro_pitching_overview_rollup(
         x_fip_val = None
         era_val = None
         if ip_num > 0:
-            fip_const_for_row = fip_const_rollup
+            fip_const_for_row = (
+                _pro_aaa_fip_constant_for_rows(rows_for_split, fallback=fip_const_rollup)
+                if level_norm == "AAA"
+                else fip_const_rollup
+            )
             lg_hr_fb_for_row = lg_hr_fb_rollup
             fip_val = ((13.0 * hr_n) + (3.0 * (bb_n + hbp_n)) - (2.0 * k_n)) / ip_num + fip_const_for_row
             # Keep xFIP on fly balls only (exclude pop-ups and line drives).
@@ -20345,6 +20414,8 @@ def _pro_pitching_overview(
                     grouped_after_count_for_pro.setdefault(count_key, []).extend(tail_rows)
 
     pro_fip_const, pro_lg_hr_fb = _derive_pro_fip_context(rows)
+    if _pro_level_norm(level_filter) == "AAA":
+        pro_fip_const = _pro_aaa_fip_constant_for_rows(rows, fallback=pro_fip_const)
 
     def _update_row_metrics(row_obj: Dict[str, Any], group_rows: List[Dict[str, Any]]) -> None:
         def _norm_desc(value: Any) -> str:
