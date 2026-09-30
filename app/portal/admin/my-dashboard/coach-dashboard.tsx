@@ -8,6 +8,7 @@ import type { BreakdownAnnotation } from '../../components/media-breakdown-viewe
 import { canonicalFlagMetric, parseBiomechanicsFlagMetric, parseForcePlateFlagMetric, parseOvrSprintFlagMetric } from '../../../../lib/dashboard-metric-catalog';
 import { formatTableDisplayValue } from '../../../../lib/table-sort';
 import styles from './coach-dashboard.module.css';
+import TaskList from './task-list';
 
 const MediaBreakdownViewer=dynamic(()=>import('../../components/media-breakdown-viewer'),{ssr:false});
 const AthletePerformanceEmbed=dynamic(()=>import('./athlete-performance-embed'),{ssr:false,loading:()=> <div className={styles.performanceLoading}><span/> Preparing performance workspace…</div>});
@@ -290,6 +291,8 @@ export default function CoachDashboard({ firstName }: { firstName:string }) {
       <div className={styles.heroStats}><span><b>{data.players.length}</b> athletes managed</span><span><b>{viewedPlayerFlags.length}</b> active flags</span><span className={oneLeft?styles.alertStat:''}><b>{oneLeft}</b> one workout left</span></div>
     </header>
     {error?<div className={styles.error}>{error}</div>:null}
+
+    <TaskList players={data.players}/>
 
     <section className={styles.rosterBar}>
       <div className={styles.athleteControlRow}>

@@ -27,6 +27,8 @@ class PitchingFiltersResponse(BaseModel):
     count_options: List[str]
     after_count_options: List[str]
     level_options: Optional[List[str]] = None
+    pitcher_levels: Optional[Dict[str, List[str]]] = None
+    pitcher_level_date_ranges: Optional[Dict[str, Dict[str, Dict[str, str]]]] = None
     pitchers_by_team_code: Optional[Dict[str, List[str]]] = None
     opp_hitters_by_team_code: Optional[Dict[str, List[str]]] = None
 

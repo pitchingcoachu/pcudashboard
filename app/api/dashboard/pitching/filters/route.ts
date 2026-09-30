@@ -14,7 +14,7 @@ const RESPONSE_CACHE_HEADERS = {
   vary: 'Cookie',
 } as const;
 const SLOW_ROUTE_MS = 2500;
-const PITCHING_FILTERS_ROSTER_CACHE_VERSION = 'managed-roster-team-scope-2026-09-04-v2';
+const PITCHING_FILTERS_ROSTER_CACHE_VERSION = 'all-site-player-levels-2026-09-27-v2';
 
 function resolveFiltersTimeoutMs(schoolCode: string): number {
   const upper = String(schoolCode ?? '').trim().toUpperCase();

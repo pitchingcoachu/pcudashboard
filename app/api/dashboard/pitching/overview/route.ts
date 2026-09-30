@@ -12,7 +12,7 @@ import { resolveSchoolScopedOrganizationId } from '../../../../../lib/programmin
 import { resolvePercentileComparisonWindow } from '../../../../../lib/percentile-window';
 
 export const maxDuration = 300;
-const PITCHING_OVERVIEW_CACHE_VERSION = 'adv-metrics-v9';
+const PITCHING_OVERVIEW_CACHE_VERSION = 'adv-metrics-v10';
 
 const RESPONSE_CACHE_HEADERS = {
   'cache-control': 'private, max-age=5, stale-while-revalidate=55',

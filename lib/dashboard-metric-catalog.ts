@@ -69,7 +69,7 @@ export const PITCHING_TABLE_METRICS = [
   'MagAngle', 'Spin', 'rTilt', 'bTilt', 'TiltDev', 'SpinEff', 'Height', 'Side', 'Ext', 'VAA', 'nVAA', 'HAA',
   'Strike%', 'Swing%', 'FPS%', 'FPS(FB)%', 'FPS(OS)%', 'Called-S%', 'Take%', 'Chase%', 'GoZoneSw%',
   'IZswing%', 'Z-Whiff%', 'EdgeSwing%', 'PosSD%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'InZone%', 'Comp%', 'QP%',
-  'Whiff%', 'SwStrk%', 'K%', 'BB%', 'K-BB%', 'GB%', 'Barrel%', 'CSW%', 'EV', 'LA',
+  'Whiff%', 'SwStrk%', 'PutAway%', 'K%', 'BB%', 'K-BB%', 'GB%', 'Barrel%', 'CSW%', 'EV', 'LA',
   'Stuff+', 'Command+', 'Ctrl+', 'QP+', 'RV/100', 'PV/100',
   'ITMissAvg', 'ITMissMed',
   'IP', 'H', 'XBH', 'HR', 'Barrels', 'BB', 'HBP', 'K', 'Whiffs', 'ERA', 'FIP', 'xFIP', 'SIERA', 'WHIP',

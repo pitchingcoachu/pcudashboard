@@ -51,6 +51,7 @@ const STAT_DEFINITIONS: Record<string, string> = {
   'qp%': 'Quality pitch percentage.',
   'whiff%': 'Whiffs per swing.',
   'k%': 'Strikeouts per batter faced.',
+  'putaway%': 'Percentage of plate appearances ending from a two-strike count in which the batter is retired.',
   'bb%': 'Walks per batter faced.',
   'hr%': 'Home runs per batter faced.',
   'gb%': 'Ground ball percentage on balls in play.',

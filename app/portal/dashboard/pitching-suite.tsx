@@ -62,15 +62,22 @@ type FiltersPayload = {
   count_options: string[];
   after_count_options: string[];
   level_options?: string[];
+  pitcher_levels?: Record<string, string[]>;
+  pitcher_level_date_ranges?: Record<string, Record<string, { min_date: string; max_date: string }>>;
   pitchers_by_team_code?: Record<string, string[]>;
   opp_hitters_by_team_code?: Record<string, string[]>;
 };
 
 type OptionItem = { value: string; label: string; disabled?: boolean };
 
-const PITCHING_FILTER_CLIENT_CACHE_VERSION = 'league-level-filtering-2026-08-03-v1';
+const PITCHING_FILTER_CLIENT_CACHE_VERSION = 'all-site-player-levels-2026-09-27-v2';
 const PRO_LEVEL_FILTER_OPTIONS = ['All', 'MLB', 'AAA'];
 const NCAA_LEVEL_FILTER_OPTIONS = ['All', 'D1', 'D2', 'D3', 'NAIA', 'JUCO'];
+const SCHOOL_DEFAULT_LEVELS: Record<string, string> = {
+  ARIZONA: 'D1', CBU: 'D1', CREIGHTON: 'D1', GCU: 'D1', GMU: 'D1', HARVARD: 'D1',
+  LSU: 'D1', OSU: 'D1', SEMO: 'D1', UNM: 'D1', CNU: 'D3', LEC: 'D2', UNOH: 'NAIA',
+  INDY: 'Independent', LI: 'Independent', LEAGUE: 'D1', PRO: 'MLB', MLB: 'MLB',
+};
 // Break Lines reads from break_line_offsets_grid, which has real precomputed
 // data for every level regardless of the current site -- unlike the page's
 // main "Level" filter (site-scoped, see PRO_LEVEL_FILTER_OPTIONS /
@@ -1650,6 +1657,7 @@ const FALLBACK_AVAILABLE_CUSTOM_COLUMNS = [
   'IZswing%',
   'Z-Whiff%',
   'SwStrk%',
+  'PutAway%',
   'K%',
   'BB%',
   'K-BB%',
@@ -5184,9 +5192,7 @@ export default function PitchingSuite({
   const [batterSide, setBatterSide] = useState('All');
   const [venue, setVenue] = useState('All');
   const [sessionType, setSessionType] = useState('');
-  const [level, setLevel] = useState(
-    initialSchoolCode === 'LEAGUE' ? 'D1' : initialSchoolCode === 'PRO' ? 'MLB' : 'All'
-  );
+  const [level, setLevel] = useState(SCHOOL_DEFAULT_LEVELS[initialSchoolCode.toUpperCase()] ?? 'All');
   // Break Lines has its own level picker, independent of the page-wide
   // "Level" filter above -- that filter only ever offers the levels
   // relevant to the current site's own data (e.g. D1/D2/D3/JUCO/NAIA on a
@@ -5727,14 +5733,58 @@ export default function PitchingSuite({
     String(selectedSchoolCode ?? '').toUpperCase() === 'MLB' ||
     String(filters?.school_code ?? '').toUpperCase() === 'PRO' ||
     String(filters?.school_code ?? '').toUpperCase() === 'MLB';
+  const selectedPlayerLevelInfo = useMemo(() => {
+    const selected = effectiveSelectedPitchers.filter(
+      (value) => value !== 'All' && value !== '__NO_GROUP_MEMBERS__'
+    );
+    if (selected.length !== 1) return { pitcher: '', levels: [] as string[] };
+    const target = normalizePersonName(selected[0]);
+    const match = Object.entries(filters?.pitcher_levels ?? {}).find(
+      ([pitcherName]) => normalizePersonName(pitcherName) === target
+    );
+    const rangeMatch = Object.entries(filters?.pitcher_level_date_ranges ?? {}).find(
+      ([pitcherName]) => normalizePersonName(pitcherName) === target
+    );
+    const levelsInWindow = Object.entries(rangeMatch?.[1] ?? {})
+      .filter(([, range]) => {
+        const rangeMin = String(range?.min_date ?? '');
+        const rangeMax = String(range?.max_date ?? '');
+        return (!startDate || !rangeMax || rangeMax >= startDate) && (!endDate || !rangeMin || rangeMin <= endDate);
+      })
+      .map(([availableLevel]) => availableLevel);
+    const rawLevels = rangeMatch ? levelsInWindow : (match?.[1] ?? []);
+    const availableByUpper = new Map(
+      (filters?.level_options ?? []).map((value) => [String(value).toUpperCase(), String(value)])
+    );
+    const levels = Array.from(new Set(rawLevels.map((value) => {
+      const raw = String(value).trim();
+      return availableByUpper.get(raw.toUpperCase()) ?? raw;
+    }).filter(Boolean))).sort((a, b) => {
+      if (a === 'MLB') return -1;
+      if (b === 'MLB') return 1;
+      return a.localeCompare(b);
+    });
+    return { pitcher: selected[0], levels };
+  }, [effectiveSelectedPitchers, endDate, filters?.level_options, filters?.pitcher_level_date_ranges, filters?.pitcher_levels, startDate]);
+  const autoLevelResolutionRef = useRef('');
+  useEffect(() => {
+    if (!selectedPlayerLevelInfo.pitcher || selectedPlayerLevelInfo.levels.length === 0) return;
+    const resolutionKey = `${normalizePersonName(selectedPlayerLevelInfo.pitcher)}|${selectedPlayerLevelInfo.levels.join(',')}`;
+    if (autoLevelResolutionRef.current === resolutionKey) return;
+    autoLevelResolutionRef.current = resolutionKey;
+    if (selectedPlayerLevelInfo.levels.length === 1) {
+      if (level !== selectedPlayerLevelInfo.levels[0]) setLevel(selectedPlayerLevelInfo.levels[0]);
+      return;
+    }
+    if (level === 'All') setSplitBy('Level');
+  }, [level, selectedPlayerLevelInfo]);
   const dnaSharedFilterParams = useMemo(() => {
     const params = new URLSearchParams();
     const apiTeamType = isLeague
       ? resolveLeagueTeamTypeForApi(teamType, [filters?.pitchers_by_team_code, filters?.opp_hitters_by_team_code])
       : teamType;
     if (teamType && teamType !== 'All') params.set('team_type', apiTeamType);
-    if ((isPro || isLeague) && level && level !== 'All') params.set('level', level);
-    else if (!isPro && !isLeague && PRO_LEVEL_FILTER_OPTIONS.includes(level) && level !== 'All') params.set('level', level);
+    if (level && level !== 'All') params.set('level', level);
     if (withVideo && withVideo !== 'All') params.set('with_video', withVideo);
     if (breakLines && breakLines !== 'None') params.set('break_lines', breakLines);
     if (hand && hand !== 'All') params.set('hand', hand);
@@ -5831,6 +5881,13 @@ export default function PitchingSuite({
     }
     return options;
   }, [filters?.level_options]);
+  const siteLevelOptions = useMemo(() => {
+    const school = String(filters?.school_code ?? selectedSchoolCode ?? initialSchoolCode).trim().toUpperCase();
+    const source = filters?.level_options?.length
+      ? filters.level_options
+      : (isPro ? PRO_LEVEL_FILTER_OPTIONS : ['All', ...(SCHOOL_DEFAULT_LEVELS[school] ? [SCHOOL_DEFAULT_LEVELS[school]] : [])]);
+    return Array.from(new Set(source.map((value) => String(value).trim()).filter(Boolean)));
+  }, [filters?.level_options, filters?.school_code, initialSchoolCode, isPro, selectedSchoolCode]);
   const collegePercentileDefault = collegeLevelPercentileOptions.includes(DEFAULT_COLLEGE_PERCENTILE_SCOPE)
     ? DEFAULT_COLLEGE_PERCENTILE_SCOPE
     : (collegeLevelPercentileOptions[0] ?? 'All');
@@ -6208,21 +6265,13 @@ export default function PitchingSuite({
   }, [manualDate]);
 
   useEffect(() => {
-    if (!isPro) return;
-    if (!PRO_LEVEL_FILTER_OPTIONS.includes(level)) setLevel('MLB');
-  }, [isPro, level]);
-
-  useEffect(() => {
-    if (isPro || !isLeague) return;
-    if (isIndy) {
-      if (level !== 'All') setLevel('All');
-      return;
-    }
-    const options = collegeLevelPercentileOptions.length ? collegeLevelPercentileOptions : NCAA_LEVEL_FILTER_OPTIONS;
-    const nextDefault = options.includes('D1') ? 'D1' : (options[0] ?? 'All');
-    const isProOnlyLevel = level === 'MLB' || level === 'AAA';
-    if (!level || isProOnlyLevel || !options.includes(level)) setLevel(nextDefault);
-  }, [collegeLevelPercentileOptions, isPro, isLeague, isIndy, level]);
+    const school = String(filters?.school_code ?? selectedSchoolCode ?? initialSchoolCode).trim().toUpperCase();
+    const configuredDefault = SCHOOL_DEFAULT_LEVELS[school];
+    const nextDefault = configuredDefault && siteLevelOptions.includes(configuredDefault)
+      ? configuredDefault
+      : (siteLevelOptions.find((option) => option !== 'All') ?? 'All');
+    if (!level || !siteLevelOptions.includes(level)) setLevel(nextDefault);
+  }, [filters?.school_code, initialSchoolCode, level, selectedSchoolCode, siteLevelOptions]);
 
   useEffect(() => {
     if (isPro) return;
@@ -13685,7 +13734,7 @@ export default function PitchingSuite({
     'Expected Movement': ['Velo', 'Max', 'IVB', 'xIVB', 'dIVB', 'HB', 'xHB', 'dHB', 'MagAngle', 'rTilt', 'bTilt', 'TiltDev', 'SpinEff', 'Spin', 'Height', 'Side', 'Ext', 'VAA', 'nVAA', 'HAA'],
     Process: ['InZone%', '<2kInZone%', '2kInZone%', 'Strike%', '<2Kstrike%', '2Kstrike%', 'Comp%', 'Swing%', 'FPS%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'HR%', 'RV/100', 'PV/100', 'ERA', 'FIP', 'xFIP', 'SIERA'],
     Live: ['InZone%', 'Strike%', 'FPS%', 'E+A%', 'QP+', 'Ctrl+', 'K%', 'BB%', 'HR%', 'Whiff%', 'SwStrk%', 'ERA', 'FIP', 'xFIP', 'SIERA'],
-    Results: ['Whiff%', 'SwStrk%', 'K%', 'BB%', 'HR%', 'CSW%', 'GB%', 'FB%', 'Barrel%', 'EV', 'ERA', 'FIP', 'xFIP', 'SIERA'],
+    Results: ['Whiff%', 'SwStrk%', 'PutAway%', 'K%', 'BB%', 'HR%', 'CSW%', 'GB%', 'FB%', 'Barrel%', 'EV', 'ERA', 'FIP', 'xFIP', 'SIERA'],
     Bullpen: ['InZone%', 'Comp%', 'Ctrl+', 'Stuff+'],
     Banny: ['Strike%', 'Whiff%', 'K%', 'BB%', 'QP+'],
     Custom: [
@@ -13733,6 +13782,7 @@ export default function PitchingSuite({
       'HR%',
       'Whiff%',
       'SwStrk%',
+      'PutAway%',
       'CSW%',
       'GB%',
       'FB%',
@@ -13849,6 +13899,7 @@ export default function PitchingSuite({
         : [
             { value: 'All', label: 'All' },
             { value: 'Pitch Types', label: 'Pitch Types' },
+            ...(isPro ? [{ value: 'Level', label: 'Level' }] : []),
             { value: 'Groups', label: 'Groups' },
             { value: 'Batter Hand', label: 'Batter Hand' },
             { value: 'Year', label: 'Year' },
@@ -13867,7 +13918,7 @@ export default function PitchingSuite({
             { value: 'Catcher', label: 'Catcher' },
             { value: 'Source', label: 'Source' },
           ],
-    [isLeague]
+    [isLeague, isPro]
   );
   const tableModeSelectValue = useMemo(
     () =>
@@ -15285,27 +15336,20 @@ export default function PitchingSuite({
                     placeholder="All"
                   />
                 </label>
-                {isPro || (isLeague && !isIndy) ? (
-                  <label>
-                    Level
-                    <SearchableSingleSelect
-                      options={toOptions(!isPro ? collegeLevelPercentileOptions : (filters.level_options ?? PRO_LEVEL_FILTER_OPTIONS))}
-                      value={level}
-                      onChange={setLevel}
-                      placeholder={isPro ? 'MLB' : 'D1'}
-                    />
-                  </label>
-                ) : (
-                  <label>
-                    Level
-                    <SearchableSingleSelect
-                      options={toOptions(PRO_LEVEL_FILTER_OPTIONS)}
-                      value={PRO_LEVEL_FILTER_OPTIONS.includes(level) ? level : 'All'}
-                      onChange={setLevel}
-                      placeholder="All"
-                    />
-                  </label>
-                )}
+                <label>
+                  Level
+                  <SearchableSingleSelect
+                    options={toOptions(siteLevelOptions)}
+                    value={siteLevelOptions.includes(level) ? level : (siteLevelOptions[0] ?? 'All')}
+                    onChange={setLevel}
+                    placeholder={SCHOOL_DEFAULT_LEVELS[String(filters.school_code ?? selectedSchoolCode ?? '').toUpperCase()] ?? 'All'}
+                  />
+                  {level === 'All' && selectedPlayerLevelInfo.levels.length > 1 ? (
+                    <span className="portal-muted-text">
+                      Multiple levels: {selectedPlayerLevelInfo.levels.join(' + ')}
+                    </span>
+                  ) : null}
+                </label>
                 {!isPro && !isLeague ? (
                   <label>
                     Session Type
@@ -17778,7 +17822,7 @@ export default function PitchingSuite({
                     const m = { l: 64, r: 20, t: 18, b: 70 };
                     const pw = w - m.l - m.r;
                     const ph = h - m.t - m.b;
-                    const pctMetrics = new Set(['InZone%', '<2kInZone%', '2kInZone%', 'Comp%', 'Strike%', '<2Kstrike%', '2Kstrike%', 'Swing%', 'FPS%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'QP%', 'Whiff%', 'SwStrk%', 'CSW%', 'K%', 'BB%', 'GB%', 'FB%', 'Barrel%']);
+                    const pctMetrics = new Set(['InZone%', '<2kInZone%', '2kInZone%', 'Comp%', 'Strike%', '<2Kstrike%', '2Kstrike%', 'Swing%', 'FPS%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'QP%', 'Whiff%', 'SwStrk%', 'PutAway%', 'CSW%', 'K%', 'BB%', 'GB%', 'FB%', 'Barrel%']);
                     const countMetrics = new Set(['P', 'BF', 'Whiffs', 'K', 'BB']);
                     const dateLevels = trendSeriesBySessionData.allDates;
                     const dateX = new Map(dateLevels.map((d, i) => [d, m.l + (i / Math.max(1, dateLevels.length - 1)) * pw]));

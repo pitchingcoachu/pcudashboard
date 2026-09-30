@@ -350,6 +350,108 @@ def pitch_key(row: dict[str, str]) -> str:
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
 
 
+def is_unverified_v3_source(source_file: str) -> bool:
+    return bool(re.search(r"_unverified\.csv$", str(source_file or ""), flags=re.IGNORECASE))
+
+
+def dedupe_v3_payloads(
+    conn: psycopg.Connection,
+    *,
+    school_code: str,
+    file_id: int,
+    source_file: str,
+    payloads: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Keep one V3 row per school/PitchUID, preferring verified exports.
+
+    TrackMan can publish the same game first as ``*_unverified.csv`` and later
+    as a verified CSV, sometimes under a different FTP date directory. Source
+    paths therefore cannot be the sole identity for a pitch. Practice files are
+    intentionally outside this policy because they are a separate data source.
+    """
+    by_pitch_key: dict[str, dict[str, object]] = {}
+    without_pitch_key: list[dict[str, object]] = []
+    for payload in payloads:
+        key = str(payload.get("pitch_key") or "").strip()
+        if key:
+            by_pitch_key[key] = payload
+        else:
+            without_pitch_key.append(payload)
+
+    pitch_keys = list(by_pitch_key)
+    if not pitch_keys:
+        return without_pitch_key
+
+    if is_unverified_v3_source(source_file):
+        existing_keys = {
+            str(row[0])
+            for row in conn.execute(
+                """
+                SELECT DISTINCT pitch_key
+                FROM public.pitch_events
+                WHERE school_code = %s
+                  AND file_id <> %s
+                  AND source_file LIKE 'trackman://v3/%%'
+                  AND pitch_key = ANY(%s)
+                """,
+                (school_code, file_id, pitch_keys),
+            ).fetchall()
+        }
+        return without_pitch_key + [
+            payload for key, payload in by_pitch_key.items() if key not in existing_keys
+        ]
+
+    removed_file_ids = {
+        int(row[0])
+        for row in conn.execute(
+            """
+            DELETE FROM public.pitch_events
+            WHERE school_code = %s
+              AND file_id <> %s
+              AND source_file LIKE 'trackman://v3/%%'
+              AND pitch_key = ANY(%s)
+            RETURNING file_id
+            """,
+            (school_code, file_id, pitch_keys),
+        ).fetchall()
+    }
+    if removed_file_ids:
+        conn.execute(
+            """
+            UPDATE public.pitch_data_files AS pdf
+            SET row_count = counts.row_count,
+                loaded_at = NOW()
+            FROM (
+              SELECT file_id, COUNT(*)::integer AS row_count
+              FROM public.pitch_events
+              WHERE school_code = %s
+                AND file_id = ANY(%s)
+              GROUP BY file_id
+            ) AS counts
+            WHERE pdf.school_code = %s
+              AND pdf.file_id = counts.file_id
+            """,
+            (school_code, list(removed_file_ids), school_code),
+        )
+        conn.execute(
+            """
+            UPDATE public.pitch_data_files
+            SET row_count = 0,
+                loaded_at = NOW()
+            WHERE school_code = %s
+              AND file_id = ANY(%s)
+              AND NOT EXISTS (
+                SELECT 1
+                FROM public.pitch_events AS pe
+                WHERE pe.school_code = pitch_data_files.school_code
+                  AND pe.file_id = pitch_data_files.file_id
+              )
+            """,
+            (school_code, list(removed_file_ids)),
+        )
+    return without_pitch_key + list(by_pitch_key.values())
+
+
 def database_columns(conn: psycopg.Connection) -> dict[str, str]:
     rows = conn.execute(
         """SELECT column_name FROM information_schema.columns
@@ -583,7 +685,9 @@ def sync_file(
             "SELECT COUNT(*) FROM public.pitch_events WHERE school_code = %s AND file_id = %s",
             (school_code, existing[0]),
         ).fetchone()[0]
-        if actual == (existing[2] or 0) and (actual > 0 or not rows):
+        # A V3 file can legitimately retain zero rows after a verified copy
+        # supersedes it, so a matching checksum and stored count are sufficient.
+        if actual == (existing[2] or 0):
             return 0, True
 
     ensure_school(conn, school_code)
@@ -625,13 +729,22 @@ def sync_file(
                 pitch_key=pitch_key(row),
             )
             payloads.append(payload)
-        columns = sorted(set.intersection(*(set(payload) for payload in payloads)))
-        statement = sql.SQL("INSERT INTO public.pitch_events ({}) VALUES ({}) ON CONFLICT DO NOTHING").format(
-            sql.SQL(", ").join(map(sql.Identifier, columns)),
-            sql.SQL(", ").join(sql.Placeholder() for _ in columns),
-        )
-        with conn.cursor() as cur:
-            cur.executemany(statement, [[payload[column] for column in columns] for payload in payloads])
+        if remote.source == "v3":
+            payloads = dedupe_v3_payloads(
+                conn,
+                school_code=school_code,
+                file_id=file_id,
+                source_file=stable_source,
+                payloads=payloads,
+            )
+        if payloads:
+            columns = sorted(set.intersection(*(set(payload) for payload in payloads)))
+            statement = sql.SQL("INSERT INTO public.pitch_events ({}) VALUES ({}) ON CONFLICT DO NOTHING").format(
+                sql.SQL(", ").join(map(sql.Identifier, columns)),
+                sql.SQL(", ").join(sql.Placeholder() for _ in columns),
+            )
+            with conn.cursor() as cur:
+                cur.executemany(statement, [[payload[column] for column in columns] for payload in payloads])
 
     inserted = conn.execute(
         "SELECT COUNT(*) FROM public.pitch_events WHERE school_code = %s AND file_id = %s",
