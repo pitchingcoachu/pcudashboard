@@ -28,6 +28,13 @@ export function PlayerAssessmentForm({
               disabled={disabled}
               onChange={(event) => setField(field.id, event.target.value)}
             />
+          ) : field.type === 'textarea' ? (
+            <textarea
+              rows={5}
+              value={answers[field.id] ?? ''}
+              disabled={disabled}
+              onChange={(event) => setField(field.id, event.target.value)}
+            />
           ) : field.type === 'scale' ? (
             <div style={{ display: 'flex', gap: 8 }}>
               {PLAYER_ASSESSMENT_SCALE_OPTIONS.map((option) => (

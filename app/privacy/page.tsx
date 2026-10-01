@@ -1,6 +1,7 @@
 export const metadata = {
-  title: 'Privacy Policy | PCU Dashboard',
+  title: 'Privacy Policy | Pearl Player Development',
   description: 'Privacy Policy for PCU Dashboard.',
+  alternates: { canonical: '/privacy' },
 };
 
 export default function PrivacyPolicyPage() {

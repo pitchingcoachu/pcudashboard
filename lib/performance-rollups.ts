@@ -158,6 +158,7 @@ export function buildAxioforceDailyRollups(
     const activityType = String(row['Pitch Type'] ?? '').trim() || 'Unspecified';
     for (const [metricName, raw] of Object.entries(row)) {
       if (identityColumns.has(metricName)) continue;
+      if (raw === null || raw === undefined || String(raw).trim() === '') continue;
       const value = typeof raw === 'number' ? raw : Number(raw);
       if (!Number.isFinite(value)) continue;
       const metricUnit = metricUnitFromLabel(metricName);

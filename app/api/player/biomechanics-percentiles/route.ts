@@ -60,6 +60,7 @@ function normalizeName(value: string): string {
 }
 
 function finite(value: unknown): number | null {
+  if (value === null || value === undefined || String(value).trim() === '') return null;
   const parsed = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }

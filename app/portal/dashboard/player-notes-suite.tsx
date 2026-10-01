@@ -346,7 +346,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
   const [uploadingMedia, setUploadingMedia] = useState(false);
   const [mediaFiles, setMediaFiles] = useState<File[]>([]);
   const [mediaTitle, setMediaTitle] = useState('');
-  const [mediaCategory, setMediaCategory] = useState('General');
+  const [mediaCategory, setMediaCategory] = useState('');
   const [mediaMessage, setMediaMessage] = useState('');
   const [editingMediaId, setEditingMediaId] = useState<number | null>(null);
   const [editingMediaTitle, setEditingMediaTitle] = useState('');
@@ -864,7 +864,9 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
 
   async function uploadMedia() {
     if (selectedLinkedPlayerId <= 0) { setMediaMessage('Select a linked player to upload media.'); return; }
-    if (!mediaFiles.length) { setMediaMessage('Choose a photo or video first.'); return; }
+    if (!mediaFiles.length) { setMediaMessage('Choose a photo, video, or PDF first.'); return; }
+    const batchCategory = mediaCategory.trim();
+    if (!batchCategory) { setMediaMessage('Choose a category for this upload.'); return; }
     setMediaMessage('');
     setUploadingMedia(true);
     let lastMedia: PlayerMedia[] = playerMedia;
@@ -881,7 +883,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
           playerId: selectedLinkedPlayerId,
           file,
           title,
-          category: mediaCategory.trim() || 'General',
+          category: batchCategory,
           sourceType: 'player_notes',
         });
         if (!result.ok) throw new Error(result.error);
@@ -894,11 +896,12 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
       }
     }
     setPlayerMedia(lastMedia);
-    if (successCount > 0) setCustomCategories((current) => uniqueNames([...current, mediaCategory]));
+    if (successCount > 0) setCustomCategories((current) => uniqueNames([...current, batchCategory]));
     setMediaFiles(remainingFiles);
     if (successCount > 0) setMediaTitle('');
     if (!failures.length) {
-      setMediaMessage(successCount > 1 ? `${successCount} files uploaded.` : 'Media uploaded.');
+      setMediaCategory('');
+      setMediaMessage(successCount > 1 ? `${successCount} files uploaded to ${batchCategory}.` : `Media uploaded to ${batchCategory}.`);
     } else if (successCount > 0) {
       setMediaMessage(`${successCount} uploaded, ${failures.length} failed — ${failures.join('; ')}`);
     } else {
@@ -1276,7 +1279,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
         <article className="portal-admin-card">
           <div className="portal-row-between" style={{ alignItems: 'start', gap: 12 }}>
             <div>
-              <h3 style={{ margin: 0 }}>Photos & Videos</h3>
+              <h3 style={{ margin: 0 }}>Photos, Videos & PDFs</h3>
               <p className="portal-muted-text" style={{ margin: '0.25rem 0 0' }}>
                 Uploaded media and note attachments for the selected player.
               </p>
@@ -1305,12 +1308,13 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
                   <input value={mediaTitle} onChange={(event) => setMediaTitle(event.target.value)} placeholder="Media name..." />
                 </label>
                 <label>
-                  Category
+                  Category for all files
                   <select
                     className="portal-desktop-category-input"
                     value={mediaCategory}
                     onChange={(event) => setMediaCategory(event.target.value)}
                   >
+                    <option value="" disabled>Choose a category...</option>
                     {mediaUploadCategorySelectOptions.map((category) => <option key={`media-cat-desktop-select-${category}`} value={category}>{category}</option>)}
                   </select>
                   <select
@@ -1318,15 +1322,18 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
                     value={mediaCategory}
                     onChange={(event) => setMediaCategory(event.target.value)}
                   >
+                    <option value="" disabled>Choose a category...</option>
                     {mediaUploadCategorySelectOptions.map((category) => <option key={`media-cat-select-${category}`} value={category}>{category}</option>)}
                   </select>
                 </label>
-                <button type="button" className="btn btn-primary" onClick={() => void uploadMedia()} disabled={!mediaFiles.length || uploadingMedia}>
+                <button type="button" className="btn btn-primary" onClick={() => void uploadMedia()} disabled={!mediaFiles.length || !mediaCategory.trim() || uploadingMedia}>
                   {uploadingMedia ? 'Uploading...' : 'Upload'}
                 </button>
               </div>
               {mediaFiles.length > 0 ? (
-                <p className="portal-muted-text" style={{ margin: 0 }}>{mediaFiles.map((f) => f.name).join(', ')}</p>
+                <p className="portal-muted-text" style={{ margin: 0 }}>
+                  {mediaFiles.map((f) => f.name).join(', ')}{mediaCategory.trim() ? ` · All will be saved to ${mediaCategory.trim()}` : ' · Choose one category for this batch'}
+                </p>
               ) : null}
               {mediaMessage ? (
                 <p className={mediaMessage.includes('Failed') || mediaMessage.includes('not configured') ? 'auth-error' : 'auth-message'} style={{ margin: 0 }}>
@@ -1435,7 +1442,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
                 </div>
               ))}
           </div>
-          {!playerMedia.length && !noteMediaAttachments.length ? <p className="portal-muted-text" style={{ marginBottom: 0 }}>No photos or videos yet.</p> : null}
+          {!playerMedia.length && !noteMediaAttachments.length ? <p className="portal-muted-text" style={{ marginBottom: 0 }}>No photos, videos, or PDFs yet.</p> : null}
         </article>
 
         <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'minmax(420px, 560px) minmax(0, 1fr)', alignItems: 'start' }}>

@@ -10,6 +10,14 @@ type PreviewAthleteSelectProps = {
   extraParams?: Record<string, string>;
 };
 
+function toFirstLast(value: string): string {
+  const raw = String(value ?? '').trim();
+  if (!raw || !raw.includes(',')) return raw;
+  const [last, ...rest] = raw.split(',');
+  const first = rest.join(' ').trim();
+  return `${first} ${last}`.replace(/\s+/g, ' ').trim() || raw;
+}
+
 export default function PreviewAthleteSelect({
   selectedPlayerId,
   players,
@@ -18,14 +26,20 @@ export default function PreviewAthleteSelect({
 }: PreviewAthleteSelectProps) {
   const router = useRouter();
   const wrapRef = useRef<HTMLDivElement | null>(null);
-  const [query, setQuery] = useState(() => players.find((player) => player.playerId === selectedPlayerId)?.fullName ?? '');
+  const [query, setQuery] = useState(() =>
+    toFirstLast(players.find((player) => player.playerId === selectedPlayerId)?.fullName ?? '')
+  );
   const [open, setOpen] = useState(false);
 
   const filteredPlayers = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    const sortedPlayers = [...players].sort((a, b) => a.fullName.localeCompare(b.fullName));
+    const sortedPlayers = [...players].sort((a, b) => toFirstLast(a.fullName).localeCompare(toFirstLast(b.fullName)));
     if (!normalizedQuery) return sortedPlayers;
-    return sortedPlayers.filter((player) => player.fullName.toLowerCase().includes(normalizedQuery));
+    return sortedPlayers.filter((player) => {
+      const rawName = player.fullName.toLowerCase();
+      const displayName = toFirstLast(player.fullName).toLowerCase();
+      return rawName.includes(normalizedQuery) || displayName.includes(normalizedQuery);
+    });
   }, [players, query]);
 
   useEffect(() => {
@@ -81,13 +95,12 @@ export default function PreviewAthleteSelect({
                   <button
                     key={player.playerId}
                     type="button"
-                    className={`portal-player-search-option${selected ? ' active' : ''}`}
+                    className={`btn btn-ghost portal-player-search-option${selected ? ' active' : ''}`}
                     role="option"
                     aria-selected={selected}
                     onClick={() => goToPlayer(player.playerId)}
                   >
-                    <span>{player.fullName}</span>
-                    {selected ? <small>Current</small> : null}
+                    <span>{toFirstLast(player.fullName)}</span>
                   </button>
                 );
               })

@@ -1012,6 +1012,7 @@ function summarizeBiomechanicsRowsByPitchType(
     count: number;
     dates: Set<string>;
     sums: Record<string, number>;
+    valueCounts: Record<string, number>;
   };
   const grouped = new Map<string, Aggregate>();
   const allByPlayer = new Map<string, Aggregate>();
@@ -1021,8 +1022,12 @@ function summarizeBiomechanicsRowsByPitchType(
     if (date) aggregate.dates.add(date);
     for (const column of columns) {
       if (column === 'Name' || column === 'Date' || column === '#' || column === 'Pitch Type' || column === 'Tags') continue;
-      const value = Number(row[column]);
-      if (Number.isFinite(value)) aggregate.sums[column] = (aggregate.sums[column] ?? 0) + value;
+      const rawValue = row[column];
+      if (rawValue === null || rawValue === undefined || String(rawValue).trim() === '') continue;
+      const value = typeof rawValue === 'number' ? rawValue : Number(rawValue);
+      if (!Number.isFinite(value)) continue;
+      aggregate.sums[column] = (aggregate.sums[column] ?? 0) + value;
+      aggregate.valueCounts[column] = (aggregate.valueCounts[column] ?? 0) + 1;
     }
   };
   for (const row of rows) {
@@ -1030,10 +1035,10 @@ function summarizeBiomechanicsRowsByPitchType(
     const pitchType = String(row['Pitch Type'] ?? '').trim() || 'Unspecified';
     const playerKey = normalizeNameKey(name);
     const key = `${playerKey}\u001f${pitchType.toLowerCase()}`;
-    const aggregate = grouped.get(key) ?? { name, pitchType, count: 0, dates: new Set<string>(), sums: {} };
+    const aggregate = grouped.get(key) ?? { name, pitchType, count: 0, dates: new Set<string>(), sums: {}, valueCounts: {} };
     addRow(aggregate, row);
     grouped.set(key, aggregate);
-    const allAggregate = allByPlayer.get(playerKey) ?? { name, pitchType: 'All', count: 0, dates: new Set<string>(), sums: {} };
+    const allAggregate = allByPlayer.get(playerKey) ?? { name, pitchType: 'All', count: 0, dates: new Set<string>(), sums: {}, valueCounts: {} };
     addRow(allAggregate, row);
     allByPlayer.set(playerKey, allAggregate);
   }
@@ -1047,7 +1052,8 @@ function summarizeBiomechanicsRowsByPitchType(
     for (const column of columns) {
       if (column in output || column === 'Tags') continue;
       const sum = aggregate.sums[column];
-      output[column] = sum === undefined || aggregate.count <= 0 ? null : sum / aggregate.count;
+      const valueCount = aggregate.valueCounts[column] ?? 0;
+      output[column] = sum === undefined || valueCount <= 0 ? null : sum / valueCount;
     }
     return output;
   };
@@ -2604,6 +2610,12 @@ function BiomechanicsReportChart({
     return Array.from(new Set(ticks)).sort((a, b) => b - a);
   })();
   const unitLabel = chartMode === 'Force' && forceMode === 'bw' ? 'BW%' : 'Force';
+  const transitionX = (() => {
+    const loadingTimes = chartPoints.filter((point) => point.phase === 'loading').map((point) => point.t);
+    const deliveryTimes = chartPoints.filter((point) => point.phase === 'delivery').map((point) => point.t);
+    if (!loadingTimes.length || !deliveryTimes.length) return null;
+    return (Math.max(...loadingTimes) + Math.min(...deliveryTimes)) / 2;
+  })();
 
   const paths = (['loading', 'delivery'] as const).flatMap((phase) =>
     metrics.map((metric) => {
@@ -2644,6 +2656,7 @@ function BiomechanicsReportChart({
           const value = (minX + step * dx).toFixed(1);
           return <g key={step}><line x1={xx} y1={top} x2={xx} y2={height - bottom} stroke="rgba(148,163,184,0.12)" strokeWidth="1" /><text x={xx} y={height - bottom + 16} fill="#cbd5e1" fontSize="11" textAnchor="middle">{value}s</text></g>;
         })}
+        {transitionX !== null ? <line x1={px(transitionX)} y1={top} x2={px(transitionX)} y2={height - bottom} stroke="rgba(226,232,240,0.8)" strokeWidth="1.5" /> : null}
         {impulseAreaPath ? <path d={impulseAreaPath} fill="rgba(132, 204, 22, 0.24)" stroke="none" /> : null}
         {paths.map((entry) => <path key={entry.key} d={entry.d} fill="none" stroke={entry.color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />)}
         <text x={width / 2} y={height - 8} fill="#cbd5e1" fontSize="12" textAnchor="middle">Time (s)</text>

@@ -3,7 +3,7 @@
  * note formatting) and the web form. Keep the mobile app's copy of this
  * list (pearl-player-development/lib/player-assessment-fields.ts) in sync
  * by hand when this changes; the two repos deploy separately. */
-export type PlayerAssessmentFieldType = 'text' | 'scale' | 'number_in' | 'number_sec';
+export type PlayerAssessmentFieldType = 'text' | 'textarea' | 'scale' | 'number_in' | 'number_sec';
 
 export type PlayerAssessmentField = {
   id: string;
@@ -35,14 +35,16 @@ export const PLAYER_ASSESSMENT_FIELDS: PlayerAssessmentField[] = [
   { id: 'supine_hip_er_left', label: 'Supine Hip ER Left', type: 'scale' },
   { id: 'supine_slr_right', label: 'Supine SLR Right', type: 'scale' },
   { id: 'supine_slr_left', label: 'Supine SLR Left', type: 'scale' },
+  { id: 'hip_extension_right', label: 'Hip Extension Right', type: 'scale' },
+  { id: 'hip_extension_left', label: 'Hip Extension Left', type: 'scale' },
+  { id: 'hip_abduction_right', label: 'Hip Abduction Right', type: 'scale' },
+  { id: 'hip_abduction_left', label: 'Hip Abduction Left', type: 'scale' },
 
   { id: 'broad_jump', label: 'Broad Jump', type: 'number_in' },
   { id: 'lateral_jump_turn_right', label: '1-Leg Lateral Jump with Turn Right', type: 'number_in' },
   { id: 'lateral_jump_turn_left', label: '1-Leg Lateral Jump with Turn Left', type: 'number_in' },
 
-  { id: 'sprint_10_yard', label: '10-yard Sprint', type: 'number_sec' },
-  { id: 'sprint_40_yard', label: '40-yard Sprint', type: 'number_sec' },
-  { id: 'sprint_60_yard', label: '60-yard Sprint', type: 'number_sec' },
+  { id: 'notes', label: 'Notes', type: 'textarea' },
 ];
 
 export const PLAYER_ASSESSMENT_FIELD_IDS = new Set(PLAYER_ASSESSMENT_FIELDS.map((field) => field.id));

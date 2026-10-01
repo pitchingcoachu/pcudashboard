@@ -1,6 +1,7 @@
 export const metadata = {
   title: 'Support | Pearl Player Development',
   description: 'Support and contact information for Pearl Player Development.',
+  alternates: { canonical: '/support' },
 };
 
 export default function SupportPage() {

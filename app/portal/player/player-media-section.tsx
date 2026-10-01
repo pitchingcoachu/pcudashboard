@@ -112,7 +112,7 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
   const [orgMediaCategories, setOrgMediaCategories] = useState<string[]>([]);
   const [mediaFiles, setMediaFiles] = useState<File[]>([]);
   const [mediaTitle, setMediaTitle] = useState('');
-  const [mediaCategory, setMediaCategory] = useState('Game');
+  const [mediaCategory, setMediaCategory] = useState('');
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState('');
   const [filterCategory, setFilterCategory] = useState('All');
@@ -158,6 +158,8 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
 
   async function upload() {
     if (!mediaFiles.length) { setMessage('Choose a file first.'); return; }
+    const batchCategory = mediaCategory.trim();
+    if (!batchCategory) { setMessage('Choose a category for this upload.'); return; }
     setMessage('');
     setUploading(true);
     try {
@@ -171,7 +173,7 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
           playerId,
           file,
           title,
-          category: mediaCategory.trim() || 'General',
+          category: batchCategory,
           sourceType: 'player_self',
         });
         if (!result.ok) throw new Error(result.error);
@@ -181,7 +183,8 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
       setMedia(lastMedia);
       setMediaFiles([]);
       setMediaTitle('');
-      setMessage(mediaFiles.length > 1 ? `${mediaFiles.length} files uploaded.` : 'Uploaded.');
+      setMediaCategory('');
+      setMessage(mediaFiles.length > 1 ? `${mediaFiles.length} files uploaded to ${batchCategory}.` : `Uploaded to ${batchCategory}.`);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Upload failed.');
     } finally {
@@ -289,7 +292,7 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
         </label>
         <label>
           <span className="portal-player-media-category-label">
-            <span>Category</span>
+            <span>Category for all files</span>
             <button
               type="button"
               className="portal-player-media-new-category-trigger"
@@ -304,6 +307,7 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
             value={mediaCategory}
             onChange={(e) => setMediaCategory(e.target.value)}
           >
+            <option value="" disabled>Choose a category...</option>
             {uploadCategorySelectOptions.map((c) => <option key={`media-category-desktop-select-${c}`} value={c}>{c}</option>)}
           </select>
           <select
@@ -311,10 +315,11 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
             value={mediaCategory}
             onChange={(e) => setMediaCategory(e.target.value)}
           >
+            <option value="" disabled>Choose a category...</option>
             {uploadCategorySelectOptions.map((c) => <option key={`media-category-select-${c}`} value={c}>{c}</option>)}
           </select>
         </label>
-        <button type="button" className="btn btn-primary" onClick={() => void upload()} disabled={!mediaFiles.length || uploading}>
+        <button type="button" className="btn btn-primary" onClick={() => void upload()} disabled={!mediaFiles.length || !mediaCategory.trim() || uploading}>
           {uploading ? 'Uploading...' : 'Upload'}
         </button>
       </div>
@@ -356,7 +361,9 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
         </div>
       ) : null}
       {mediaFiles.length > 0 && (
-        <p className="portal-muted-text" style={{ margin: '0 0 8px' }}>{mediaFiles.map((f) => f.name).join(', ')}</p>
+        <p className="portal-muted-text" style={{ margin: '0 0 8px' }}>
+          {mediaFiles.map((f) => f.name).join(', ')}{mediaCategory.trim() ? ` · All will be saved to ${mediaCategory.trim()}` : ' · Choose one category for this batch'}
+        </p>
       )}
       {message && (
         <p className={message.includes('Failed') || message.includes('failed') ? 'auth-error' : 'auth-message'} style={{ margin: '0 0 8px' }}>
