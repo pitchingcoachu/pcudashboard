@@ -2842,6 +2842,8 @@ body.theme-light:has(.pearl-auth-shell)::before {
 
 .portal-shell {
   min-height: 100vh;
+  width: 100%;
+  max-width: 100%;
   padding: calc(0.8rem + env(safe-area-inset-top, 0px)) 0.8rem 0.8rem;
   display: grid;
   grid-template-rows: auto 1fr;
@@ -2872,6 +2874,8 @@ body.theme-light:has(.pearl-auth-shell)::before {
 .portal-shell > * {
   position: relative;
   z-index: 1;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .portal-shell::before {
@@ -4193,6 +4197,8 @@ body.theme-light .portal-nav-mobile-sheet-option.active {
   background: rgba(5, 5, 5, 0.96);
   min-height: calc(100vh - 130px);
   padding: 1.2rem;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
 }
 
@@ -4222,6 +4228,8 @@ body.theme-light .portal-nav-mobile-sheet-option.active {
   background: rgba(10, 10, 10, 0.76);
   display: grid;
   gap: 0.65rem;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .portal-admin-card h2,
@@ -14894,6 +14902,64 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
 .portal-messages-bubble-deleted {
   font-style: italic;
   color: var(--text-muted, #999);
+}
+
+/* Shared responsive guardrails for every portal route. Individual dashboards
+   can still opt into horizontal scrolling for dense tables and charts, while
+   ordinary panels, forms, and menus stay inside the available viewport. */
+.portal-shell :where(
+  .portal-panel,
+  .portal-admin-panel,
+  .portal-admin-stack,
+  .portal-admin-grid,
+  .portal-admin-card,
+  .portal-dashboard-suite,
+  .portal-dashboard-suite-layout,
+  .portal-dashboard-suite-layout--double,
+  form,
+  fieldset,
+  details
+) {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.portal-shell :where(img, video) {
+  max-width: 100%;
+}
+
+.portal-shell :where(
+  .portal-user-menu-dropdown,
+  .portal-notifications-menu,
+  .portal-school-switcher-menu,
+  .portal-app-menu,
+  .portal-nav-overflow-dropdown,
+  .portal-search-select-menu,
+  .portal-search-dropdown,
+  .portal-custom-reports-export-menu,
+  .portal-workout-exercise-select-menu,
+  .portal-script-visibility-menu,
+  .portal-master-calendar-group-menu,
+  .report-actions-menu
+) {
+  max-width: calc(100dvw - 2rem);
+  max-height: min(72dvh, 620px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+@media (min-width: 781px) and (max-width: 1240px) {
+  .portal-panel,
+  .portal-admin-panel {
+    padding-inline: clamp(0.8rem, 1.6vw, 1.2rem);
+  }
+
+  .portal-admin-headline,
+  .portal-row-between {
+    min-width: 0;
+    max-width: 100%;
+  }
 }
 
 /* PlayerRosterCards (app/portal/admin/clients/player-roster-cards.tsx) is a

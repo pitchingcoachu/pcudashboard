@@ -86,10 +86,10 @@ export default async function ForcePlatesPage({
   const embedQueryRaw = Array.isArray(params.embed) ? params.embed[0] : params.embed;
   const embedded = String(embedQueryRaw ?? '').trim().toLowerCase() === 'dashboard';
   const allowedTabs = isStaff
-    ? ['vald', 'sprint', 'vbt', 'biomechanics', 'chart', 'imports']
-    : ['vald', 'sprint', 'vbt', 'biomechanics', 'chart'];
+    ? ['vald', 'sprint', 'vbt', 'biomechanics', 'armcare', 'chart', 'imports']
+    : ['vald', 'sprint', 'vbt', 'biomechanics', 'armcare', 'chart'];
   const initialTab = isPcu && allowedTabs.includes(requestedTab)
-    ? requestedTab as 'vald' | 'sprint' | 'vbt' | 'biomechanics' | 'chart' | 'imports'
+    ? requestedTab as 'vald' | 'sprint' | 'vbt' | 'biomechanics' | 'armcare' | 'chart' | 'imports'
     : 'vald';
 
   let playerScopedName = '';

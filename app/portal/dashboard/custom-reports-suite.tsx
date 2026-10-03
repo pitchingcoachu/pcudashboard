@@ -18,6 +18,8 @@ import { deliverReportPdf } from '../../../lib/report-pdf-delivery';
 import { ReportActionsDropdown, type AutomationPanelSeed } from '../components/save-report-to-profile';
 import { dashboardMetricLabel, dashboardMetricOptions, forcePlateDisplayUnit, forcePlateDisplayValue, forcePlateFlagMetric, formatForcePlateMetricValue, parseForcePlateFlagMetric } from '../../../lib/dashboard-metric-catalog';
 import { defaultPercentileComparisonWindow } from '../../../lib/percentile-window';
+import type { ArmCareExam, ArmCarePercentilesByExam } from '../../../lib/armcare';
+import { armCareMetricUnit as armCareDisplayMetricUnit, armCareMetricValueForMode, armCareNumericValue, type ArmCareForceMode } from '../../../lib/armcare-display';
 
 type OptionItem = { value: string; label: string };
 type ReportType = 'Pitching' | 'Hitting' | 'Catching' | 'Force Plates';
@@ -74,6 +76,9 @@ type PanelType =
   | 'Force Plate Line Chart'
   | 'Force Plate Bar Chart'
   | 'Force Plate Data Table'
+  | 'ArmCare Line Chart'
+  | 'ArmCare Bar Chart'
+  | 'ArmCare Data Table'
   | 'OVR Data Line Chart'
   | 'OVR Data Bar Chart'
   | 'OVR Data Table'
@@ -176,6 +181,15 @@ type ForcePlateFiltersPayload = {
   test_types: string[];
 };
 
+type ArmCarePayload = {
+  exams?: ArmCareExam[];
+  players?: string[];
+  percentilesByExamId?: ArmCarePercentilesByExam;
+  bodyWeightPercentilesByExamId?: ArmCarePercentilesByExam;
+  groups?: Array<{ id: string; label: string; memberCount: number }>;
+  error?: string;
+};
+
 type OverviewLitePayload = {
   table_columns?: string[];
   table_rows?: Array<Record<string, string | number | null>>;
@@ -218,6 +232,8 @@ type OverviewLitePayload = {
     estimated_ba_using_speedangle?: number | null;
     iso_value?: number | null;
     korbb?: string | null;
+    percentile?: number | null;
+    exam_type?: string | null;
     catcher?: string | null;
     throw_speed?: number | null;
     exchange_time?: number | null;
@@ -428,6 +444,11 @@ type CellConfig = {
   forcePlateMetricLabels: Record<string, string>;
   forcePlateTestType: string;
   forcePlateLegDisplay: ForcePlateLegDisplay;
+  armCareMetrics: string[];
+  armCareExamType: string;
+  armCareForceMode: ArmCareForceMode;
+  armCareChartMode: 'value' | 'percentile';
+  armCareShowPercentiles: boolean;
   metricChartMetric: string;
   metricChartLabel: string;
   chartBenchmarkValue: string;
@@ -440,6 +461,7 @@ type CellConfig = {
   percentileSummaryForceMetrics: string[];
   percentileSummaryForceTestType: string;
   percentileSummaryForceLegDisplay: ForcePlateLegDisplay;
+  percentileSummaryArmCareMetrics: string[];
   percentileSummaryOvrExercises: string[];
   percentileSummaryBiomechanicsMetrics: string[];
   percentileSummaryBiomechanicsPitchType: string;
@@ -552,6 +574,9 @@ const PITCHING_PANEL_TYPES: PanelType[] = [
   'Force Plate Line Chart',
   'Force Plate Bar Chart',
   'Force Plate Data Table',
+  'ArmCare Line Chart',
+  'ArmCare Bar Chart',
+  'ArmCare Data Table',
   'OVR Data Line Chart',
   'OVR Data Bar Chart',
   'OVR Data Table',
@@ -588,6 +613,9 @@ const HITTING_PANEL_TYPES: PanelType[] = [
   'Force Plate Line Chart',
   'Force Plate Bar Chart',
   'Force Plate Data Table',
+  'ArmCare Line Chart',
+  'ArmCare Bar Chart',
+  'ArmCare Data Table',
   'OVR Data Line Chart',
   'OVR Data Bar Chart',
   'OVR Data Table',
@@ -622,6 +650,9 @@ const FORCE_PLATE_PANEL_TYPES: PanelType[] = [
   'Force Plate Line Chart',
   'Force Plate Bar Chart',
   'Force Plate Data Table',
+  'ArmCare Line Chart',
+  'ArmCare Bar Chart',
+  'ArmCare Data Table',
   'Performance Percentile Summary',
   'Summary Table',
   'Assessment Line Chart',
@@ -1185,6 +1216,102 @@ function ForcePlateReportChart({
   );
 }
 
+function ArmCareReportChart({
+  points,
+  metrics,
+  kind,
+  mode,
+  forceMode,
+  benchmarkValue,
+  benchmarkLabel,
+  onHover,
+}: {
+  points: Array<Record<string, unknown>>;
+  metrics: string[];
+  kind: 'line' | 'bar';
+  mode: 'value' | 'percentile';
+  forceMode: ArmCareForceMode;
+  benchmarkValue?: string;
+  benchmarkLabel?: string;
+  onHover: (value: { x: number; y: number; text: string; bg?: string } | null) => void;
+}) {
+  const colors = ['#e11d48', '#38bdf8', '#34d399', '#f59e0b', '#a78bfa', '#f472b6', '#22d3ee', '#facc15'];
+  const series = metrics.map((metric, index) => ({
+    metric,
+    label: armCareMetricLabel(metric),
+    unit: mode === 'percentile' ? 'percentile' : armCareMetricUnit(metric, forceMode),
+    color: colors[index % colors.length],
+    rows: groupPointsByDate(points
+      .filter((point) => String(point.metric ?? '') === metric)
+      .flatMap((point) => {
+        const value = armCareNumeric(mode === 'percentile' ? point.percentile : point.value);
+        return value === null ? [] : [{ date: String(point.session_date ?? '').trim(), value }];
+      })),
+  })).filter((entry) => entry.rows.length > 0);
+  const noDataMessage = `No ${mode === 'percentile' ? 'percentile' : 'ArmCare'} data for the current filters.`;
+  if (!series.length) return <p className="portal-muted-text">{noDataMessage}</p>;
+  if (series.length === 1) {
+    const [entry] = series;
+    return <ReportTrendChart
+      rows={entry.rows}
+      label={`${entry.label}${entry.unit ? ` (${entry.unit})` : ''}`}
+      kind={kind}
+      benchmarkValue={benchmarkValue}
+      benchmarkLabel={benchmarkLabel}
+      formatBenchmark={(value) => mode === 'percentile' ? ordinalLabel(value) : formatArmCareMetric(entry.metric, value, forceMode)}
+      noDataMessage={noDataMessage}
+      onHover={onHover}
+      tickDecimals={mode === 'percentile' ? 0 : 1}
+    />;
+  }
+
+  const dates = Array.from(new Set(series.flatMap((entry) => entry.rows.map((row) => row.date)))).sort((a, b) => a.localeCompare(b));
+  const values = series.flatMap((entry) => entry.rows.map((row) => row.value));
+  const benchmark = Number(String(benchmarkValue ?? '').trim());
+  const hasBenchmark = String(benchmarkValue ?? '').trim() !== '' && Number.isFinite(benchmark);
+  if (hasBenchmark) values.push(benchmark);
+  const rawMin = Math.min(...values), rawMax = Math.max(...values);
+  const padding = rawMin === rawMax ? Math.max(1, Math.abs(rawMax) * 0.08) : (rawMax - rawMin) * 0.1;
+  const min = mode === 'percentile' ? 0 : rawMin - padding;
+  const max = mode === 'percentile' ? 100 : rawMax + padding;
+  const width = 720, height = 410, left = 64, right = 24, top = 28, bottom = dates.length > 5 ? 92 : 66;
+  const plotWidth = width - left - right;
+  const lineX = (date: string) => dates.length === 1 ? left + plotWidth / 2 : left + dates.indexOf(date) / (dates.length - 1) * plotWidth;
+  const barX = (date: string) => left + ((dates.indexOf(date) + 0.5) / dates.length) * plotWidth;
+  const x = (date: string) => kind === 'bar' ? barX(date) : lineX(date);
+  const y = (value: number) => top + (max - value) / Math.max(0.000001, max - min) * (height - top - bottom);
+  const ticks = Array.from({ length: 5 }, (_, index) => min + index / 4 * (max - min));
+  const dateSlotWidth = plotWidth / Math.max(1, dates.length);
+  const barWidth = Math.max(3, Math.min(30, dateSlotWidth * 0.72 / series.length));
+  const labelStep = Math.max(1, Math.ceil(dates.length / 8));
+  const formatValue = (entry: typeof series[number], value: number) => mode === 'percentile'
+    ? `${ordinalLabel(value)} percentile`
+    : `${formatArmCareMetric(entry.metric, value, forceMode)}${entry.unit ? ` ${entry.unit}` : ''}`;
+  const distinctUnits = Array.from(new Set(series.map((entry) => entry.unit).filter(Boolean)));
+  const benchmarkText = mode === 'percentile'
+    ? `${ordinalLabel(benchmark)} percentile`
+    : `${benchmark.toFixed(1)}${distinctUnits.length === 1 ? ` ${distinctUnits[0]}` : ''}`;
+
+  return (
+    <div>
+      <div className="portal-custom-reports-velocity">
+        <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`ArmCare ${kind} chart with ${series.length} metrics`}>
+          {ticks.map((tick) => <g key={tick}><line x1={left} y1={y(tick)} x2={width - right} y2={y(tick)} stroke="rgba(148,163,184,.18)"/><text x={left - 8} y={y(tick) + 4} textAnchor="end" fontSize="11" fill="currentColor">{tick.toFixed(mode === 'percentile' ? 0 : 1)}</text></g>)}
+          <line x1={left} y1={height - bottom} x2={width - right} y2={height - bottom} stroke="rgba(148,163,184,.55)"/>
+          {hasBenchmark ? <g><line x1={left} y1={y(benchmark)} x2={width - right} y2={y(benchmark)} stroke="#f8fafc" strokeWidth="2" strokeDasharray="8 6"/><text x={width - right - 4} y={y(benchmark) - 7} textAnchor="end" fontSize="11" fontWeight="800" fill="#f8fafc">{benchmarkLabel?.trim() || 'Goal'} · {benchmarkText}</text></g> : null}
+          {kind === 'line' ? series.map((entry) => <path key={entry.metric} d={entry.rows.map((row, index) => `${index ? 'L' : 'M'} ${x(row.date)} ${y(row.value)}`).join(' ')} fill="none" stroke={entry.color} strokeWidth="3"/>) : null}
+          {series.flatMap((entry, seriesIndex) => entry.rows.map((row) => kind === 'bar'
+            ? <rect key={`${entry.metric}-${row.date}`} x={x(row.date) + (seriesIndex - (series.length - 1) / 2) * barWidth - barWidth / 2} y={y(row.value)} width={barWidth} height={height - bottom - y(row.value)} rx="3" fill={entry.color} onMouseMove={(event) => onHover({ x: event.clientX, y: event.clientY, text: `${fmtShortDate(row.date)}\n${entry.label}: ${formatValue(entry, row.value)}`, bg: entry.color })} onMouseLeave={() => onHover(null)}/>
+            : <circle key={`${entry.metric}-${row.date}`} cx={x(row.date)} cy={y(row.value)} r="5" fill={entry.color} onMouseMove={(event) => onHover({ x: event.clientX, y: event.clientY, text: `${fmtShortDate(row.date)}\n${entry.label}: ${formatValue(entry, row.value)}`, bg: entry.color })} onMouseLeave={() => onHover(null)}/>))}
+          {dates.map((date, index) => index % labelStep === 0 || index === dates.length - 1 ? <text key={date} x={x(date)} y={height - bottom + 18} textAnchor={dates.length > 5 ? 'end' : 'middle'} transform={dates.length > 5 ? `rotate(-35 ${x(date)} ${height - bottom + 18})` : undefined} fontSize="10" fill="currentColor">{fmtShortDate(date)}</text> : null)}
+          <text x={width / 2} y={height - 8} textAnchor="middle" fontSize="12" fill="currentColor">Exam Date</text>
+        </svg>
+      </div>
+      <div className="portal-custom-reports-leg-legend">{series.map((entry) => <span key={entry.metric}><i style={{ background: entry.color }}/>{entry.label}{entry.unit ? ` (${entry.unit})` : ''}</span>)}</div>
+    </div>
+  );
+}
+
 function ForcePlateLegComparisonPanel({
   points,
   metrics,
@@ -1744,6 +1871,39 @@ function forcePlateTestTypeLabel(value: string): string {
     : value;
 }
 
+function armCareMetricUnit(metric: string, forceMode: ArmCareForceMode = 'force'): string {
+  return armCareDisplayMetricUnit(metric, forceMode);
+}
+
+function armCareMetricLabel(metric: string): string {
+  return ({
+    'ERTARM Strength': 'Shoulder ER',
+    'IRTARM Strength': 'Shoulder IR',
+    'STARM Strength': 'Scaption',
+    'GTARM Strength': 'Grip',
+  } as Record<string, string>)[metric] ?? metric;
+}
+
+function armCareNumeric(value: unknown): number | null {
+  return armCareNumericValue(value);
+}
+
+function armCareExamMetricValue(exam: ArmCareExam, metric: string, forceMode: ArmCareForceMode): number | null {
+  return armCareMetricValueForMode(metric, exam.metrics[metric], exam.bodyWeightLb, forceMode);
+}
+
+function armCarePercentilesForMode(payload: ArmCarePayload, forceMode: ArmCareForceMode): ArmCarePercentilesByExam {
+  return forceMode === 'bw' ? payload.bodyWeightPercentilesByExamId ?? {} : payload.percentilesByExamId ?? {};
+}
+
+function formatArmCareMetric(metric: string, value: unknown, forceMode: ArmCareForceMode = 'force'): string {
+  const numeric = armCareNumeric(value);
+  if (numeric === null) return value === null || value === '' || value === undefined ? '—' : String(value);
+  if (metric === 'Shoulder Balance') return numeric.toFixed(2);
+  const digits = forceMode === 'bw' && armCareMetricUnit(metric, forceMode) === 'BW%' ? 1 : Number.isInteger(numeric) ? 0 : 1;
+  return numeric.toFixed(digits);
+}
+
 function forcePlateMetricLeg(metricValue: string): 'left' | 'right' | null {
   const parsed = parseForcePlateFlagMetric(metricValue);
   const match = parsed?.metricName.match(/\s+-\s+(Left|Right)$/i);
@@ -1805,6 +1965,8 @@ function PercentileSummaryConfigFields({
   config,
   cellId,
   forcePlateMetricOptions,
+  armCareMetricOptions,
+  armCareExamTypes,
   availableForcePlateTestTypes,
   ovrSprintExerciseOptions,
   biomechanicsPitchTypeOptions,
@@ -1814,6 +1976,8 @@ function PercentileSummaryConfigFields({
   config: CellConfig;
   cellId: string;
   forcePlateMetricOptions: Array<{ value: string; label: string; testTypes?: string[] }>;
+  armCareMetricOptions: OptionItem[];
+  armCareExamTypes: string[];
   availableForcePlateTestTypes: string[];
   ovrSprintExerciseOptions: Array<{ value: string; label: string }>;
   biomechanicsPitchTypeOptions: string[];
@@ -1866,6 +2030,26 @@ function PercentileSummaryConfigFields({
           />
         </>
       ) : null}
+      <label>ArmCare Metrics</label>
+      <SearchableMultiSelect
+        options={armCareMetricOptions}
+        values={config.percentileSummaryArmCareMetrics}
+        onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), percentileSummaryArmCareMetrics: next } }))}
+      />
+      {config.percentileSummaryArmCareMetrics.length ? <>
+        <label>ArmCare Exam Type</label>
+        <SearchableSingleSelect
+          options={armCareExamTypes.map((value) => ({ value, label: value === 'All' ? 'All exams' : value }))}
+          value={config.armCareExamType || 'All'}
+          onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), armCareExamType: next || 'All' } }))}
+        />
+        <label>ArmCare Strength Scale</label>
+        <SearchableSingleSelect
+          options={[{ value: 'force', label: 'Force (lb)' }, { value: 'bw', label: 'Body Weight (%)' }]}
+          value={config.armCareForceMode || 'force'}
+          onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), armCareForceMode: next === 'bw' ? 'bw' : 'force' } }))}
+        />
+      </> : null}
       <label>OVR Sprint Exercises</label>
       <SearchableMultiSelect
         options={ovrSprintExerciseOptions}
@@ -2101,6 +2285,9 @@ function PercentileSummaryPanel({
   startDate,
   endDate,
   forceMetrics,
+  armCareMetrics,
+  armCareExamType,
+  armCareForceMode,
   forceTestType,
   ovrExercises,
   biomechanicsMetrics,
@@ -2118,6 +2305,9 @@ function PercentileSummaryPanel({
   startDate: string;
   endDate: string;
   forceMetrics: string[];
+  armCareMetrics: string[];
+  armCareExamType: string;
+  armCareForceMode: ArmCareForceMode;
   forceTestType: string;
   ovrExercises: string[];
   biomechanicsMetrics: string[];
@@ -2136,14 +2326,16 @@ function PercentileSummaryPanel({
   const [error, setError] = useState('');
   const normalizedPlayer = normalizeNameForApi(player);
   const forceMetricSignature = forceMetrics.join('\u001f');
+  const armCareMetricSignature = armCareMetrics.join('\u001f');
   const ovrExerciseSignature = ovrExercises.join('\u001f');
   const biomechanicsMetricSignature = biomechanicsMetrics.join('\u001f');
 
   useEffect(() => {
     const forceMetricValues = forceMetricSignature ? forceMetricSignature.split('\u001f') : [];
+    const armCareMetricValues = armCareMetricSignature ? armCareMetricSignature.split('\u001f') : [];
     const ovrExerciseValues = ovrExerciseSignature ? ovrExerciseSignature.split('\u001f') : [];
     const biomechanicsMetricValues = biomechanicsMetricSignature ? biomechanicsMetricSignature.split('\u001f') : [];
-    if (!normalizedPlayer || (!forceMetricValues.length && !ovrExerciseValues.length && !biomechanicsMetricValues.length)) {
+    if (!normalizedPlayer || (!forceMetricValues.length && !armCareMetricValues.length && !ovrExerciseValues.length && !biomechanicsMetricValues.length)) {
       setTiles([]);
       setError(!normalizedPlayer ? 'Select a single player to show percentile summaries.' : '');
       return;
@@ -2206,6 +2398,40 @@ function PercentileSummaryPanel({
         if (byMetric !== 0) return byMetric;
         return sideOrder(a.leg) - sideOrder(b.leg);
       });
+
+      if (armCareMetricValues.length) {
+        const params = new URLSearchParams({
+          player: normalizedPlayer,
+          groupId,
+          forceMode: armCareForceMode,
+          comparisonStartDate,
+          comparisonEndDate,
+        });
+        const response = await fetch(`/api/armcare?${params.toString()}`, { cache: 'no-store' });
+        const payload = await response.json().catch(() => ({})) as ArmCarePayload;
+        if (!response.ok) throw new Error(payload.error ?? 'Unable to load ArmCare percentile data.');
+        if (Array.isArray(payload.groups)) groups = payload.groups.map((group) => ({ id: group.id, label: group.label }));
+        const exams = (payload.exams ?? []).filter((exam) => (!startDate || exam.examDate >= startDate) && (!endDate || exam.examDate <= endDate) && (armCareExamType === 'All' || exam.examType === armCareExamType));
+        const percentileMap = armCarePercentilesForMode(payload, armCareForceMode);
+        for (const metric of armCareMetricValues) {
+          const rows = exams.flatMap((exam) => {
+            const value = armCareExamMetricValue(exam, metric, armCareForceMode);
+            return value === null ? [] : [{ date: exam.examDate, value }];
+          });
+          const latestExam = exams.find((exam) => armCareExamMetricValue(exam, metric, armCareForceMode) !== null);
+          const { latestValue, trendPct, favorable } = trendFromRows(rows, false);
+          nextTiles.push({
+            key: `armcare:${metric}`,
+            label: armCareMetricLabel(metric),
+            unit: armCareMetricUnit(metric, armCareForceMode),
+            value: latestValue,
+            formattedValue: latestValue === null ? undefined : formatArmCareMetric(metric, latestValue, armCareForceMode),
+            percentile: latestExam ? percentileMap[latestExam.examId]?.[metric] ?? null : null,
+            trendPct,
+            favorable,
+          });
+        }
+      }
 
       if (ovrExerciseValues.length) {
         const filtersResponse = await fetch('/api/dashboard/ovr-sprint/filters', { cache: 'no-store' });
@@ -2321,10 +2547,10 @@ function PercentileSummaryPanel({
     return () => {
       active = false;
     };
-  }, [biomechanicsForceMode, biomechanicsMetricSignature, biomechanicsPitchType, compactMetricLabels, comparisonEndDate, comparisonStartDate, endDate, forceMetricSignature, forcePlateMetricOptions, forceTestType, groupId, normalizedPlayer, onBiomechanicsPitchTypesLoaded, onGroupsLoaded, ovrExerciseSignature, startDate]);
+  }, [armCareExamType, armCareForceMode, armCareMetricSignature, biomechanicsForceMode, biomechanicsMetricSignature, biomechanicsPitchType, compactMetricLabels, comparisonEndDate, comparisonStartDate, endDate, forceMetricSignature, forcePlateMetricOptions, forceTestType, groupId, normalizedPlayer, onBiomechanicsPitchTypesLoaded, onGroupsLoaded, ovrExerciseSignature, startDate]);
 
   if (error) return <p className="portal-muted-text">{error}</p>;
-  if (!tiles.length && !loading) return <p className="portal-muted-text">Choose at least one VALD metric, OVR Sprint exercise, or AxioForce metric.</p>;
+  if (!tiles.length && !loading) return <p className="portal-muted-text">Choose at least one VALD, ArmCare, OVR Sprint, or AxioForce metric.</p>;
 
   return (
     <div className="portal-custom-reports-kpi-grid">
@@ -3532,6 +3758,11 @@ function emptyCell(): CellConfig {
     forcePlateMetricLabels: {},
     forcePlateTestType: 'All',
     forcePlateLegDisplay: 'selected',
+    armCareMetrics: [],
+    armCareExamType: 'All',
+    armCareForceMode: 'force',
+    armCareChartMode: 'value',
+    armCareShowPercentiles: true,
     metricChartMetric: '',
     metricChartLabel: '',
     chartBenchmarkValue: '',
@@ -3544,6 +3775,7 @@ function emptyCell(): CellConfig {
     percentileSummaryForceMetrics: [],
     percentileSummaryForceTestType: 'All',
     percentileSummaryForceLegDisplay: 'selected',
+    percentileSummaryArmCareMetrics: [],
     percentileSummaryOvrExercises: [],
     percentileSummaryBiomechanicsMetrics: [],
     percentileSummaryBiomechanicsPitchType: 'All',
@@ -3585,6 +3817,11 @@ function normalizeCellConfig(input: Partial<CellConfig> | undefined): CellConfig
     forcePlateMetrics: input?.forcePlateMetrics?.length ? input.forcePlateMetrics : base.forcePlateMetrics,
     forcePlateMetricLabels: input?.forcePlateMetricLabels ?? base.forcePlateMetricLabels,
     forcePlateLegDisplay: ['left', 'right', 'both'].includes(String(input?.forcePlateLegDisplay)) ? input!.forcePlateLegDisplay! : base.forcePlateLegDisplay,
+    armCareMetrics: input?.armCareMetrics?.length ? input.armCareMetrics : base.armCareMetrics,
+    armCareExamType: input?.armCareExamType || base.armCareExamType,
+    armCareForceMode: input?.armCareForceMode === 'bw' ? 'bw' : base.armCareForceMode,
+    armCareChartMode: input?.armCareChartMode === 'percentile' ? 'percentile' : base.armCareChartMode,
+    armCareShowPercentiles: input?.armCareShowPercentiles !== false,
     zoneLocations: input?.zoneLocations?.length ? input.zoneLocations : base.zoneLocations,
     ovrSprintExercises: input?.ovrSprintExercises?.length ? input.ovrSprintExercises : base.ovrSprintExercises,
     ovrSprintMetric: input?.ovrSprintMetric === 'speedMph' ? 'speedMph' : base.ovrSprintMetric,
@@ -3594,6 +3831,7 @@ function normalizeCellConfig(input: Partial<CellConfig> | undefined): CellConfig
     percentileSummaryForceMetrics: input?.percentileSummaryForceMetrics?.length ? input.percentileSummaryForceMetrics : base.percentileSummaryForceMetrics,
     percentileSummaryForceTestType: input?.percentileSummaryForceTestType || base.percentileSummaryForceTestType,
     percentileSummaryForceLegDisplay: ['left', 'right', 'both'].includes(String(input?.percentileSummaryForceLegDisplay)) ? input!.percentileSummaryForceLegDisplay! : base.percentileSummaryForceLegDisplay,
+    percentileSummaryArmCareMetrics: input?.percentileSummaryArmCareMetrics?.length ? input.percentileSummaryArmCareMetrics : base.percentileSummaryArmCareMetrics,
     percentileSummaryOvrExercises: input?.percentileSummaryOvrExercises?.length ? input.percentileSummaryOvrExercises : base.percentileSummaryOvrExercises,
     percentileSummaryBiomechanicsMetrics: input?.percentileSummaryBiomechanicsMetrics?.filter((metric) => BIOMECHANICS_PERCENTILE_METRICS.includes(metric as typeof BIOMECHANICS_PERCENTILE_METRICS[number])) ?? base.percentileSummaryBiomechanicsMetrics,
     percentileSummaryBiomechanicsPitchType: input?.percentileSummaryBiomechanicsPitchType || base.percentileSummaryBiomechanicsPitchType,
@@ -4790,6 +5028,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const [hittingTableModes, setHittingTableModes] = useState<string[]>(HITTING_TABLES);
   const [forcePlateMetricOptions, setForcePlateMetricOptions] = useState<Array<{ value: string; label: string; testTypes?: string[] }>>([]);
   const [forcePlateTestTypes, setForcePlateTestTypes] = useState<string[]>([]);
+  const [armCareMetricOptions, setArmCareMetricOptions] = useState<OptionItem[]>([]);
+  const [armCareExamTypes, setArmCareExamTypes] = useState<string[]>(['All']);
   const [ovrSprintExerciseOptions, setOvrSprintExerciseOptions] = useState<Array<{ value: string; label: string }>>([]);
   const [ovrVbtExerciseOptions, setOvrVbtExerciseOptions] = useState<Array<{ value: string; label: string }>>([]);
   const [assessmentFieldOptions, setAssessmentFieldOptions] = useState<Array<{ value: string; label: string }>>([]);
@@ -5030,7 +5270,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const canUseOvrSprintPanels =
     String(schoolCode || initialSchoolCode).trim().toUpperCase() === 'PCU' &&
     (reportType === 'Pitching' || reportType === 'Hitting');
-  const canUsePercentileSummary = canUseForcePlatePanels || canUseOvrSprintPanels;
+  const canUseArmCarePanels =
+    String(schoolCode || initialSchoolCode).trim().toUpperCase() === 'PCU' &&
+    (reportType === 'Pitching' || reportType === 'Hitting' || reportType === 'Force Plates');
+  const canUsePercentileSummary = canUseForcePlatePanels || canUseOvrSprintPanels || canUseArmCarePanels;
   const canUseBiomechanicsPanels =
     String(schoolCode || initialSchoolCode).trim().toUpperCase() === 'PCU' &&
     reportType === 'Pitching';
@@ -5055,11 +5298,12 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     () => panelOptionsForReportType(reportType).filter((panelType) => {
       if ((panelType === 'Force Plate Line Chart' || panelType === 'Force Plate Bar Chart' || panelType === 'Force Plate Data Table') && !canUseForcePlatePanels) return false;
       if ((panelType === 'OVR Data Line Chart' || panelType === 'OVR Data Bar Chart' || panelType === 'OVR Data Table') && !canUseOvrSprintPanels) return false;
+      if ((panelType === 'ArmCare Line Chart' || panelType === 'ArmCare Bar Chart' || panelType === 'ArmCare Data Table') && !canUseArmCarePanels) return false;
       if (panelType === 'Performance Percentile Summary' && !canUsePercentileSummary) return false;
       if ((panelType === 'Biomechanics Table' || panelType === 'Biomechanics Force Chart') && !canUseBiomechanicsPanels) return false;
       return true;
     }),
-    [canUseForcePlatePanels, canUseOvrSprintPanels, canUsePercentileSummary, canUseBiomechanicsPanels, reportType]
+    [canUseForcePlatePanels, canUseOvrSprintPanels, canUseArmCarePanels, canUsePercentileSummary, canUseBiomechanicsPanels, reportType]
   );
   const metricChartOptions = useMemo<OptionItem[]>(() => {
     if (reportType === 'Force Plates') {
@@ -5509,10 +5753,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           normalized.panelType === 'OVR Data Line Chart' ||
           normalized.panelType === 'OVR Data Bar Chart' ||
           normalized.panelType === 'OVR Data Table';
+        const usesArmCareData = normalized.panelType === 'ArmCare Line Chart' || normalized.panelType === 'ArmCare Bar Chart' || normalized.panelType === 'ArmCare Data Table';
         const usesBiomechanicsData =
           normalized.panelType === 'Biomechanics Table' ||
           normalized.panelType === 'Biomechanics Force Chart';
-        const cellSplitOptions = usesForcePlateData ? ['Date', 'Test Type', 'Player'] : usesOvrSprintData ? ['Date', 'Exercise', 'Player'] : usesBiomechanicsData ? ['Date', 'Player'] : splitByOptionsForReportType(reportType);
+        const cellSplitOptions = usesForcePlateData ? ['Date', 'Test Type', 'Player'] : usesArmCareData ? ['Date', 'Exam Type', 'Player'] : usesOvrSprintData ? ['Date', 'Exercise', 'Player'] : usesBiomechanicsData ? ['Date', 'Player'] : splitByOptionsForReportType(reportType);
         if (!cellSplitOptions.includes(normalized.splitBy)) {
           normalized.splitBy = cellSplitOptions[0] ?? 'Pitch Types';
         }
@@ -5747,6 +5992,47 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     return () => {
       active = false;
     };
+  }, [initialSchoolCode, reportType, schoolCode]);
+
+  useEffect(() => {
+    const activeSchool = String(schoolCode || initialSchoolCode).trim().toUpperCase();
+    if (activeSchool !== 'PCU' || !['Pitching', 'Hitting', 'Force Plates'].includes(reportType)) {
+      setArmCareMetricOptions([]);
+      setArmCareExamTypes(['All']);
+      return;
+    }
+    let active = true;
+    async function loadArmCareCatalog() {
+      try {
+        const response = await fetch('/api/armcare', { cache: 'no-store' });
+        const payload = await response.json().catch(() => ({})) as ArmCarePayload;
+        if (!response.ok) throw new Error(payload.error ?? 'Failed to load ArmCare metrics.');
+        if (!active) return;
+        const metricNames = new Set<string>();
+        const examTypes = new Set<string>();
+        for (const exam of payload.exams ?? []) {
+          if (exam.examType) examTypes.add(exam.examType);
+          for (const [metric, value] of Object.entries(exam.metrics)) if (armCareNumeric(value) !== null) metricNames.add(metric);
+        }
+        const metrics = Array.from(metricNames).sort((a, b) => a.localeCompare(b)).map((metric) => ({
+          value: metric,
+          label: `${armCareMetricLabel(metric)}${armCareMetricUnit(metric) ? ` (${armCareMetricUnit(metric)})` : ''}`,
+        }));
+        setArmCareMetricOptions(metrics);
+        setArmCareExamTypes(['All', ...Array.from(examTypes).sort((a, b) => a.localeCompare(b))]);
+        if (payload.groups?.length) setPercentileSummaryGroups(payload.groups.map((group) => ({ id: group.id, label: group.label })));
+        const firstMetric = metrics[0]?.value ?? '';
+        if (firstMetric) setCellConfigs((current) => Object.fromEntries(Object.entries(current).map(([cellId, rawConfig]) => {
+          const config = normalizeCellConfig(rawConfig);
+          const isArmCarePanel = config.panelType === 'ArmCare Line Chart' || config.panelType === 'ArmCare Bar Chart' || config.panelType === 'ArmCare Data Table';
+          return [cellId, isArmCarePanel && !config.armCareMetrics.length ? { ...config, armCareMetrics: [firstMetric] } : config];
+        })));
+      } catch (err) {
+        if (active) setError(err instanceof Error ? err.message : 'Failed to load ArmCare metrics.');
+      }
+    }
+    void loadArmCareCatalog();
+    return () => { active = false; };
   }, [initialSchoolCode, reportType, schoolCode]);
 
   useEffect(() => {
@@ -6055,6 +6341,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             normalizedPanelType === 'OVR Data Line Chart' ||
             normalizedPanelType === 'OVR Data Bar Chart' ||
             normalizedPanelType === 'OVR Data Table';
+          const usesArmCareData = normalizedPanelType === 'ArmCare Line Chart' || normalizedPanelType === 'ArmCare Bar Chart' || normalizedPanelType === 'ArmCare Data Table';
           const usesBiomechanicsTable = normalizedPanelType === 'Biomechanics Table';
           const usesAssessmentData = normalizedPanelType === 'Assessment Line Chart' || normalizedPanelType === 'Assessment Bar Chart';
           const usesQuestionnaireData = normalizedPanelType === 'Questionnaire Line Chart' || normalizedPanelType === 'Questionnaire Bar Chart';
@@ -6247,6 +6534,66 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             const payload = (await response.json().catch(() => ({}))) as OverviewLitePayload & { error?: string };
             if (!response.ok) throw new Error(payload.error ?? 'Failed to load force-plate report data.');
             cellsCacheRef.current.set(forceKey, { at: Date.now(), payload });
+            commitCellResult(cellId, payload, { status: 'ready' });
+            return;
+          }
+          if (usesArmCareData) {
+            const selectedMetrics = config.armCareMetrics.length ? config.armCareMetrics : armCareMetricOptions[0]?.value ? [armCareMetricOptions[0].value] : [];
+            if (!selectedMetrics.length) {
+              commitCellResult(cellId, {}, { status: 'ready', message: 'Choose at least one ArmCare metric.' });
+              return;
+            }
+            const params = new URLSearchParams({
+              groupId: config.percentileSummaryGroupId || 'all',
+              forceMode: config.armCareForceMode || 'force',
+              comparisonStartDate: config.percentileComparisonStartDate,
+              comparisonEndDate: config.percentileComparisonEndDate,
+            });
+            if (normalizedPlayer && normalizeNameKey(normalizedPlayer) !== 'all') params.set('player', normalizedPlayer);
+            const armCareKey = `/api/armcare?${params.toString()}`;
+            if (active) setCellRequestUrls((current) => current[cellId] === armCareKey ? current : { ...current, [cellId]: armCareKey });
+            const cached = cellsCacheRef.current.get(armCareKey);
+            let armCarePayload: ArmCarePayload;
+            if (cached && Date.now() - cached.at < 60_000 && (cached.payload as OverviewLitePayload & { armcare_raw?: ArmCarePayload }).armcare_raw) {
+              armCarePayload = (cached.payload as OverviewLitePayload & { armcare_raw?: ArmCarePayload }).armcare_raw!;
+            } else {
+              const response = await fetch(armCareKey, { cache: 'no-store', signal: controller.signal });
+              armCarePayload = await response.json().catch(() => ({})) as ArmCarePayload;
+              if (!response.ok) throw new Error(armCarePayload.error ?? 'Failed to load ArmCare report data.');
+            }
+            const exams = (armCarePayload.exams ?? []).filter((exam) =>
+              (!startDate || exam.examDate >= startDate) &&
+              (!endDate || exam.examDate <= endDate) &&
+              (config.armCareExamType === 'All' || exam.examType === config.armCareExamType)
+            );
+            const includePlayer = !normalizedPlayer || normalizeNameKey(normalizedPlayer) === 'all';
+            const armCareForceMode = config.armCareForceMode || 'force';
+            const percentileMap = armCarePercentilesForMode(armCarePayload, armCareForceMode);
+            const metricColumns = selectedMetrics.flatMap((metric) => config.armCareShowPercentiles ? [metric, `${metric} Percentile`] : [metric]);
+            const tableColumns = ['Date', ...(includePlayer ? ['Player'] : []), 'Exam Type', ...metricColumns];
+            const tableRows = exams.map((exam) => {
+              const row: Record<string, string | number | null> = { Date: exam.examDate, 'Exam Type': exam.examType || 'Exam' };
+              if (includePlayer) row.Player = exam.playerName;
+              for (const metric of selectedMetrics) {
+                row[metric] = armCareExamMetricValue(exam, metric, armCareForceMode);
+                if (config.armCareShowPercentiles) row[`${metric} Percentile`] = percentileMap[exam.examId]?.[metric]?.percentile ?? null;
+              }
+              return row;
+            });
+            const chartPoints = exams.flatMap((exam) => selectedMetrics.flatMap((metric) => {
+              const value = armCareExamMetricValue(exam, metric, armCareForceMode);
+              if (value === null) return [];
+              return [{
+                session_date: exam.examDate,
+                metric,
+                value,
+                percentile: percentileMap[exam.examId]?.[metric]?.percentile ?? null,
+                exam_type: exam.examType,
+                pitcher: exam.playerName,
+              }];
+            }));
+            const payload: OverviewLitePayload & { armcare_raw?: ArmCarePayload } = { table_columns: tableColumns, table_rows: tableRows, chart_points: chartPoints, armcare_raw: armCarePayload };
+            cellsCacheRef.current.set(armCareKey, { at: Date.now(), payload });
             commitCellResult(cellId, payload, { status: 'ready' });
             return;
           }
@@ -7140,6 +7487,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     customTables,
     defaultTableMode,
     forcePlateMetricOptions,
+    armCareMetricOptions,
     ovrSprintExerciseOptions,
     ovrVbtExerciseOptions,
   ]);
@@ -9089,6 +9437,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                     contentType === 'Metric Bar Chart' ||
                     contentType === 'Force Plate Line Chart' ||
                     contentType === 'Force Plate Bar Chart' ||
+                    contentType === 'ArmCare Line Chart' ||
+                    contentType === 'ArmCare Bar Chart' ||
                     contentType === 'OVR Data Line Chart' ||
                     contentType === 'OVR Data Bar Chart' ||
                     contentType === 'Assessment Line Chart' ||
@@ -9107,6 +9457,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                     contentType === 'OVR Data Line Chart' ||
                     contentType === 'OVR Data Bar Chart' ||
                     contentType === 'OVR Data Table';
+                  const usesArmCareData = contentType === 'ArmCare Line Chart' || contentType === 'ArmCare Bar Chart' || contentType === 'ArmCare Data Table';
                   const resolvedForcePlateMetrics = resolveForcePlateLegMetrics(
                     config.forcePlateMetrics,
                     config.forcePlateLegDisplay || 'selected',
@@ -9121,8 +9472,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   const effectiveBullpenMetric = payload.metric_options?.some((option) => option.value === config.bullpenMetric)
                     ? config.bullpenMetric
                     : payload.selected_metric || config.bullpenMetric || 'velocity';
-                  const filterTokenOptions = (usesForcePlateData || usesOvrSprintData || usesBiomechanicsTable || isBiomechanicsChart || isAssessmentChart || isQuestionnaireChart || isNutritionChart || isBullpenScriptPanel ? ['Dates'] as FilterToken[] : FILTER_TOKENS.filter((entry) => entry !== 'Level' || (isLeagueSchool && !isBaseballPercentile))).map((entry) => ({ value: entry, label: entry }));
-                  const splitByOptions = (usesForcePlateData ? ['Date', 'Test Type', 'Player'] : usesOvrSprintData ? ['Date', 'Exercise', 'Player'] : (usesBiomechanicsTable || isBiomechanicsChart || isAssessmentChart || isQuestionnaireChart || isNutritionChart || isBullpenScriptPanel || isBaseballPercentile) ? ['Date', 'Player'] : availableSplitByOptions).map((entry) => ({ value: entry, label: splitByLabel(entry) }));
+                  const filterTokenOptions = (usesForcePlateData || usesArmCareData || usesOvrSprintData || usesBiomechanicsTable || isBiomechanicsChart || isAssessmentChart || isQuestionnaireChart || isNutritionChart || isBullpenScriptPanel ? ['Dates'] as FilterToken[] : FILTER_TOKENS.filter((entry) => entry !== 'Level' || (isLeagueSchool && !isBaseballPercentile))).map((entry) => ({ value: entry, label: entry }));
+                  const splitByOptions = (usesForcePlateData ? ['Date', 'Test Type', 'Player'] : usesArmCareData ? ['Date', 'Exam Type', 'Player'] : usesOvrSprintData ? ['Date', 'Exercise', 'Player'] : (usesBiomechanicsTable || isBiomechanicsChart || isAssessmentChart || isQuestionnaireChart || isNutritionChart || isBullpenScriptPanel || isBaseballPercentile) ? ['Date', 'Player'] : availableSplitByOptions).map((entry) => ({ value: entry, label: splitByLabel(entry) }));
                   const isNote = contentType === 'Note Section';
                   const isSummaryTable = contentType === 'Summary Table';
                   const isLocation = contentType === 'Location Plot';
@@ -9315,6 +9666,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                             const isForceChart = panelType === 'Force Plate Line Chart' || panelType === 'Force Plate Bar Chart' || panelType === 'Force Plate Data Table';
                             const isMetricChart = panelType === 'Metric Line Chart' || panelType === 'Metric Bar Chart';
                             const isOvrChart = panelType === 'OVR Data Line Chart' || panelType === 'OVR Data Bar Chart' || panelType === 'OVR Data Table';
+                            const isArmCarePanel = panelType === 'ArmCare Line Chart' || panelType === 'ArmCare Bar Chart' || panelType === 'ArmCare Data Table';
                             const isAssessmentChartType = panelType === 'Assessment Line Chart' || panelType === 'Assessment Bar Chart';
                             const isNutritionChartType = panelType === 'Nutrition Calorie Trends' || panelType === 'Nutrition Macro Breakdown';
                             const isBullpenScriptPanelType = panelType === 'Bullpen Script Trend Chart' || panelType === 'Bullpen Script Summary Table';
@@ -9329,6 +9681,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                     ? [forcePlateMetricOptions[0].value]
                                     : existing.forcePlateMetrics,
                                 forcePlateTestType: isForceChart ? (existing.forcePlateTestType || 'All') : existing.forcePlateTestType,
+                                armCareMetrics: isArmCarePanel && !existing.armCareMetrics.length && armCareMetricOptions[0]?.value ? [armCareMetricOptions[0].value] : existing.armCareMetrics,
                                 metricChartMetric:
                                   isMetricChart && !existing.metricChartMetric && metricChartOptions[0]?.value
                                     ? metricChartOptions[0].value
@@ -9464,6 +9817,49 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                             ))}
                           </>
                         ) : null}
+                        {usesArmCareData && !isNote ? (
+                          <>
+                            <label>ArmCare Metrics</label>
+                            <SearchableMultiSelect
+                              options={armCareMetricOptions}
+                              values={config.armCareMetrics}
+                              onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), armCareMetrics: next } }))}
+                            />
+                            {contentType !== 'ArmCare Data Table' ? <span className="portal-muted-text">Each selected metric appears as its own chart series.</span> : null}
+                            <label>Exam Type</label>
+                            <SearchableSingleSelect
+                              options={armCareExamTypes.map((value) => ({ value, label: value === 'All' ? 'All exams' : value }))}
+                              value={config.armCareExamType || 'All'}
+                              onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), armCareExamType: next || 'All' } }))}
+                            />
+                            <label>Strength Scale</label>
+                            <SearchableSingleSelect
+                              options={[{ value: 'force', label: 'Force (lb)' }, { value: 'bw', label: 'Body Weight (%)' }]}
+                              value={config.armCareForceMode || 'force'}
+                              onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), armCareForceMode: next === 'bw' ? 'bw' : 'force' } }))}
+                            />
+                            {contentType === 'ArmCare Data Table' ? <label><input type="checkbox" checked={config.armCareShowPercentiles} onChange={(event) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), armCareShowPercentiles: event.target.checked } }))} /> Show percentile columns</label> : (
+                              <>
+                                <label>Graph Values</label>
+                                <SearchableSingleSelect
+                                  options={[{ value: 'value', label: 'Metric values' }, { value: 'percentile', label: 'Percentiles' }]}
+                                  value={config.armCareChartMode}
+                                  onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), armCareChartMode: next === 'percentile' ? 'percentile' : 'value' } }))}
+                                />
+                              </>
+                            )}
+                            <label>Percentile Group</label>
+                            <SearchableSingleSelect
+                              options={[{ value: 'all', label: 'All PCU athletes' }, ...percentileSummaryGroups.map((group) => ({ value: group.id, label: group.label }))]}
+                              value={config.percentileSummaryGroupId || 'all'}
+                              onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), percentileSummaryGroupId: next || 'all' } }))}
+                            />
+                            <label>Percentile Data From</label>
+                            <NativeDateInput value={config.percentileComparisonStartDate} max={config.percentileComparisonEndDate || undefined} onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), percentileComparisonStartDate: next } }))} />
+                            <label>Percentile Data Through</label>
+                            <NativeDateInput value={config.percentileComparisonEndDate} min={config.percentileComparisonStartDate || undefined} onChange={(next) => setCellConfigs((current) => ({ ...current, [cellId]: { ...(current[cellId] ?? emptyCell()), percentileComparisonEndDate: next } }))} />
+                          </>
+                        ) : null}
                         {usesOvrSprintData && !isNote ? (
                           <>
                             <label>OVR Data Type</label>
@@ -9507,6 +9903,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                             config={config}
                             cellId={cellId}
                             forcePlateMetricOptions={forcePlateMetricOptions}
+                            armCareMetricOptions={armCareMetricOptions}
+                            armCareExamTypes={armCareExamTypes}
                             availableForcePlateTestTypes={forcePlateTestTypes}
                             ovrSprintExerciseOptions={ovrSprintExerciseOptions}
                             biomechanicsPitchTypeOptions={Array.from(new Set([...pitchTypeOptions, ...biomechanicsPercentilePitchTypes]))}
@@ -11893,7 +12291,18 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                             benchmarkLabel={config.chartBenchmarkLabel}
                             onHover={setChartHover}
                           />
-                        )
+                          )
+                      ) : contentType === 'ArmCare Line Chart' || contentType === 'ArmCare Bar Chart' ? (
+                        <ArmCareReportChart
+                          points={chartPoints as unknown as Array<Record<string, unknown>>}
+                          metrics={config.armCareMetrics.length ? config.armCareMetrics : armCareMetricOptions[0]?.value ? [armCareMetricOptions[0].value] : []}
+                          kind={contentType === 'ArmCare Bar Chart' ? 'bar' : 'line'}
+                          mode={config.armCareChartMode || 'value'}
+                          forceMode={config.armCareForceMode || 'force'}
+                          benchmarkValue={config.chartBenchmarkValue}
+                          benchmarkLabel={config.chartBenchmarkLabel}
+                          onHover={setChartHover}
+                        />
                       ) : contentType === 'OVR Data Line Chart' || contentType === 'OVR Data Bar Chart' ? (
                         <OvrDataReportChart
                           points={chartPoints as unknown as Array<Record<string, unknown>>}
@@ -11993,6 +12402,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                             config.percentileSummaryForceLegDisplay || 'selected',
                             forcePlateMetricOptions
                           )}
+                          armCareMetrics={config.percentileSummaryArmCareMetrics}
+                          armCareExamType={config.armCareExamType || 'All'}
+                          armCareForceMode={config.armCareForceMode || 'force'}
                           forceTestType={config.percentileSummaryForceTestType || 'All'}
                           ovrExercises={config.percentileSummaryOvrExercises}
                           biomechanicsMetrics={config.percentileSummaryBiomechanicsMetrics}
@@ -12013,7 +12425,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                           chartMode={config.biomechanicsChartMode || 'Force'}
                           forceMode={config.biomechanicsForceMode || 'force'}
                         />
-                      ) : contentType === 'Summary Table' || contentType === 'Biomechanics Table' || contentType === 'Bullpen Script Summary Table' || contentType === 'OVR Data Table' || contentType === 'Force Plate Data Table' ? (
+                      ) : contentType === 'Summary Table' || contentType === 'Biomechanics Table' || contentType === 'Bullpen Script Summary Table' || contentType === 'OVR Data Table' || contentType === 'Force Plate Data Table' || contentType === 'ArmCare Data Table' ? (
                         <div className={`portal-custom-reports-table-wrap${useCompactSummaryTable ? ' portal-custom-reports-table-wrap--compact' : ''}`}>
                           {usesBiomechanicsTable && payload.biomechanics_percentiles ? (
                             <div className="portal-muted-text" style={{ padding: '0.35rem 0.55rem', fontSize: '0.72rem' }}>
@@ -12048,7 +12460,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                         })
                                       }
                                     >
-                                      {usesForcePlateData ? (config.forcePlateMetricLabels[column] || forcePlateMetricOptions.find((option) => option.value === column)?.label || dashboardMetricLabel(column)) : column}
+                                      {usesForcePlateData ? (config.forcePlateMetricLabels[column] || forcePlateMetricOptions.find((option) => option.value === column)?.label || dashboardMetricLabel(column)) : usesArmCareData ? (column.endsWith(' Percentile') ? `${armCareMetricLabel(column.replace(/ Percentile$/, ''))} Percentile` : `${armCareMetricLabel(column)}${armCareMetricUnit(column, config.armCareForceMode || 'force') ? ` (${armCareMetricUnit(column, config.armCareForceMode || 'force')})` : ''}`) : column}
                                       {activeSort ? ` ${tableSort?.direction === 'asc' ? '↑' : '↓'}` : ''}
                                     </th>
                                   );
@@ -12076,11 +12488,15 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                       {(() => {
                                         const rawValue = getTableRowValue(row as Record<string, unknown>, column);
                                         const percentileValue = tableCellPercentile(row, column, rawValue, percentileDistributions);
-                                        const val = usesBiomechanicsTable ? formatBiomechanicsTableValue(column, rawValue, config.biomechanicsForceMode || 'force') : usesForcePlateData ? formatForcePlateMetricValue(column, rawValue) : formatTableDisplayValue(column, rawValue);
+                                        const val = usesBiomechanicsTable ? formatBiomechanicsTableValue(column, rawValue, config.biomechanicsForceMode || 'force') : usesForcePlateData ? formatForcePlateMetricValue(column, rawValue) : usesArmCareData ? (column.endsWith(' Percentile') && rawValue !== null ? ordinalLabel(Number(rawValue)) : formatArmCareMetric(column, rawValue, config.armCareForceMode || 'force')) : formatTableDisplayValue(column, rawValue);
                                         const splitValue = getTableRowValue(row as Record<string, unknown>, tableColumns[0] ?? '');
                                         const isAllRow = String(splitValue ?? '').trim().toLowerCase() === 'all';
                                         const pitchStyle = !isAllRow && columnIndex === 0 ? pitchTypeCellStyle(val) : null;
                                         if (pitchStyle) return pitchStyle.label;
+                                        if (usesArmCareData && column.endsWith(' Percentile') && rawValue !== null && Number.isFinite(Number(rawValue))) {
+                                          const percentile = Number(rawValue);
+                                          return <span className={`portal-custom-reports-percentile-badge ${percentileTierClassName(percentile)}`}>{ordinalLabel(percentile)} percentile</span>;
+                                        }
                                         const biomechanicsPitchType = String(getTableRowValue(row as Record<string, unknown>, 'Pitch Type') ?? splitValue ?? '').trim() || 'Unspecified';
                                         const biomechanicsRank = usesBiomechanicsTable && column !== '#' && column !== 'Name' && column !== 'Date' && column !== 'Pitch Type'
                                           ? payload.biomechanics_percentiles?.rows?.[biomechanicsPitchType]?.[column]

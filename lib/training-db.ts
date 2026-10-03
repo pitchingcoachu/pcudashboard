@@ -2611,6 +2611,29 @@ export async function linkIntendedZonePitchesToPitchEvents(input: { organization
   return { linked: result.rowCount ?? 0 };
 }
 
+const TRACKMAN_FTP_TIME_ZONE_BY_SCHOOL: Record<string, string> = {
+  ARIZONA: 'America/Phoenix',
+  BC: 'America/New_York',
+  CBU: 'America/Los_Angeles',
+  CNU: 'America/New_York',
+  CREIGHTON: 'America/Chicago',
+  GCU: 'America/Phoenix',
+  GMU: 'America/New_York',
+  HARVARD: 'America/New_York',
+  LEC: 'America/New_York',
+  LI: 'America/New_York',
+  LSU: 'America/Chicago',
+  OSU: 'America/Los_Angeles',
+  PCU: 'America/Phoenix',
+  SEMO: 'America/Chicago',
+  UNM: 'America/Denver',
+  UNOH: 'America/New_York',
+};
+
+function trackmanFtpTimeZone(schoolCode: string): string {
+  return TRACKMAN_FTP_TIME_ZONE_BY_SCHOOL[String(schoolCode ?? '').trim().toUpperCase()] ?? 'America/Phoenix';
+}
+
 /** FTP-deferred matching for schools with no live TrackMan Data API access:
  * a coach queues intended-zone targets during a bullpen using only the
  * mobile app's tap-to-target UI (no live playId available yet), and this
@@ -2622,20 +2645,22 @@ export async function linkIntendedZonePitchesToPitchEvents(input: { organization
  * never locked in is left alone rather than guessed at.
  *
  * There's no shared playId to join on here (that's the whole reason this
- * path exists), so each confirmed target is paired with the same pitcher's
- * *closest-in-time* unclaimed pitch_events row (comparing the confirm
- * timestamp against TrackMan's own release timestamp), oldest confirmation
- * first, greedily consuming the nearest candidate so no pitch is used
- * twice. This self-corrects when a coach skips confirming a target for
- * some pitches -- unlike pure position-in-sequence pairing, a single
- * skipped confirmation no longer shifts every later pairing by one. */
+ * path exists), so each confirmed target is paired with the first unused
+ * TrackMan pitch thrown after that target was placed and before the next
+ * target was placed. This preserves the real "target for the next pitch"
+ * sequence while leaving an un-targeted TrackMan pitch unclaimed, so one
+ * missed target cannot shift every later pairing by one. */
 export async function matchIntendedZoneSessionByPitcherAndTime(input: {
   organizationId: number;
   sessionId: number;
+  schoolCode: string;
 }): Promise<{ ok: true; matched: number } | { ok: false; error: string }> {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureIntendedZoneSchema();
   const pool = getDbPool();
+  const schoolCode = String(input.schoolCode ?? '').trim().toUpperCase();
+  if (!schoolCode) return { ok: false, error: 'School context is required for FTP matching.' };
+  const ftpTimeZone = trackmanFtpTimeZone(schoolCode);
 
   const sessionResult = await pool.query<{ pitcher_name: string | null; started_at: string; ended_at: string | null }>(
     `SELECT pitcher_name, started_at, ended_at FROM intended_zone_sessions WHERE id = $1 AND organization_id = $2`,
@@ -2649,8 +2674,8 @@ export async function matchIntendedZoneSessionByPitcherAndTime(input: {
   // pitch" moment -- an unconfirmed one (tapped but never locked in with
   // Confirm Target, e.g. the coach got interrupted mid-bullpen) is left
   // unmatched rather than guessed at.
-  const pendingResult = await pool.query<{ id: number; target_radius_ft: string; confirmed_at: string }>(
-    `SELECT id, target_radius_ft, confirmed_at FROM intended_zone_pitches
+  const pendingResult = await pool.query<{ id: number; target_radius_ft: string; created_at: string; confirmed_at: string }>(
+    `SELECT id, target_radius_ft, created_at, confirmed_at FROM intended_zone_pitches
      WHERE session_id = $1 AND organization_id = $2 AND trackman_play_id IS NULL AND confirmed_at IS NOT NULL
      ORDER BY pitch_index ASC`,
     [input.sessionId, input.organizationId]
@@ -2680,10 +2705,11 @@ export async function matchIntendedZoneSessionByPitcherAndTime(input: {
   }>(
     `SELECT pe.id, pe.playid, pe.platelocside, pe.platelocheight, pe.taggedpitchtype, pe.relspeed,
             pe.inducedvertbreak, pe.horzbreak, pe.pitcherthrows, pe.date, pe.time,
-            (pe.date::text || ' ' || pe.time::text)::timestamptz AS thrown_at
+            ((pe.date::text || ' ' || pe.time::text)::timestamp AT TIME ZONE $4) AS thrown_at
      FROM pitch_events pe
      WHERE TRIM(pe.pitcher) = ANY($1)
-       AND (pe.date::text || ' ' || pe.time::text)::timestamptz
+       AND UPPER(TRIM(pe.school_code)) = $5
+       AND ((pe.date::text || ' ' || pe.time::text)::timestamp AT TIME ZONE $4)
          BETWEEN $2::timestamptz - INTERVAL '15 minutes'
              AND LEAST(COALESCE($3::timestamptz, $2::timestamptz + INTERVAL '4 hours'), $2::timestamptz + INTERVAL '4 hours') + INTERVAL '15 minutes'
        AND NOT EXISTS (SELECT 1 FROM intended_zone_pitches izp2 WHERE izp2.pitch_events_id = pe.id)
@@ -2693,36 +2719,37 @@ export async function matchIntendedZoneSessionByPitcherAndTime(input: {
     // coach's roster picker shows it -- often "First Last" ("Tyler Bates").
     // An exact-string match here silently matched zero pitches for every
     // FTP-deferred session, since the two orderings never equal each other.
-    [nameOrderingVariants(session.pitcher_name), session.started_at, session.ended_at]
+    [nameOrderingVariants(session.pitcher_name), session.started_at, session.ended_at, ftpTimeZone, schoolCode]
   );
 
-  // Greedy nearest-timestamp pairing: each confirmed target (oldest first)
-  // claims whichever remaining candidate's actual thrown_at is closest to
-  // its own confirmed_at, in either direction. confirmed_at, not created_at,
-  // is the real "this is the target for the next pitch" moment -- created_at
-  // is whichever tap happened to place the target first, which can be well
-  // before the coach actually locked it in with Confirm Target. A candidate
-  // with no parseable thrown_at (bad date/time text) is skipped rather than
-  // treated as infinitely close.
+  // Pair forward from target placement, never backward from confirmation.
+  // Confirm Target remains the gate that makes a row eligible, but created_at
+  // is the moment the target was placed for the next pitch. This matters when
+  // a coach forgets to confirm until after the pitch: using confirmed_at would
+  // incorrectly reach backward to that pitch or shift later rows. The next
+  // target's placement is an upper bound, and a five-minute ceiling prevents
+  // a final unthrown target from claiming a later, unrelated bullpen pitch.
+  // A small five-second allowance covers minor device/TrackMan clock skew.
   const available = candidatesResult.rows.map((candidate) => ({
     candidate,
     thrownAtMs: candidate.thrown_at ? new Date(candidate.thrown_at).getTime() : NaN,
   })).filter((entry) => Number.isFinite(entry.thrownAtMs));
 
   let matched = 0;
-  for (const pending of pendingResult.rows) {
+  for (let pendingIndex = 0; pendingIndex < pendingResult.rows.length; pendingIndex += 1) {
     if (!available.length) break;
-    const tapAtMs = new Date(pending.confirmed_at).getTime();
-    let bestIndex = 0;
-    let bestDeltaMs = Math.abs(available[0].thrownAtMs - tapAtMs);
-    for (let i = 1; i < available.length; i++) {
-      const deltaMs = Math.abs(available[i].thrownAtMs - tapAtMs);
-      if (deltaMs < bestDeltaMs) {
-        bestDeltaMs = deltaMs;
-        bestIndex = i;
-      }
-    }
-    const [{ candidate }] = available.splice(bestIndex, 1);
+    const pending = pendingResult.rows[pendingIndex];
+    const placedAtMs = new Date(pending.created_at).getTime();
+    const nextPlacedAtMs = pendingResult.rows[pendingIndex + 1]
+      ? new Date(pendingResult.rows[pendingIndex + 1].created_at).getTime()
+      : Number.POSITIVE_INFINITY;
+    const earliestAllowedMs = placedAtMs - 5_000;
+    const latestAllowedMs = Math.min(placedAtMs + 5 * 60_000, nextPlacedAtMs);
+    const candidateIndex = available.findIndex(
+      (entry) => entry.thrownAtMs >= earliestAllowedMs && entry.thrownAtMs < latestAllowedMs
+    );
+    if (candidateIndex < 0) continue;
+    const [{ candidate }] = available.splice(candidateIndex, 1);
 
     // Number(null) is 0, not NaN -- checking Number.isFinite() on the
     // already-coerced value can't tell "no location" apart from a real
@@ -2762,7 +2789,7 @@ export async function matchIntendedZoneSessionByPitcherAndTime(input: {
            plate_loc_side = $3, plate_loc_height = $4, miss_distance_ft = $5, miss_direction = $6,
            pitch_type = $7, rel_speed = $8, induced_vert_break = $9, horz_break = $10,
            pitch_events_id = $11, tagged_pitcher_name = $12,
-           thrown_at = ($13::text || ' ' || $14::text)::timestamptz
+           thrown_at = (($13::text || ' ' || $14::text)::timestamp AT TIME ZONE $15)
        WHERE id = $1`,
       [
         pending.id,
@@ -2779,6 +2806,7 @@ export async function matchIntendedZoneSessionByPitcherAndTime(input: {
         session.pitcher_name,
         candidate.date,
         candidate.time,
+        ftpTimeZone,
       ]
     );
     matched += 1;

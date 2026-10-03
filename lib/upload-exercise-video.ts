@@ -1,9 +1,49 @@
 const MAX_EXERCISE_VIDEO_BYTES = 350 * 1024 * 1024;
 
+type ExerciseVideoLayout = 'landscape' | 'portrait';
+
+function detectExerciseVideoLayout(file: File): Promise<ExerciseVideoLayout | null> {
+  return new Promise((resolve) => {
+    const objectUrl = URL.createObjectURL(file);
+    const video = document.createElement('video');
+    let settled = false;
+    const finish = (layout: ExerciseVideoLayout | null) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      video.removeAttribute('src');
+      video.load();
+      URL.revokeObjectURL(objectUrl);
+      resolve(layout);
+    };
+    const timeout = window.setTimeout(() => finish(null), 5000);
+    video.preload = 'metadata';
+    video.muted = true;
+    video.playsInline = true;
+    video.onloadedmetadata = () => finish(video.videoWidth && video.videoHeight
+      ? video.videoHeight > video.videoWidth ? 'portrait' : 'landscape'
+      : null);
+    video.onerror = () => finish(null);
+    video.src = objectUrl;
+  });
+}
+
+function withExerciseVideoLayout(rawUrl: string, layout: ExerciseVideoLayout | null): string {
+  if (!layout) return rawUrl;
+  try {
+    const url = new URL(rawUrl, window.location.origin);
+    url.searchParams.set('layout', layout);
+    return url.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
 export async function uploadExerciseVideo(file: File): Promise<string> {
   if (file.size <= 0) throw new Error('Choose a video file.');
   if (file.size > MAX_EXERCISE_VIDEO_BYTES) throw new Error('Video must be 350 MB or smaller.');
   if (file.type && !file.type.startsWith('video/')) throw new Error('Choose a video file.');
+  const layoutPromise = detectExerciseVideoLayout(file);
 
   const params = new URLSearchParams({
     fileName: file.name,
@@ -30,7 +70,7 @@ export async function uploadExerciseVideo(file: File): Promise<string> {
     const fallbackResponse = await fetch('/api/admin/exercises/media', { method: 'POST', body: fallback, headers: { Accept: 'application/json' } });
     const fallbackBody = (await fallbackResponse.json().catch(() => ({}))) as { videoUrl?: string; error?: string };
     if (!fallbackResponse.ok || !fallbackBody.videoUrl) throw new Error(fallbackBody.error || 'Video upload failed.');
-    return fallbackBody.videoUrl;
+    return withExerciseVideoLayout(fallbackBody.videoUrl, await layoutPromise);
   }
 
   const finalizeResponse = await fetch('/api/admin/exercises/media', {
@@ -40,5 +80,5 @@ export async function uploadExerciseVideo(file: File): Promise<string> {
   });
   const finalized = (await finalizeResponse.json().catch(() => ({}))) as { videoUrl?: string; error?: string };
   if (!finalizeResponse.ok || !finalized.videoUrl) throw new Error(finalized.error || 'Could not finish the video upload.');
-  return finalized.videoUrl;
+  return withExerciseVideoLayout(finalized.videoUrl, await layoutPromise);
 }

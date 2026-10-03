@@ -144,8 +144,17 @@ export function resolveExerciseVideoUrl(raw: string): ExerciseVideoSource {
       return source(originalUrl, 'loom', 'Loom', id ? 'iframe' : 'external', id ? `https://www.loom.com/embed/${id}` : null);
     }
 
-    if (/\.(mp4|m4v|mov|webm|ogv|ogg)(?:$|[?#])/i.test(originalUrl)) {
-      return source(originalUrl, 'direct', 'Video file', 'video', originalUrl);
+    if (/\.(mp4|m4v|mov|webm|ogv|ogg)(?:$|[?&#])/i.test(originalUrl)) {
+      const requestedLayout = parsed.searchParams.get('layout')
+        ?? (/layout=portrait/i.test(parsed.hash) ? 'portrait' : /layout=landscape/i.test(parsed.hash) ? 'landscape' : null);
+      return source(
+        originalUrl,
+        'direct',
+        'Video file',
+        'video',
+        originalUrl,
+        requestedLayout === 'portrait' ? 'portrait' : 'landscape'
+      );
     }
 
     return source(originalUrl, 'website', parsed.hostname, 'external', null);

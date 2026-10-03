@@ -1,5 +1,3 @@
-import type { PortalSession } from './portal-session';
-
 type OrgMap = Record<string, string>;
 
 function parseOrgSchoolMap(raw: string): OrgMap {
@@ -37,7 +35,9 @@ export function resolveAllowedDashboardSchoolCodes(): string[] {
   return combined;
 }
 
-export function resolveDashboardSchoolCode(session: PortalSession): string {
+export function resolveDashboardSchoolCode<T extends { dashboardSchoolCode?: string | null; organizationId?: number | null }>(
+  session: T
+): string {
   const selected = normalizeSchoolCode(String(session.dashboardSchoolCode ?? ''));
   if (selected) return selected;
   const mapRaw = process.env.DASHBOARD_ORG_SCHOOL_MAP ?? '{}';

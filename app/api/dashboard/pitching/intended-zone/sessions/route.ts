@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromRequest } from '../../../../../../lib/auth';
+import { resolveDashboardSchoolCode } from '../../../../../../lib/dashboard-access';
 import { resolveProgrammingOrganizationId } from '../../../../../../lib/programming-scope';
 import {
   deleteIntendedZoneSession,
@@ -114,7 +115,11 @@ export async function PATCH(request: Request) {
   if (!Number.isFinite(sessionId) || sessionId <= 0) return NextResponse.json({ error: 'sessionId is required.' }, { status: 400 });
 
   if (body.action === 'check_ftp_match') {
-    const matchResult = await matchIntendedZoneSessionByPitcherAndTime({ organizationId, sessionId });
+    const matchResult = await matchIntendedZoneSessionByPitcherAndTime({
+      organizationId,
+      sessionId,
+      schoolCode: resolveDashboardSchoolCode(session),
+    });
     if (!matchResult.ok) return NextResponse.json({ error: matchResult.error }, { status: 400 });
     // Best-effort: if this session's Track Strikes & Count results were
     // already saved to the bullpen log with "Pending" In Zone values (no

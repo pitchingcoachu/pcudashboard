@@ -13,8 +13,9 @@ const OvrSprintDashboard = dynamic(() => import('../ovr-sprint/ovr-sprint-dashbo
 const OvrVbtDashboard = dynamic(() => import('../ovr-sprint/ovr-vbt-dashboard'), { loading: () => <LoadingPanel /> });
 const BiomechanicsHub = dynamic(() => import('../dashboard/biomechanics-hub'), { loading: () => <LoadingPanel /> });
 const UniversalViewChart = dynamic(() => import('./universal-view-chart'), { loading: () => <LoadingPanel /> });
+const ArmCareMetricsDashboard = dynamic(() => import('./armcare-metrics-dashboard'), { loading: () => <LoadingPanel /> });
 
-type DataTab = 'vald' | 'sprint' | 'vbt' | 'biomechanics' | 'chart' | 'imports';
+type DataTab = 'vald' | 'sprint' | 'vbt' | 'biomechanics' | 'armcare' | 'chart' | 'imports';
 
 type Props = {
   snapshot: ValdSnapshot | null;
@@ -48,10 +49,12 @@ export default function ValdOvrDataDashboard({ snapshot, valdError, lastSyncLabe
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [dataVersion, setDataVersion] = useState(0);
-  const brand = tab === 'vald'
+  const brand: { src: string; alt: string; fit: 'cover' | 'contain'; position: string; scale: number; whiteWordmark?: boolean } = tab === 'vald'
     ? { src: '/vald.webp', alt: 'VALD', fit: 'cover' as const, position: 'center', scale: 2.8 }
     : tab === 'biomechanics'
       ? { src: '/axioforce.jpeg', alt: 'AxioForce', fit: 'contain' as const, position: 'right center', scale: 1 }
+      : tab === 'armcare'
+        ? { src: '/armcare-logo.png', alt: 'ArmCare', fit: 'contain' as const, position: 'center', scale: 0.9, whiteWordmark: true }
       : tab === 'chart'
         ? { src: '/pearl-lockup-transparent.png', alt: 'Pearl', fit: 'contain' as const, position: 'right center', scale: 1 }
       : { src: '/ovr.png', alt: 'OVR', fit: 'contain' as const, position: 'right center', scale: 1 };
@@ -63,7 +66,7 @@ export default function ValdOvrDataDashboard({ snapshot, valdError, lastSyncLabe
     if (next === 'vald') url.searchParams.delete('tab');
     else url.searchParams.set('tab', next);
     window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
-    if (next === 'vald' || next === 'biomechanics' || next === 'chart') return;
+    if (next === 'vald' || next === 'biomechanics' || next === 'armcare' || next === 'chart') return;
     setLoading(true);
     setLoadError('');
     try {
@@ -88,7 +91,7 @@ export default function ValdOvrDataDashboard({ snapshot, valdError, lastSyncLabe
       <div className={forcePlateStyles.pageTitleGroup}>
         <h2 style={{ margin: 0 }}>{showOvr ? 'Biomechanics and Performance Data' : 'VALD Force Plate Data'}</h2>
       </div>
-      <div className={forcePlateStyles.valdLogo}>
+      <div className={`${forcePlateStyles.valdLogo} ${tab === 'armcare' ? tabStyles.armCareLogo : ''}`}>
         <Image
           key={brand.src}
           src={brand.src}
@@ -99,10 +102,25 @@ export default function ValdOvrDataDashboard({ snapshot, valdError, lastSyncLabe
             objectFit: brand.fit,
             objectPosition: brand.position,
             transform: `scale(${brand.scale})`,
-            clipPath: tab === 'biomechanics' ? 'inset(0 2px)' : undefined,
+            clipPath: brand.whiteWordmark ? 'inset(0 77.235% 0 0)' : tab === 'biomechanics' ? 'inset(0 2px)' : undefined,
           }}
           priority={tab === initialTab}
         />
+        {brand.whiteWordmark ? <Image
+          src={brand.src}
+          alt=""
+          aria-hidden="true"
+          fill
+          sizes="220px"
+          style={{
+            objectFit: brand.fit,
+            objectPosition: brand.position,
+            transform: `scale(${brand.scale})`,
+            clipPath: 'inset(0 0 0 22.765%)',
+            filter: 'brightness(0) invert(1)',
+          }}
+          priority={tab === initialTab}
+        /> : null}
       </div>
     </div> : null}
     {showOvr ? <div className={`${tabStyles.dataTabs} ${embedded ? tabStyles.embeddedTabs : ''}`} role="tablist" aria-label="Biomechanics and performance data type">
@@ -110,6 +128,7 @@ export default function ValdOvrDataDashboard({ snapshot, valdError, lastSyncLabe
       <button type="button" className={tab === 'sprint' ? tabStyles.active : ''} onClick={() => selectTab('sprint')}>Sprint</button>
       <button type="button" className={tab === 'vbt' ? tabStyles.active : ''} onClick={() => selectTab('vbt')}>VBT</button>
       <button type="button" className={tab === 'biomechanics' ? tabStyles.active : ''} onClick={() => selectTab('biomechanics')}>Biomechanics</button>
+      <button type="button" className={tab === 'armcare' ? tabStyles.active : ''} onClick={() => selectTab('armcare')}>ArmCare Metrics</button>
       <button type="button" className={tab === 'chart' ? tabStyles.active : ''} onClick={() => selectTab('chart')}>View Chart</button>
       {canImport && !focusedPlayerName ? <button type="button" className={tab === 'imports' ? tabStyles.active : ''} onClick={() => selectTab('imports')}>Imports</button> : null}
     </div> : null}
@@ -121,10 +140,11 @@ export default function ValdOvrDataDashboard({ snapshot, valdError, lastSyncLabe
     </> : null}
 
     {tab === 'biomechanics' ? <BiomechanicsHub role={role} schoolCode={schoolCode} isActive fixedPlayerName={focusedPlayerName || undefined} /> : null}
+    {tab === 'armcare' ? <ArmCareMetricsDashboard fixedPlayerName={focusedPlayerName || undefined} canSync={canImport && !focusedPlayerName} /> : null}
     {tab === 'chart' ? <UniversalViewChart schoolCode={schoolCode} fixedPlayerName={focusedPlayerName || undefined} /> : null}
 
-    {tab !== 'vald' && tab !== 'biomechanics' && tab !== 'chart' && loading ? <LoadingPanel /> : null}
-    {tab !== 'vald' && tab !== 'biomechanics' && tab !== 'chart' && !loading && loadError ? <article className="portal-admin-card"><p className="auth-error" style={{ margin: 0 }}>{loadError}</p></article> : null}
+    {tab !== 'vald' && tab !== 'biomechanics' && tab !== 'armcare' && tab !== 'chart' && loading ? <LoadingPanel /> : null}
+    {tab !== 'vald' && tab !== 'biomechanics' && tab !== 'armcare' && tab !== 'chart' && !loading && loadError ? <article className="portal-admin-card"><p className="auth-error" style={{ margin: 0 }}>{loadError}</p></article> : null}
     {tab === 'sprint' && !loading && !loadError ? <OvrSprintDashboard key={`sprint-${dataVersion}`} initialResults={sprintResults} initialUploads={uploads} canImport={false} viewMode="sprint" playerOnly={role === 'player' || Boolean(focusedPlayerName)} /> : null}
     {tab === 'vbt' && !loading && !loadError ? <OvrVbtDashboard key={`vbt-${dataVersion}`} initialResults={vbtResults} playerOnly={role === 'player' || Boolean(focusedPlayerName)} /> : null}
     {tab === 'imports' && !loading && !loadError ? <OvrSprintDashboard key={`imports-${dataVersion}`} initialResults={sprintResults} initialUploads={uploads} canImport={canImport} viewMode="imports" /> : null}
